@@ -1,0 +1,15 @@
+runtime/
+.venv/
+node_modules/
+src/__pycache__/
+*.pyc
+build/
+dist/
+dist-electron/
+dist-release/
+processor-rust/target/
+out/
+*.spec
+startup_error.log
+TableHandleLine*.exe
+TableHandleLine*.zip

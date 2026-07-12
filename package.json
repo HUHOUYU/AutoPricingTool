@@ -1,0 +1,96 @@
+{
+  "name": "auto-pricing-tool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automatic Excel order pricing tool.",
+  "main": "out/main/index.js",
+  "type": "module",
+  "config": {
+    "electron_mirror": "https://npmmirror.com/mirrors/electron/"
+  },
+  "scripts": {
+    "predev": "npm run build:processor && electron --version",
+    "dev": "electron-vite dev",
+    "build:processor:dev": "powershell -ExecutionPolicy Bypass -File scripts/build_processor.ps1 -Dev",
+    "build:processor": "powershell -ExecutionPolicy Bypass -File scripts/build_processor.ps1",
+    "build": "electron-vite build",
+    "dist:win": "powershell -ExecutionPolicy Bypass -File scripts/build_exe.ps1",
+    "preview": "electron-vite preview",
+    "test": "npm run test:processor && npm run test:ui",
+    "test:processor": "powershell -ExecutionPolicy Bypass -File scripts/build_processor.ps1 -Test",
+    "check:processor": "powershell -ExecutionPolicy Bypass -File scripts/build_processor.ps1 -Check",
+    "test:ui": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "format:check": "cargo fmt --manifest-path processor-rust/Cargo.toml --all -- --check",
+    "lint:processor": "cargo clippy --manifest-path processor-rust/Cargo.toml --all-targets --all-features --locked -- -D warnings",
+    "quality": "npm run format:check && npm run lint:processor && npm run typecheck && npm test && npm run build"
+  },
+  "build": {
+    "appId": "com.autopricingtool.app",
+    "productName": "AutoPricingTool",
+    "artifactName": "AutoPricingTool_latest.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "config",
+        "to": "config",
+        "filter": [
+          "extract_rules.json"
+        ]
+      },
+      {
+        "from": "resources",
+        "to": "resources",
+        "filter": [
+          "app-icon.ico",
+          "app-icon.png",
+          "app-icon.svg"
+        ]
+      },
+      {
+        "from": "processor-rust/target/release",
+        "to": "processor",
+        "filter": [
+          "auto-pricing-tool-processor.exe"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "resources/app-icon.ico",
+      "target": [
+        "portable"
+      ]
+    }
+  },
+  "dependencies": {
+    "@gsap/react": "^2.1.2",
+    "@tanstack/react-virtual": "^3.14.5",
+    "gsap": "^3.15.0",
+    "lucide-react": "^1.23.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.7.2",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.9"
+  }
+}

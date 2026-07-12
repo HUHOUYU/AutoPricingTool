@@ -1,0 +1,73 @@
+{
+  "sheet_rules": {
+    "header_scan_rows": 30,
+    "data_sample_rows": 120,
+    "sample_column_scan_limit": 180,
+    "empty_gap_limit": 20,
+    "preferred_sheet_names": [
+      "Cost",
+      "order_1",
+      "orders_export",
+      "Order",
+      "order_",
+      "Sheet1",
+      "Sheet2",
+      "Sheet4",
+      "核价"
+    ]
+  },
+  "sheet_selection": {
+    "sequential_numeric_header_penalty": 500,
+    "reject_header_keywords": [
+      "Dropshipping price",
+      "Payment Way",
+      "Picture",
+      "Item No."
+    ]
+  },
+  "performance": {
+    "quick_header_scan_max_mb": 120,
+    "quick_shared_strings_max_mb": 32,
+    "processing_workbook_max_mb": 512,
+    "processing_xml_entry_max_mb": 256,
+    "processing_shared_strings_max_mb": 128,
+    "processing_max_rows": 200000,
+    "processing_workers": 0
+  },
+  "pricing": {
+    "country_identity": [
+      "iso2",
+      "english",
+      "chinese"
+    ],
+    "sku_qty_pair_selection": "max_match_coverage",
+    "quantity_policy": "exact",
+    "multiply_quantity_by_price": false,
+    "zero_price_is_valid": true,
+    "unavailable_price_tokens": [
+      "/",
+      "未核价",
+      "#VALUE!",
+      "#N/A"
+    ],
+    "output_sheets": [
+      "核价结果",
+      "核价异常",
+      "字段映射"
+    ]
+  },
+  "runtime": {
+    "recent_input_dir": "",
+    "recent_output_dir": "",
+    "recent_config_path": "",
+    "archive_standard_files": false
+  },
+  "fields": {},
+  "output": {
+    "max_sku_groups": 3,
+    "summary_flush_files": 60,
+    "summary_flush_rows": 100000,
+    "manifest_flush_files": 150,
+    "manifest_flush_seconds": 60
+  }
+}

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Excel order processing icon">
+  <defs>
+    <linearGradient id="panel" x1="48" y1="32" x2="208" y2="224" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#EAF2FF"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="78" y1="62" x2="188" y2="194" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2E7BD6"/>
+      <stop offset="1" stop-color="#16A36A"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#23466F" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="#F5F7FB"/>
+  <rect x="42" y="34" width="172" height="188" rx="22" fill="url(#panel)" stroke="#C9DAEF" stroke-width="8" filter="url(#shadow)"/>
+  <rect x="62" y="60" width="132" height="30" rx="10" fill="#DCEBFF"/>
+  <path d="M62 108H194M62 144H194M62 180H194M98 60V202M146 60V202" stroke="#B5C9E3" stroke-width="8" stroke-linecap="round"/>
+  <rect x="62" y="60" width="36" height="120" rx="8" fill="#DFF4EA" opacity="0.9"/>
+  <path d="M86 174l24 24 60-70" fill="none" stroke="url(#accent)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
