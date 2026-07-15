@@ -448,7 +448,8 @@ function createWindow(): void {
     minWidth: 1100,
     minHeight: 700,
     title: "Excel 订单批量核价工具",
-    backgroundColor: "#F5F7FB",
+    backgroundColor: "#0F1115",
+    frame: false,
     icon: appIconPath,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
@@ -583,6 +584,21 @@ app.whenReady().then(() => {
   ipcMain.handle("app:get-runtime-config", (event) => {
     requireTrustedIpc(event);
     return readRuntimeConfig();
+  });
+  ipcMain.handle("window:minimize", (event) => {
+    requireTrustedIpc(event);
+    BrowserWindow.fromWebContents(event.sender)?.minimize();
+  });
+  ipcMain.handle("window:toggle-maximize", (event) => {
+    requireTrustedIpc(event);
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return;
+    if (window.isMaximized()) window.unmaximize();
+    else window.maximize();
+  });
+  ipcMain.handle("window:close", (event) => {
+    requireTrustedIpc(event);
+    BrowserWindow.fromWebContents(event.sender)?.close();
   });
   ipcMain.handle("app:set-runtime-config", (event, payload: unknown) => {
     requireTrustedIpc(event);

@@ -110,6 +110,9 @@ export type PriceCheckRunPayload = {
 };
 
 const desktopAPI = {
+  minimizeWindow: (): Promise<void> => ipcRenderer.invoke("window:minimize"),
+  toggleMaximizeWindow: (): Promise<void> => ipcRenderer.invoke("window:toggle-maximize"),
+  closeWindow: (): Promise<void> => ipcRenderer.invoke("window:close"),
   getRuntimeConfig: (): Promise<RuntimeConfig> => ipcRenderer.invoke("app:get-runtime-config"),
   setRuntimeConfig: (config: RuntimeConfig): Promise<RuntimeConfig> => ipcRenderer.invoke("app:set-runtime-config", config),
   appendRuntimeLogs: (rows: RuntimeLogRow[]): Promise<void> => ipcRenderer.invoke("app:append-runtime-logs", rows),
