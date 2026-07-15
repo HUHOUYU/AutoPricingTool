@@ -17,6 +17,20 @@ Object.defineProperty(window, "cancelAnimationFrame", {
   value: (handle: number): void => window.clearTimeout(handle),
 });
 
+Object.defineProperty(window, "matchMedia", {
+  configurable: true,
+  value: vi.fn((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+});
+
 class MockResizeObserver {
   observe(): void {}
   unobserve(): void {}

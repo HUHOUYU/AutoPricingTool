@@ -1,20 +1,60 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useGSAP } from "@gsap/react";
+import { type ColumnDef, type SortingState, type VisibilityState, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import gsap from "gsap";
+import { MotionConfig, motion } from "motion/react";
 import {
+  BarChart3,
+  CircleHelp,
+  CircleStop,
+  ArrowUpDown,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  Clock3,
+  Columns3,
   Download,
+  FileBox,
+  FileCheck2,
+  FileClock,
+  FileCog,
   FilePlus2,
   FileSpreadsheet,
   FolderOpen,
   FolderOutput,
+  FolderUp,
+  LayoutDashboard,
+  List,
+  Minus,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pause,
   Play,
   RefreshCw,
   ScanSearch,
+  Settings,
   Settings2,
+  SlidersHorizontal,
+  Square,
+  Sun,
   Trash2,
+  Workflow,
   X,
   type LucideIcon,
 } from "lucide-react";
+import brandExcelUrl from "@/assets/brand-excel.png";
+import emptyFileBoxUrl from "@/assets/empty-file-box.png";
+import uploadFolderUrl from "@/assets/upload-folder.png";
+import { useDropzone } from "react-dropzone";
+import { toast, Toaster } from "sonner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Progress } from "@/components/ui/progress";
+import { ProgressChart } from "@/components/progress-chart";
+import { useUIStore, type FileTab } from "@/stores/ui-store";
 import type {
   DesktopAPI,
   PriceAnalysisCandidate,
@@ -43,8 +83,6 @@ type LogEntry = {
 };
 
 type FileStatus = "pending" | "running" | "ready" | "success" | "warning" | "error";
-type FileTab = "pending" | "confirm" | "error" | "success";
-
 type DotStatus = FileStatus;
 
 type ProgressDot = {
@@ -163,24 +201,30 @@ type IconActionProps = {
   disabled?: boolean;
   active?: boolean;
   tone?: "normal" | "primary" | "danger";
+  compact?: boolean;
 };
 
-function IconAction({ icon: Icon, label, onClick, disabled = false, active = false, tone = "normal" }: IconActionProps): JSX.Element {
+function IconAction({ icon: Icon, label, onClick, disabled = false, active = false, tone = "normal", compact = false }: IconActionProps): React.JSX.Element {
   return (
-    <button
+    <Button
       type="button"
-      className={["icon-action", active ? "is-active" : "", tone !== "normal" ? "is-" + tone : ""].filter(Boolean).join(" ")}
+      variant={tone === "primary" || active ? "default" : "outline"}
+      size={compact ? "icon" : "default"}
+      className={["icon-action", active ? "is-active" : "", tone !== "normal" ? "is-" + tone : "", compact ? "is-compact" : ""].filter(Boolean).join(" ")}
       aria-label={label}
       title={label}
       disabled={disabled}
       onClick={onClick}
     >
       <Icon size={20} strokeWidth={1.9} aria-hidden="true" />
-    </button>
+      <span>{label}</span>
+    </Button>
   );
 }
 
-export function App(): JSX.Element {
+export function App(): React.JSX.Element {
+  const shellRef = useRef<HTMLElement>(null);
+  const tableScrollRef = useRef<HTMLDivElement>(null);
   const [files, setFiles] = useState<string[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [analyses, setAnalyses] = useState<Record<string, PriceAnalysisFile>>({});
@@ -190,11 +234,15 @@ export function App(): JSX.Element {
   const [inputDirectorySelected, setInputDirectorySelected] = useState(false);
   const [outputDir, setOutputDir] = useState("");
   const [configPath, setConfigPath] = useState("");
-  const [activeTab, setActiveTab] = useState<FileTab>("pending");
+  const { activeTab, setActiveTab, theme, toggleTheme, sidebarCollapsed, toggleSidebar } = useUIStore();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+  const [importedAt, setImportedAt] = useState<Record<string, string>>({});
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   const [activePath, setActivePath] = useState("");
   const [expandedPath, setExpandedPath] = useState<string | null>(null);
   const [progress, setProgress] = useState({ current: 0, total: 0, phase: "", path: "" });
@@ -202,6 +250,24 @@ export function App(): JSX.Element {
   const analysesRef = useRef<Record<string, PriceAnalysisFile>>({});
   const mappingsRef = useRef<Record<string, PriceCheckMapping>>({});
   const confirmedPathsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+  }, [theme]);
+
+  useGSAP(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    gsap.fromTo(".progress-chart", {
+      filter: "drop-shadow(0 0 0 rgba(37, 99, 235, 0))",
+    }, {
+      filter: "drop-shadow(0 0 8px rgba(37, 99, 235, 0.32))",
+      duration: 0.38,
+      repeat: 1,
+      yoyo: true,
+      ease: "power2.inOut",
+      clearProps: "filter",
+    });
+  }, { scope: shellRef, dependencies: [progress.current, progress.total] });
 
   const appendLog = useCallback((message: string, level: LogEntry["level"] = "info"): void => {
     setLogs((current) => [
@@ -303,10 +369,12 @@ export function App(): JSX.Element {
         if (event.mode === "analysis") {
           setIsAnalyzing(false);
           appendLog(event.stopped ? "分析已停止" : "分析完成，请检查待确认文件", event.stopped ? "warning" : "success");
+          if (!event.stopped) toast.success("文件分析完成");
         } else {
           setIsRunning(false);
           setIsPaused(false);
           appendLog(event.stopped ? "核价已停止" : "核价完成", event.stopped ? "warning" : "success");
+          if (!event.stopped) toast.success("批量核价完成");
         }
         return;
       }
@@ -365,6 +433,8 @@ export function App(): JSX.Element {
         return;
       }
       setFiles(nextFiles);
+      const importedTime = new Date().toLocaleString("zh-CN", { hour12: false });
+      setImportedAt((current) => ({ ...current, ...Object.fromEntries(paths.map((path) => [path, current[path] ?? importedTime])) }));
       setSelectedPaths([]);
       setActiveTab("pending");
       setInputDirectorySelected(false);
@@ -376,19 +446,32 @@ export function App(): JSX.Element {
       setResults({});
       setExpandedPath(null);
       setProgress({ current: 0, total: 0, phase: "", path: "" });
+      setPageIndex(0);
       setActivePath("");
       confirmedPathsRef.current = new Set();
-      if (!outputDir) setOutputDir(parentDirectory(paths[0]));
+      setOutputDir((current) => current || parentDirectory(paths[0]));
       appendLog("已加入 " + paths.length + " 个 Excel 文件");
+      toast.success("已导入 " + paths.length + " 个 Excel 文件");
     },
-    [appendLog, files, outputDir],
+    [appendLog, files, setActiveTab],
   );
 
-  const handleDrop = (event: DragEvent<HTMLDivElement>): void => {
-    event.preventDefault();
-    setDragActive(false);
-    addFiles(Array.from(event.dataTransfer.files));
-  };
+  const { getRootProps, isDragActive, open: openFilePicker } = useDropzone({
+    accept: {
+      "application/vnd.ms-excel": [".xls"],
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx", ".xlsm", ".xlsb"],
+    },
+    maxFiles: MAX_INPUT_FILES,
+    multiple: true,
+    noClick: true,
+    noKeyboard: true,
+    onDropAccepted: addFiles,
+    onDropRejected: (rejections) => {
+      const message = rejections.length > MAX_INPUT_FILES ? "文件数量超过上限" : "包含不支持的文件格式";
+      appendLog(message, "warning");
+      toast.warning(message);
+    },
+  });
 
   const selectedSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
   const actionFiles = useMemo(
@@ -492,6 +575,8 @@ export function App(): JSX.Element {
           return;
         }
         setFiles(discovered);
+        const scannedTime = new Date().toLocaleString("zh-CN", { hour12: false });
+        setImportedAt(Object.fromEntries(discovered.map((path) => [path, scannedTime])));
         setSelectedPaths([]);
         targetFiles = discovered;
         if (discovered.length === 0) {
@@ -566,6 +651,7 @@ export function App(): JSX.Element {
     setIsPaused(false);
     setActivePath("");
     setFiles([]);
+    setImportedAt({});
     setSelectedPaths([]);
     setAnalyses({});
     setMappings({});
@@ -577,6 +663,7 @@ export function App(): JSX.Element {
     setInputDirectorySelected(false);
     setActiveTab("pending");
     setProgress({ current: 0, total: 0, phase: "", path: "" });
+    setPageIndex(0);
     setLogs([]);
   };
 
@@ -601,6 +688,11 @@ export function App(): JSX.Element {
       return next;
     });
     confirmedPathsRef.current.delete(path);
+    setImportedAt((current) => {
+      const next = { ...current };
+      delete next[path];
+      return next;
+    });
     if (expandedPath === path) setExpandedPath(null);
   };
 
@@ -672,6 +764,52 @@ export function App(): JSX.Element {
     [activeTab, fileStatusByPath, files],
   );
 
+  useEffect(() => {
+    setPageIndex(0);
+  }, [activeTab, pageSize]);
+
+  const pageCount = Math.max(1, Math.ceil(visibleFiles.length / pageSize));
+  const pagedFiles = useMemo(
+    () => visibleFiles.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize),
+    [pageIndex, pageSize, visibleFiles],
+  );
+
+  const tableColumns = useMemo<ColumnDef<string>[]>(
+    () => [
+      { id: "select", header: "", enableSorting: false, enableHiding: false },
+      { id: "index", header: "序号", enableSorting: false, enableHiding: false },
+      { id: "fileName", header: "原始文件名", accessorFn: fileNameFromPath },
+      { id: "orderSheet", header: "订单 Sheet", accessorFn: (path) => (mappings[path] ?? analyses[path]?.suggestedMapping)?.orderSheet ?? "" },
+      { id: "pricingSheet", header: "核价 Sheet", accessorFn: (path) => (mappings[path] ?? analyses[path]?.suggestedMapping)?.pricingSheet ?? "" },
+      { id: "coverage", header: "匹配成功率", accessorFn: (path) => analyses[path]?.coverage ?? -1 },
+      { id: "status", header: "状态", accessorFn: (path) => fileStatusByPath[path] },
+      { id: "createdAt", header: "创建时间", accessorFn: (path) => importedAt[path] ?? "" },
+      { id: "actions", header: "操作", enableSorting: false, enableHiding: false },
+    ],
+    [analyses, fileStatusByPath, importedAt, mappings],
+  );
+
+  const fileTable = useReactTable({
+    data: pagedFiles,
+    columns: tableColumns,
+    state: { sorting, columnVisibility },
+    onSortingChange: setSorting,
+    onColumnVisibilityChange: setColumnVisibility,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+  const tableRows = fileTable.getRowModel().rows;
+  const shouldVirtualizeRows = tableRows.length > 100 && expandedPath === null;
+  const rowVirtualizer = useVirtualizer({
+    count: shouldVirtualizeRows ? tableRows.length : 0,
+    getScrollElement: () => tableScrollRef.current,
+    estimateSize: () => 39,
+    overscan: 12,
+  });
+  const renderedTableRows = shouldVirtualizeRows
+    ? rowVirtualizer.getVirtualItems().map((virtualRow) => ({ row: tableRows[virtualRow.index], virtualRow }))
+    : tableRows.map((row) => ({ row, virtualRow: null }));
+
   const completedDotCount = progressDotCounts.success + progressDotCounts.warning + progressDotCounts.error;
   const progressPercent = progress.total > 0
     ? Math.round(Math.min(1, progress.current / progress.total) * 100)
@@ -680,48 +818,223 @@ export function App(): JSX.Element {
       : 0;
   const totalMatched = useMemo(() => Object.values(results).reduce((sum, item) => sum + (item.matchedRows ?? 0), 0), [results]);
   const totalRows = useMemo(() => Object.values(results).reduce((sum, item) => sum + (item.totalRows ?? 0), 0), [results]);
+  const matchedRate = totalRows > 0 ? ((totalMatched / totalRows) * 100).toFixed(1) + "%" : "—";
   const selectedAll = visibleFiles.length > 0 && visibleFiles.every((path) => selectedSet.has(path));
   const phaseLabel = progress.phase === "analyze" ? "分析" : progress.phase === "rows" ? "写入" : progress.phase === "run" ? "核价" : "等待操作";
 
+  const startCurrentTask = async (): Promise<void> => {
+    if (actionFiles.length === 0) {
+      toast.warning("请先导入 Excel 文件");
+      return;
+    }
+    const needsAnalysis = actionFiles.some((path) => !analysesRef.current[path] && !analyses[path]);
+    if (needsAnalysis) await analyzeFiles(actionFiles);
+    else await runPricing(actionFiles);
+  };
+
+  const togglePauseTask = async (): Promise<void> => {
+    const api = getDesktopAPI();
+    if (!api || (!isAnalyzing && !isRunning)) return;
+    if (isPaused) await api.resumeProcessing();
+    else await api.pauseProcessing();
+  };
+
+  const stopCurrentTask = async (): Promise<void> => {
+    const api = getDesktopAPI();
+    if (!api || (!isAnalyzing && !isRunning)) return;
+    await api.stopProcessing();
+  };
+
+  const showComingSoon = (label: string): void => {
+    toast.info(label + "正在建设中");
+  };
+
   return (
-    <main className="app-shell">
-      <aside className="left-rail">
-        <div className="rail-brand">
-          <div className="brand-mark"><FileSpreadsheet size={21} strokeWidth={1.8} /></div>
-          <div>
-            <strong>自动核价工作台</strong>
-            <span>AutoPricingTool</span>
+    <MotionConfig reducedMotion="user">
+      <main className={"cyber-app" + (sidebarCollapsed ? " is-sidebar-collapsed" : "")} ref={shellRef}>
+        <Toaster richColors position="top-right" closeButton theme={theme} />
+
+        <div className="cyber-window-drag" aria-hidden="true" />
+        <div className="cyber-window-controls" aria-label="窗口控制">
+          <button type="button" aria-label="最小化" onClick={() => void getDesktopAPI()?.minimizeWindow()}><Minus /></button>
+          <button type="button" aria-label="最大化或还原" onClick={() => void getDesktopAPI()?.toggleMaximizeWindow()}><Square /></button>
+          <button type="button" className="is-close" aria-label="关闭" onClick={() => void getDesktopAPI()?.closeWindow()}><X /></button>
+        </div>
+
+        <aside className="cyber-sidebar">
+          <div className="cyber-brand">
+            <img src={brandExcelUrl} alt="" />
+            <div><strong>Excel 订单批量处理工具</strong><span>高效 · 准确 · 智能</span></div>
           </div>
-        </div>
 
-        <div className="rail-toolbar" aria-label="路径与配置操作">
-          <IconAction icon={FolderOpen} label="目标文件夹" onClick={() => void chooseInputDirectory()} disabled={isAnalyzing || isRunning} />
-          <IconAction icon={FolderOutput} label="输出文件夹" onClick={() => void chooseOutputDirectory()} />
-          <IconAction icon={Settings2} label="选择配置文件" onClick={() => void chooseConfigFile()} disabled={isAnalyzing || isRunning} />
-          <IconAction icon={FileSpreadsheet} label="当前配置文件" onClick={() => void openCurrentConfig()} disabled={!configPath} />
-        </div>
-        <div className="rail-toolbar rail-toolbar-secondary" aria-label="任务控制">
-          <IconAction icon={ScanSearch} label="扫描" onClick={() => void scanFiles()} disabled={isAnalyzing || isRunning} active={isAnalyzing} tone={isAnalyzing ? "primary" : "normal"} />
-          <IconAction icon={Play} label="处理" onClick={() => void runPricing()} disabled={isAnalyzing || isRunning || actionFiles.length === 0} active={isRunning} tone={isRunning ? "primary" : "normal"} />
-          <IconAction icon={RefreshCw} label="重置" onClick={() => void resetTask()} />
-        </div>
+          <nav className="cyber-nav" aria-label="主导航">
+            <button type="button" className="is-active"><LayoutDashboard /><span>工作台</span></button>
+            <button type="button" onClick={() => showComingSoon("文件处理")}><FileCheck2 /><span>文件处理</span></button>
+            <button type="button" onClick={() => showComingSoon("配置中心")}><Settings2 /><span>配置中心</span></button>
+            <button type="button" onClick={() => showComingSoon("规则管理")}><Workflow /><span>规则管理</span></button>
+            <button type="button" onClick={() => showComingSoon("模板管理")}><FileCog /><span>模板管理</span></button>
+            <button type="button" onClick={() => showComingSoon("日志中心")}><FileClock /><span>日志中心</span></button>
+            <button type="button" onClick={() => showComingSoon("数据统计")}><BarChart3 /><span>数据统计</span></button>
+          </nav>
 
-        <section className="log-panel" aria-label="运行日志">
-          <div className="log-header">
-            <div>
-              <h1>运行日志</h1>
-              <span>{logs.length} 条记录</span>
+          <section className="cyber-quick" aria-label="快捷操作">
+            <div className="cyber-section-label"><span>快捷操作</span><ChevronDown /></div>
+            <div className="cyber-quick-grid">
+              <button type="button" aria-label="导入 Excel" className="cyber-action is-import" onClick={openFilePicker}><FolderUp /><span><strong>导入 Excel</strong><small>拖拽或选择文件</small></span></button>
+              <button type="button" aria-label="开始处理" className="cyber-action is-start" onClick={() => void startCurrentTask()} disabled={isAnalyzing || isRunning}><Play /><span><strong>开始处理</strong><small>自动批量处理</small></span></button>
+              <button type="button" aria-label={isPaused ? "继续任务" : "暂停任务"} className="cyber-action is-pause" onClick={() => void togglePauseTask()} disabled={!isAnalyzing && !isRunning}>{isPaused ? <Play /> : <Pause />}<strong>{isPaused ? "继续任务" : "暂停任务"}</strong></button>
+              <button type="button" aria-label="停止任务" className="cyber-action is-stop" onClick={() => void stopCurrentTask()} disabled={!isAnalyzing && !isRunning}><CircleStop /><strong>停止任务</strong></button>
+              <button type="button" aria-label="清空日志" className="cyber-action is-clear" onClick={() => setLogs([])} disabled={logs.length === 0}><Trash2 /><strong>清空日志</strong></button>
             </div>
-            <div className="log-header-actions">
-              <span className={isAnalyzing || isRunning ? "run-pill is-running" : "run-pill"}>{isPaused ? "处理中" : isAnalyzing ? "分析中" : isRunning ? "核价中" : "待处理"}</span>
-              <IconAction icon={Download} label="导出日志" onClick={() => void exportLogs()} />
-              <IconAction icon={Trash2} label="清空日志" onClick={() => setLogs([])} />
+          </section>
+
+          <section className="cyber-log" aria-label="运行日志">
+            <header><strong>运行日志</strong><button type="button" onClick={() => setLogs([])}>清空</button></header>
+            <div className="cyber-log-list" role="log" aria-live="polite">
+              {logs.length === 0 ? <div className="cyber-log-empty">等待文件导入和处理日志</div> : null}
+              {logs.map((log) => (
+                <div className={"cyber-log-row is-" + log.level} key={log.id} title={log.message}>
+                  <i /><time>{log.time}</time><em>{log.level === "success" ? "成功" : log.level === "error" ? "异常" : log.level === "warning" ? "提示" : "信息"}</em><span>{log.message}</span>
+                </div>
+              ))}
             </div>
+          </section>
+
+          <div className="cyber-sidebar-tools">
+            <button type="button" aria-label="选择配置文件" onClick={() => void chooseConfigFile()}><Settings /></button>
+            <button type="button" aria-label="帮助" onClick={() => showComingSoon("帮助中心")}><CircleHelp /></button>
+            <button type="button" aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} onClick={toggleTheme}>{theme === "dark" ? <Moon /> : <Sun />}</button>
+            <button type="button" aria-label={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"} onClick={toggleSidebar}>{sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}</button>
+          </div>
+        </aside>
+
+        <section className="cyber-workspace">
+          <div className="cyber-metrics" aria-label="任务统计">
+            <motion.article className="cyber-metric is-progress" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}>
+              <div className="metric-title"><span className="metric-icon"><RefreshCw /></span><strong>总进度</strong></div>
+              <div className="metric-progress"><ProgressChart value={progressPercent} /><div><b>{progressPercent}%</b><small>{phaseLabel}</small></div></div>
+            </motion.article>
+            <motion.article className="cyber-metric" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.03 }}><div className="metric-title"><span className="metric-icon is-blue"><FileBox /></span><strong>文件数</strong></div><b>{files.length}</b><small>已导入 {files.length} 个文件</small></motion.article>
+            <motion.article className="cyber-metric" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.06 }}><div className="metric-title"><span className="metric-icon is-green"><FileCheck2 /></span><strong>处理完成</strong></div><b>{completedDotCount}</b><small>共 {files.length} 个文件</small></motion.article>
+            <motion.article className="cyber-metric" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.09 }}><div className="metric-title"><span className="metric-icon is-cyan"><BarChart3 /></span><strong>匹配成功率</strong></div><b>{matchedRate}</b><small>{totalMatched}/{totalRows} 行</small></motion.article>
+            <motion.article className="cyber-metric" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.12 }}><div className="metric-title"><span className="metric-icon is-amber"><Clock3 /></span><strong>待确认</strong></div><b>{tabCounts.confirm}</b><small>需要人工确认</small></motion.article>
+            <motion.article className="cyber-metric" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}><div className="metric-title"><span className="metric-icon is-red"><CircleStop /></span><strong>异常数据</strong></div><b>{tabCounts.error}</b><small>处理异常数据</small></motion.article>
+          </div>
+
+          <section className="cyber-upload-panel" aria-labelledby="upload-title">
+            <header><div><span className="panel-icon"><FileBox /></span><h2 id="upload-title">文件处理</h2></div><div className="panel-note">原始 Excel 不会被覆盖 <Badge variant="outline">{files.length} 个文件</Badge></div></header>
+            <div {...getRootProps({ className: "cyber-dropzone" + (isDragActive ? " is-dragging" : "") })}>
+              <div className="cyber-wave" aria-hidden="true" />
+              <img className="cyber-upload-visual" src={uploadFolderUrl} alt="" />
+              <strong>拖拽 Excel 文件到此处</strong>
+              <span>或点击选择本地文件</span>
+              <small>支持格式：.xlsx、.xls、.xlsm、.xlsb</small>
+              <Button type="button" className="cyber-select-file" onClick={(event) => { event.stopPropagation(); openFilePicker(); }}>选择文件</Button>
+              <em>支持大文件批量处理</em>
+            </div>
+          </section>
+
+          <section className="cyber-table-panel">
+            <header className="cyber-table-toolbar">
+              <h2>文件列表 <span>（{visibleFiles.length}）</span></h2>
+              <div className="cyber-table-actions">
+                <span className="view-label"><List />列表视图</span>
+                <div className="cyber-tabs" aria-label="文件状态统计">
+                  {fileTabs.map((tab) => <button type="button" className={activeTab === tab.key ? "is-active" : ""} key={tab.key} onClick={() => setActiveTab(tab.key)}>{tab.label}<b>{tabCounts[tab.key]}</b></button>)}
+                </div>
+                <details className="cyber-column-manager">
+                  <summary aria-label="列管理"><Settings2 /></summary>
+                  <div>{fileTable.getAllLeafColumns().filter((column) => column.getCanHide()).map((column) => <label key={column.id}><Checkbox checked={column.getIsVisible()} onCheckedChange={(checked) => column.toggleVisibility(Boolean(checked))} />{String(column.columnDef.header)}</label>)}</div>
+                </details>
+              </div>
+            </header>
+
+            <div className="cyber-table-scroll" ref={tableScrollRef}>
+              <table className="cyber-file-table">
+                <thead><tr>{fileTable.getVisibleLeafColumns().map((column) => <th key={column.id} className={column.id === "select" ? "checkbox-column" : column.id === "index" ? "index-column" : column.id === "actions" ? "action-column" : undefined}>{column.id === "select" ? <Checkbox checked={selectedAll} onCheckedChange={() => toggleAllSelected()} aria-label="全选当前状态文件" /> : <button type="button" disabled={!column.getCanSort()} onClick={column.getToggleSortingHandler()}>{String(column.columnDef.header)}{column.getCanSort() ? <ArrowUpDown /> : null}</button>}</th>)}</tr></thead>
+                <tbody style={shouldVirtualizeRows ? { height: rowVirtualizer.getTotalSize(), position: "relative" } : undefined}>
+                  {renderedTableRows.length === 0 ? <tr><td colSpan={fileTable.getVisibleLeafColumns().length}><div className="cyber-empty"><img className="cyber-empty-visual" src={emptyFileBoxUrl} alt="" /><strong>暂无文件</strong><span>导入 Excel 文件后将显示在这里</span></div></td></tr> : null}
+                  {renderedTableRows.map(({ row, virtualRow }) => {
+                    const path = row.original;
+                    const analysis = analyses[path];
+                    const result = results[path];
+                    const currentMapping = mappings[path] ?? analysis?.suggestedMapping ?? null;
+                    const status = fileStatusByPath[path];
+                    const isExpanded = expandedPath === path;
+                    return <Fragment key={path}>
+                      <tr ref={virtualRow ? rowVirtualizer.measureElement : undefined} data-index={virtualRow?.index} className={selectedSet.has(path) ? "is-selected" : ""} style={virtualRow ? { position: "absolute", transform: `translateY(${virtualRow.start}px)`, width: "100%", display: "table", tableLayout: "fixed" } : undefined}>
+                        {row.getVisibleCells().map((cell) => {
+                          if (cell.column.id === "select") return <td key={cell.id} className="checkbox-column"><Checkbox checked={selectedSet.has(path)} onCheckedChange={() => toggleSelected(path)} aria-label={"选择 " + fileNameFromPath(path)} /></td>;
+                          if (cell.column.id === "index") return <td key={cell.id} className="index-column">{files.indexOf(path) + 1}</td>;
+                          if (cell.column.id === "fileName") return <td key={cell.id} className="file-cell"><FileSpreadsheet /><button type="button" onClick={() => void openSourceDirectory(path)} title={path}>{fileNameFromPath(path)}</button></td>;
+                          if (cell.column.id === "orderSheet") return <td key={cell.id}>{currentMapping?.orderSheet ?? "—"}</td>;
+                          if (cell.column.id === "pricingSheet") return <td key={cell.id}>{currentMapping?.pricingSheet ?? "—"}</td>;
+                          if (cell.column.id === "coverage") return <td key={cell.id}>{analysis ? formatCoverage(analysis.coverage) : "—"}</td>;
+                          if (cell.column.id === "status") return <td key={cell.id}><span className={"cyber-status is-" + statusMeta[status].tone}><i />{statusMeta[status].label}</span>{result?.status === "completed" ? <small>{result.matchedRows ?? 0}/{result.totalRows ?? 0} 行</small> : null}</td>;
+                          if (cell.column.id === "createdAt") return <td key={cell.id}>{importedAt[path] ?? "—"}</td>;
+                          return <td key={cell.id} className="action-column"><button type="button" onClick={() => setExpandedPath(isExpanded ? null : path)}>{isExpanded ? <ChevronDown /> : <ChevronRight />}字段</button>{result?.outputPath ? <button type="button" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}<button type="button" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X /></button></td>;
+                        })}
+                      </tr>
+                      {isExpanded ? <tr className="cyber-detail"><td colSpan={fileTable.getVisibleLeafColumns().length}>{analysis ? <div><label>订单 Sheet<select value={currentMapping?.orderSheet ?? ""} onChange={(event) => updateMapping(path, event.currentTarget.value, currentMapping?.pricingSheet ?? "")}>{analysis.orderSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName}</option>)}</select></label><label>核价 Sheet<select value={currentMapping?.pricingSheet ?? ""} onChange={(event) => updateMapping(path, currentMapping?.orderSheet ?? "", event.currentTarget.value)}>{analysis.pricingSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName}</option>)}</select></label></div> : <span>尚未分析此文件</span>}</td></tr> : null}
+                    </Fragment>;
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <footer className="cyber-pagination">
+              <button type="button" aria-label="上一页" disabled={pageIndex === 0} onClick={() => setPageIndex((current) => Math.max(0, current - 1))}><ChevronLeft /></button>
+              <strong>{pageIndex + 1}</strong>
+              <button type="button" aria-label="下一页" disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex((current) => Math.min(pageCount - 1, current + 1))}><ChevronRight /></button>
+              <select aria-label="每页条数" value={pageSize} onChange={(event) => setPageSize(Number(event.currentTarget.value))}><option value={50}>50 条/页</option><option value={100}>100 条/页</option><option value={200}>200 条/页</option></select>
+            </footer>
+          </section>
+        </section>
+
+        <footer className="cyber-footer">{fileTabs.map((tab) => <span key={tab.key}><i className={"is-" + tab.key} />{tab.label} {tabCounts[tab.key]}</span>)}</footer>
+      </main>
+    </MotionConfig>
+  );
+
+  return (
+    <MotionConfig reducedMotion="user">
+    <main className="app-shell" ref={shellRef}>
+      <Toaster richColors position="top-right" closeButton theme={theme} />
+      <aside className="left-rail">
+        <section className="operation-panel" aria-labelledby="operation-title">
+          <div className="section-heading">
+            <div><span className="section-icon"><Settings2 size={15} /></span><h2 id="operation-title">操作面板</h2></div>
+            <span>文件与任务</span>
+          </div>
+          <div className="rail-toolbar" aria-label="路径与配置操作">
+            <IconAction icon={FolderOpen} label="目标文件夹" onClick={() => void chooseInputDirectory()} disabled={isAnalyzing || isRunning} />
+            <IconAction icon={FolderOutput} label="输出文件夹" onClick={() => void chooseOutputDirectory()} />
+            <IconAction icon={Settings2} label="选择配置文件" onClick={() => void chooseConfigFile()} disabled={isAnalyzing || isRunning} />
+            <IconAction icon={FileSpreadsheet} label="当前配置文件" onClick={() => void openCurrentConfig()} disabled={!configPath} />
+          </div>
+          <div className="rail-toolbar rail-toolbar-secondary" aria-label="任务控制">
+            <IconAction icon={ScanSearch} label="扫描" onClick={() => void scanFiles()} disabled={isAnalyzing || isRunning} active={isAnalyzing} tone={isAnalyzing ? "primary" : "normal"} />
+            <IconAction icon={Play} label="处理" onClick={() => void runPricing()} disabled={isAnalyzing || isRunning || actionFiles.length === 0} active={isRunning} tone={isRunning ? "primary" : "normal"} />
+            <IconAction icon={RefreshCw} label="重置" onClick={() => void resetTask()} />
           </div>
           <div className="pinned-paths">
             <div className="pinned-path"><span>目标</span><code title={inputDir}>{inputDir || "未选择输入文件夹"}</code></div>
             <div className="pinned-path"><span>输出</span><code title={outputDir}>{outputDir || "未选择输出文件夹"}</code></div>
             <div className="pinned-path"><span>配置</span><code title={configPath}>{configPath || "内置配置"}</code></div>
+          </div>
+        </section>
+
+        <section className="log-panel" aria-label="运行日志">
+          <div className="log-header">
+            <div>
+              <h2>运行日志</h2>
+              <span>{logs.length} 条记录</span>
+            </div>
+            <div className="log-header-actions">
+              <span className={isAnalyzing || isRunning ? "run-pill is-running" : "run-pill"}>{isPaused ? "处理中" : isAnalyzing ? "分析中" : isRunning ? "核价中" : "待处理"}</span>
+              <IconAction icon={Download} label="导出日志" onClick={() => void exportLogs()} compact />
+              <IconAction icon={Trash2} label="清空日志" onClick={() => setLogs([])} compact />
+            </div>
           </div>
           <div className="log-list" role="log" aria-live="polite">
             {logs.length === 0 ? <div className="log-empty">等待文件导入和核价日志</div> : null}
@@ -734,7 +1047,8 @@ export function App(): JSX.Element {
           </div>
           <div className="dot-progress-panel">
             <div className="dot-progress-heading">
-              <span>文件进度</span>
+              <div className="progress-ring" aria-label={"总体进度 " + progressPercent + "%"}><ProgressChart value={progressPercent} /><div><strong>{progressPercent}%</strong><span>总进度</span></div></div>
+              <span>处理进度</span>
               <strong>{completedDotCount}/{files.length}</strong>
             </div>
             <div className="dot-grid" role="list" aria-label="文件点阵进度">
@@ -753,76 +1067,81 @@ export function App(): JSX.Element {
       </aside>
 
       <section className="workspace">
-        <header className="workspace-toolbar">
-          <div className="status-tabs" aria-label="文件状态统计">
-            {fileTabs.map((tab) => (
-              <button
-                type="button"
-                className={"status-tab" + (activeTab === tab.key ? " is-active" : "")}
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
-              >
-                <span>{tab.label}</span>
-                <strong>{tabCounts[tab.key]}</strong>
-              </button>
-            ))}
-          </div>
-        </header>
-
         <div className="workspace-heading">
-          <div>
-            <p className="workspace-kicker">EXCEL PRICING DESK</p>
-            <h2>订单批量核价</h2>
-            <span>拖入 Excel 或选择目标文件夹，自动识别订单 Sheet、核价 Sheet 和数量档位。</span>
+          <div className="metric-grid" aria-label="任务统计">
+            <motion.div className="metric-card is-progress" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}><span>总进度</span><strong>{progressPercent}%</strong><Progress value={progressPercent} /><small>{phaseLabel}</small></motion.div>
+            <motion.div className="metric-card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25, delay: 0.04 }}><span>文件数</span><strong>{files.length}</strong><small>已选 {selectedPaths.length}</small></motion.div>
+            <motion.div className="metric-card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25, delay: 0.08 }}><span>处理完成</span><strong>{completedDotCount}</strong><small>共 {files.length} 个</small></motion.div>
+            <motion.div className="metric-card is-success" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25, delay: 0.12 }}><span>匹配成功率</span><strong>{matchedRate}</strong><small>{totalMatched}/{totalRows} 行</small></motion.div>
           </div>
-          <div className="workspace-progress-summary">
-            <strong>{progressPercent}%</strong>
-            <span>{phaseLabel} · {progress.total > 0 ? progress.current + "/" + progress.total : completedDotCount + "/" + files.length}</span>
-          </div>
+          <Button type="button" variant="outline" size="icon" className="theme-toggle" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}>
+            {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+          </Button>
         </div>
 
-        <section
-          className={"drop-zone import-strip" + (dragActive ? " is-dragging" : "")}
-          onDragEnter={(event) => {
-            event.preventDefault();
-            setDragActive(true);
-          }}
-          onDragOver={(event) => event.preventDefault()}
-          onDragLeave={(event) => {
-            if (event.currentTarget === event.target) setDragActive(false);
-          }}
-          onDrop={handleDrop}
-        >
-          <div className="import-icon"><FilePlus2 size={19} strokeWidth={1.8} /></div>
+        <section className="file-processing-panel" aria-labelledby="file-processing-title">
+          <div className="panel-title-row">
+            <div><span className="section-icon"><FileSpreadsheet size={15} /></span><h2 id="file-processing-title">文件处理</h2></div>
+            <span>{activePath ? "正在处理：" + fileNameFromPath(activePath) : "原始 Excel 不会被覆盖"}</span>
+          </div>
+          <div {...getRootProps({ className: "drop-zone import-strip" + (isDragActive ? " is-dragging" : "") })}>
+          <div className="import-icon"><FilePlus2 size={18} strokeWidth={1.8} /></div>
           <div className="import-copy">
-            <strong>把 Excel 文件拖到这里</strong>
-            <span>支持 xlsx、xlsm、xlsb、xls · 选择目标文件夹后点击左侧“扫描”</span>
+            <strong>导入或拖入 Excel 文件</strong>
+            <span>支持 xlsx、xlsm、xlsb、xls，选择目标文件夹后点击“扫描文件”</span>
+          </div>
+          <span className="import-count">{files.length} 个文件</span>
           </div>
         </section>
 
         <div className="table-panel">
           <div className="table-toolbar">
             <div className="table-title"><strong>{files.length} 个文件，当前显示 {visibleFiles.length} 个，已选 {selectedPaths.length} 个</strong><span>{activePath ? "正在处理：" + fileNameFromPath(activePath) : "原始 Excel 不会被覆盖"}</span></div>
+            <div className="toolbar-right">
+            <details className="column-manager">
+              <summary><Columns3 size={15} />列管理</summary>
+              <div className="column-menu">
+                {fileTable.getAllLeafColumns().filter((column) => column.getCanHide()).map((column) => (
+                  <label key={column.id}><Checkbox checked={column.getIsVisible()} onCheckedChange={(checked) => column.toggleVisibility(Boolean(checked))} />{String(column.columnDef.header)}</label>
+                ))}
+              </div>
+            </details>
+            <div className="status-tabs" aria-label="文件状态统计">
+              {fileTabs.map((tab) => (
+                <button
+                  type="button"
+                  className={"status-tab" + (activeTab === tab.key ? " is-active" : "")}
+                  key={tab.key}
+                  onClick={() => setActiveTab(tab.key)}
+                >
+                  <span>{tab.label}</span>
+                  <strong>{tabCounts[tab.key]}</strong>
+                </button>
+              ))}
+            </div>
+            </div>
           </div>
-          <div className="table-scroll">
+          <div className="table-scroll" ref={tableScrollRef}>
             <table className="file-table">
               <thead>
                 <tr>
-                  <th className="checkbox-column"><input type="checkbox" checked={selectedAll} onChange={toggleAllSelected} aria-label="全选当前 Tab 文件" /></th>
-                  <th className="index-column">序号</th>
-                  <th>原始文件名</th>
-                  <th>订单 Sheet</th>
-                  <th>核价 Sheet</th>
-                  <th>覆盖率</th>
-                  <th>状态</th>
-                  <th className="action-column">操作</th>
+                  {fileTable.getVisibleLeafColumns().map((column) => (
+                    <th key={column.id} className={column.id === "select" ? "checkbox-column" : column.id === "index" ? "index-column" : column.id === "actions" ? "action-column" : undefined}>
+                      {column.id === "select" ? <Checkbox checked={selectedAll} onCheckedChange={() => toggleAllSelected()} aria-label="全选当前 Tab 文件" /> : (
+                        <button type="button" className="sortable-header" disabled={!column.getCanSort()} onClick={column.getToggleSortingHandler()}>
+                          {String(column.columnDef.header)}{column.getCanSort() ? <ArrowUpDown size={13} /> : null}
+                        </button>
+                      )}
+                    </th>
+                  ))}
                 </tr>
               </thead>
-              <tbody>
+              <tbody style={shouldVirtualizeRows ? { height: rowVirtualizer.getTotalSize(), position: "relative" } : undefined}>
                 {visibleFiles.length === 0 ? (
-                  <tr><td colSpan={8}><div className="table-empty"><FileSpreadsheet size={30} strokeWidth={1.5} /><strong>{files.length === 0 ? "暂无 Excel 文件" : fileTabs.find((tab) => tab.key === activeTab)?.label + "暂无文件"}</strong><span>{files.length === 0 ? "把 Excel 文件拖入上方区域，或选择目标文件夹后点击扫描" : "切换其他 Tab 查看当前任务"}</span></div></td></tr>
+                  <tr><td colSpan={fileTable.getVisibleLeafColumns().length}><div className="table-empty"><FileSpreadsheet size={30} strokeWidth={1.5} /><strong>{files.length === 0 ? "暂无 Excel 文件" : fileTabs.find((tab) => tab.key === activeTab)?.label + "暂无文件"}</strong><span>{files.length === 0 ? "把 Excel 文件拖入上方区域，或选择目标文件夹后点击扫描" : "切换其他 Tab 查看当前任务"}</span></div></td></tr>
                 ) : null}
-                {visibleFiles.map((path) => {
+                {renderedTableRows.map(({ row, virtualRow }) => {
+                  const path = row.original;
                   const index = files.indexOf(path);
                   const analysis = analyses[path];
                   const result = results[path];
@@ -831,24 +1150,26 @@ export function App(): JSX.Element {
                   const isExpanded = expandedPath === path;
                   return (
                     <Fragment key={path}>
-                      <tr className={"file-row is-" + status + (selectedSet.has(path) ? " is-selected" : "")}>
-                        <td className="checkbox-column"><input type="checkbox" checked={selectedSet.has(path)} onChange={() => toggleSelected(path)} aria-label={"选择 " + fileNameFromPath(path)} /></td>
-                        <td className="index-column">{index + 1}</td>
-                        <td className="file-name-cell">
+                      <tr ref={virtualRow ? rowVirtualizer.measureElement : undefined} data-index={virtualRow?.index} className={"file-row is-" + status + (selectedSet.has(path) ? " is-selected" : "")} style={virtualRow ? { position: "absolute", transform: `translateY(${virtualRow.start}px)`, width: "100%", display: "table", tableLayout: "fixed" } : undefined}>
+                        {row.getVisibleCells().map((cell) => {
+                          if (cell.column.id === "select") return <td key={cell.id} className="checkbox-column"><Checkbox checked={selectedSet.has(path)} onCheckedChange={() => toggleSelected(path)} aria-label={"选择 " + fileNameFromPath(path)} /></td>;
+                          if (cell.column.id === "index") return <td key={cell.id} className="index-column">{index + 1}</td>;
+                          if (cell.column.id === "fileName") return <td key={cell.id} className="file-name-cell">
                           <FileSpreadsheet size={17} strokeWidth={1.7} />
                           <button type="button" className="file-name-button" onClick={() => void openSourceDirectory(path)} title={path}>
                             <strong>{fileNameFromPath(path)}</strong>
                             <span>{path}</span>
                           </button>
-                        </td>
-                        <td>{currentMapping?.orderSheet ?? "—"}</td>
-                        <td>{currentMapping?.pricingSheet ?? "—"}</td>
-                        <td><span className={analysis && analysis.coverage >= 0.95 ? "coverage-label is-good" : analysis ? "coverage-label is-warning" : "coverage-label"}>{analysis ? "覆盖率 " + formatCoverage(analysis.coverage) : "—"}</span></td>
-                        <td><span className={"table-status is-" + statusMeta[status].tone}><span className="status-dot" />{statusMeta[status].label}</span>{result?.status === "completed" ? <small className="status-count">{result.matchedRows ?? 0}/{result.totalRows ?? 0} 行已核价</small> : null}</td>
-                        <td className="action-column"><button type="button" className="row-action" onClick={() => setExpandedPath(isExpanded ? null : path)}>{isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}字段</button>{result?.outputPath ? <button type="button" className="row-link" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}<button type="button" className="row-remove" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X size={15} /></button></td>
+                          </td>;
+                          if (cell.column.id === "orderSheet") return <td key={cell.id}>{currentMapping?.orderSheet ?? "—"}</td>;
+                          if (cell.column.id === "pricingSheet") return <td key={cell.id}>{currentMapping?.pricingSheet ?? "—"}</td>;
+                          if (cell.column.id === "coverage") return <td key={cell.id}><span className={analysis && analysis.coverage >= 0.95 ? "coverage-label is-good" : analysis ? "coverage-label is-warning" : "coverage-label"}>{analysis ? "覆盖率 " + formatCoverage(analysis.coverage) : "—"}</span></td>;
+                          if (cell.column.id === "status") return <td key={cell.id}><Badge variant="outline" className={"table-status is-" + statusMeta[status].tone}><span className="status-dot" />{statusMeta[status].label}</Badge>{result?.status === "completed" ? <small className="status-count">{result.matchedRows ?? 0}/{result.totalRows ?? 0} 行已核价</small> : null}</td>;
+                          return <td key={cell.id} className="action-column"><button type="button" className="row-action" onClick={() => setExpandedPath(isExpanded ? null : path)}>{isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}字段</button>{result?.outputPath ? <button type="button" className="row-link" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}<button type="button" className="row-remove" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X size={15} /></button></td>;
+                        })}
                       </tr>
                       {isExpanded ? (
-                        <tr className="detail-row" key={path + "-detail"}><td colSpan={8}><div className="detail-panel">
+                        <tr className="detail-row" key={path + "-detail"}><td colSpan={fileTable.getVisibleLeafColumns().length}><div className="detail-panel">
                           {analysis ? (
                             <>
                               <div className="detail-grid">
@@ -880,5 +1201,6 @@ export function App(): JSX.Element {
         <div className="footer-summary"><strong>{completedDotCount}/{files.length} 个文件</strong><span>已核价 {totalMatched}/{totalRows} 行</span><span>已选 {selectedPaths.length} 个</span></div>
       </footer>
     </main>
+    </MotionConfig>
   );
 }
