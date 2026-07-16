@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } from "electron";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { access, appendFile, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { assertTrustedIpcSender, isTrustedRendererUrl } from "./security";
@@ -24,15 +24,44 @@ type RuntimeLogRow = {
   message: string;
 };
 
+type ConfigValidationIssue = {
+  path: string;
+  message: string;
+};
+
+type ConfigDocument = {
+  path: string;
+  content: string;
+  modifiedAt: number;
+  isDefault: boolean;
+};
+
+type TaskHistoryStatus = "running" | "completed" | "failed" | "stopped" | "interrupted";
+
+type TaskHistoryRecord = {
+  id: string;
+  startedAt: string;
+  completedAt?: string;
+  status: TaskHistoryStatus;
+  totalFiles: number;
+  completedFiles: number;
+  failedFiles: number;
+  totalRows: number;
+  matchedRows: number;
+  exceptionRows: number;
+  outputDir?: string;
+};
+
 const rootDir = resolve(__dirname, "../..");
 const resourceRootDir = app.isPackaged ? process.resourcesPath : rootDir;
 const writableRootDir = app.isPackaged ? app.getPath("userData") : rootDir;
 const portableRootDir =
   app.isPackaged && process.env.PORTABLE_EXECUTABLE_DIR ? process.env.PORTABLE_EXECUTABLE_DIR : dirname(process.execPath);
-const bundledExtractConfigPath = join(resourceRootDir, "config", "extract_rules.json");
+const bundledDefaultConfigPath = join(resourceRootDir, "defaults", "extract_rules.json");
 const defaultExtractConfigPath = join(writableRootDir, "config", "extract_rules.json");
 const legacyRuntimeConfigPath = join(writableRootDir, "runtime", "app_config.json");
 const runtimeLogPath = join(writableRootDir, "runtime", "logs", "app.log");
+const taskHistoryPath = join(writableRootDir, "runtime", "task-history.jsonl");
 const appIconPath = join(resourceRootDir, "resources", "app-icon.ico");
 const rendererHtmlPath = join(__dirname, "../renderer/index.html");
 const devServerUrl = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL;
@@ -57,6 +86,7 @@ const supportedExcelExtensions = new Set([".xlsx", ".xlsm", ".xlsb", ".xls"]);
 const MAX_INPUT_FILES = 5_000;
 let processor: ChildProcessWithoutNullStreams | null = null;
 let processorActivity: "scan" | "start" | "merge" | "price-analyze" | "price-run" | null = null;
+let activeTask: TaskHistoryRecord | null = null;
 
 type ProcessorCommand = Record<string, unknown> & {
   action: string;
@@ -202,7 +232,7 @@ async function ensureWritableConfig(): Promise<void> {
   try {
     await access(defaultExtractConfigPath);
   } catch {
-    await copyFile(bundledExtractConfigPath, defaultExtractConfigPath);
+    await copyFile(bundledDefaultConfigPath, defaultExtractConfigPath);
   }
 }
 
@@ -213,6 +243,217 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function parseConfigContent(content: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "JSON 格式无效";
+    throw new SyntaxError(message);
+  }
+  return requireRecord(parsed, "配置文件根节点");
+}
+
+function validateConfigContent(content: string): { valid: boolean; issues: ConfigValidationIssue[] } {
+  const issues: ConfigValidationIssue[] = [];
+  let config: Record<string, unknown>;
+  try {
+    config = parseConfigContent(content);
+  } catch (error) {
+    return {
+      valid: false,
+      issues: [{ path: "$", message: error instanceof Error ? error.message : "JSON 格式无效" }],
+    };
+  }
+
+  const objectSections = ["sheet_rules", "sheet_selection", "performance", "pricing", "runtime", "fields", "output"];
+  for (const key of objectSections) {
+    const value = config[key];
+    if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
+      issues.push({ path: key, message: "必须是对象" });
+    }
+  }
+
+  const performance = config.performance as Record<string, unknown> | undefined;
+  if (performance) {
+    for (const key of ["processing_workbook_max_mb", "processing_xml_entry_max_mb", "processing_shared_strings_max_mb", "processing_max_rows"] as const) {
+      const value = performance[key];
+      if (value !== undefined && (!Number.isInteger(value) || Number(value) < 1)) {
+        issues.push({ path: `performance.${key}`, message: "必须是大于 0 的整数" });
+      }
+    }
+    if (performance.processing_workers !== undefined && (!Number.isInteger(performance.processing_workers) || Number(performance.processing_workers) < 0)) {
+      issues.push({ path: "performance.processing_workers", message: "必须是大于或等于 0 的整数" });
+    }
+  }
+
+  const runtime = config.runtime as Record<string, unknown> | undefined;
+  if (runtime) {
+    for (const key of ["recent_input_dir", "recent_output_dir", "recent_config_path"] as const) {
+      const value = runtime[key];
+      if (value !== undefined && typeof value !== "string") {
+        issues.push({ path: `runtime.${key}`, message: "必须是字符串" });
+      }
+    }
+    if (runtime.archive_standard_files !== undefined && typeof runtime.archive_standard_files !== "boolean") {
+      issues.push({ path: "runtime.archive_standard_files", message: "必须是布尔值" });
+    }
+  }
+  return { valid: issues.length === 0, issues };
+}
+
+async function readConfigDocument(candidatePath?: string): Promise<ConfigDocument> {
+  const configPath = await resolveActiveConfigPath(candidatePath);
+  const [content, fileStat] = await Promise.all([readFile(configPath, "utf8"), stat(configPath)]);
+  return {
+    path: configPath,
+    content,
+    modifiedAt: fileStat.mtimeMs,
+    isDefault: samePath(configPath, defaultExtractConfigPath),
+  };
+}
+
+async function atomicWriteConfig(configPath: string, content: string): Promise<ConfigDocument> {
+  const validation = validateConfigContent(content);
+  if (!validation.valid) {
+    throw new Error(`配置校验失败：${validation.issues[0]?.path} ${validation.issues[0]?.message}`);
+  }
+  const normalizedContent = `${JSON.stringify(parseConfigContent(content), null, 2)}\n`;
+  await mkdir(dirname(configPath), { recursive: true });
+  const temporaryPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  if (await pathExists(configPath)) {
+    await copyFile(configPath, `${configPath}.bak`);
+  }
+  await writeFile(temporaryPath, normalizedContent, "utf8");
+  await rename(temporaryPath, configPath);
+  return readConfigDocument(configPath);
+}
+
+async function saveConfigDocument(payload: unknown): Promise<ConfigDocument> {
+  const input = requireRecord(payload, "配置保存参数");
+  if (typeof input.path !== "string" || !isAbsolute(input.path) || typeof input.content !== "string") {
+    throw new TypeError("配置保存参数无效");
+  }
+  if (typeof input.expectedModifiedAt === "number" && (await pathExists(input.path))) {
+    const currentStat = await stat(input.path);
+    if (Math.abs(currentStat.mtimeMs - input.expectedModifiedAt) > 1) {
+      throw new Error("配置文件已被外部修改，请重新加载后再保存");
+    }
+  }
+  const document = await atomicWriteConfig(resolve(input.path), input.content);
+  await writeDefaultConfigPointer(document.path);
+  return readConfigDocument(document.path);
+}
+
+async function saveConfigDocumentAs(content: string): Promise<ConfigDocument | null> {
+  const validation = validateConfigContent(content);
+  if (!validation.valid) {
+    throw new Error(`配置校验失败：${validation.issues[0]?.path} ${validation.issues[0]?.message}`);
+  }
+  const runtime = await readRuntimeConfig();
+  const result = await dialog.showSaveDialog({
+    defaultPath: runtime.recent_config_path ?? defaultExtractConfigPath,
+    filters: [{ name: "JSON 配置", extensions: ["json"] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  const document = await atomicWriteConfig(resolve(result.filePath), content);
+  await writeDefaultConfigPointer(document.path);
+  return readConfigDocument(document.path);
+}
+
+async function restoreDefaultConfig(): Promise<ConfigDocument> {
+  const current = await readConfigDocument();
+  const bundledContent = await readFile(bundledDefaultConfigPath, "utf8");
+  const bundled = parseConfigContent(bundledContent);
+  bundled.runtime = {
+    ...runtimeFromConfig(bundled),
+    ...runtimeFromConfig(parseConfigContent(current.content)),
+    recent_config_path: current.path,
+  };
+  return atomicWriteConfig(current.path, JSON.stringify(bundled));
+}
+
+async function readTaskHistory(): Promise<TaskHistoryRecord[]> {
+  let content = "";
+  try {
+    content = await readFile(taskHistoryPath, "utf8");
+  } catch {
+    return [];
+  }
+  const latest = new Map<string, TaskHistoryRecord>();
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line) as TaskHistoryRecord;
+      if (record && typeof record.id === "string") latest.set(record.id, record);
+    } catch {
+      // Ignore a truncated final line so one interrupted write cannot hide valid history.
+    }
+  }
+  return [...latest.values()].sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+}
+
+async function persistTaskRecord(record: TaskHistoryRecord): Promise<void> {
+  await mkdir(dirname(taskHistoryPath), { recursive: true });
+  await appendFile(taskHistoryPath, `${JSON.stringify(record)}\n`, "utf8");
+  const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000;
+  const retained = (await readTaskHistory())
+    .filter((item) => Date.parse(item.startedAt) >= cutoff)
+    .slice(0, 1_000)
+    .reverse();
+  await writeFile(taskHistoryPath, retained.map((item) => JSON.stringify(item)).join("\n") + (retained.length ? "\n" : ""), "utf8");
+}
+
+async function markInterruptedTasks(): Promise<void> {
+  const running = (await readTaskHistory()).filter((record) => record.status === "running");
+  for (const record of running) {
+    await persistTaskRecord({ ...record, status: "interrupted", completedAt: new Date().toISOString() });
+  }
+}
+
+function localDateKey(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+async function getTaskHistorySummary(): Promise<{
+  today: { files: number; tasks: number; matchRate: number; exceptions: number };
+  trend: Array<{ date: string; files: number; matchedRows: number; totalRows: number; exceptions: number }>;
+  recent: TaskHistoryRecord[];
+}> {
+  const history = await readTaskHistory();
+  const todayKey = localDateKey(new Date());
+  const completed = history.filter((record) => record.status !== "running");
+  const today = completed.filter((record) => localDateKey(new Date(record.startedAt)) === todayKey);
+  const totalRows = today.reduce((sum, record) => sum + record.totalRows, 0);
+  const matchedRows = today.reduce((sum, record) => sum + record.matchedRows, 0);
+  const trend = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date();
+    date.setDate(date.getDate() - (6 - index));
+    const dateKey = localDateKey(date);
+    const records = completed.filter((record) => localDateKey(new Date(record.startedAt)) === dateKey);
+    return {
+      date: dateKey,
+      files: records.reduce((sum, record) => sum + record.totalFiles, 0),
+      matchedRows: records.reduce((sum, record) => sum + record.matchedRows, 0),
+      totalRows: records.reduce((sum, record) => sum + record.totalRows, 0),
+      exceptions: records.reduce((sum, record) => sum + record.exceptionRows, 0),
+    };
+  });
+  return {
+    today: {
+      files: today.reduce((sum, record) => sum + record.totalFiles, 0),
+      tasks: today.length,
+      matchRate: totalRows > 0 ? matchedRows / totalRows : 0,
+      exceptions: today.reduce((sum, record) => sum + record.exceptionRows, 0),
+    },
+    trend,
+    recent: history.slice(0, 8),
+  };
 }
 
 async function readConfigFile(configPath: string): Promise<Record<string, unknown>> {
@@ -477,6 +718,33 @@ function broadcastProcessorEvent(event: unknown): void {
   }
 }
 
+function trackProcessorEvent(event: unknown): void {
+  if (!activeTask || !event || typeof event !== "object" || Array.isArray(event)) return;
+  const payload = event as Record<string, unknown>;
+  if (payload.type === "price-file-result") {
+    const totalRows = typeof payload.totalRows === "number" ? payload.totalRows : 0;
+    const matchedRows = typeof payload.matchedRows === "number" ? payload.matchedRows : 0;
+    const exceptionRows = typeof payload.exceptionRows === "number" ? payload.exceptionRows : 0;
+    activeTask = {
+      ...activeTask,
+      completedFiles: activeTask.completedFiles + (payload.status === "completed" ? 1 : 0),
+      failedFiles: activeTask.failedFiles + (payload.status === "failed" ? 1 : 0),
+      totalRows: activeTask.totalRows + totalRows,
+      matchedRows: activeTask.matchedRows + matchedRows,
+      exceptionRows: activeTask.exceptionRows + exceptionRows,
+    };
+  }
+  if (payload.type === "price-done" && payload.mode === "run") {
+    const completed = {
+      ...activeTask,
+      status: (payload.stopped ? "stopped" : activeTask.failedFiles > 0 ? "failed" : "completed") as TaskHistoryStatus,
+      completedAt: new Date().toISOString(),
+    };
+    activeTask = null;
+    void persistTaskRecord(completed);
+  }
+}
+
 function getProcessorExecutable(): string {
   const executableName = process.platform === "win32" ? "auto-pricing-tool-processor.exe" : "auto-pricing-tool-processor";
   const configuredProcessorPath = app.isPackaged ? undefined : process.env.AUTO_PRICING_PROCESSOR;
@@ -512,7 +780,9 @@ function ensureProcessor(): ChildProcessWithoutNullStreams {
 
   createInterface({ input: child.stdout }).on("line", (line) => {
     try {
-      broadcastProcessorEvent(JSON.parse(line));
+      const event = JSON.parse(line) as unknown;
+      trackProcessorEvent(event);
+      broadcastProcessorEvent(event);
     } catch {
       broadcastProcessorEvent({ type: "log", level: "info", message: line });
     }
@@ -564,6 +834,15 @@ function stopProcessorProcess(): Promise<void> {
         broadcastProcessorEvent({ type: "done", stopped: true, summaryPath: null, outputFiles: [], failures: [] });
       } else if (stoppedActivity === "price-run") {
         broadcastProcessorEvent({ type: "price-done", mode: "run", stopped: true, files: [], failures: [] });
+        if (activeTask) {
+          const stoppedTask: TaskHistoryRecord = {
+            ...activeTask,
+            status: "stopped",
+            completedAt: new Date().toISOString(),
+          };
+          activeTask = null;
+          void persistTaskRecord(stoppedTask);
+        }
       } else if (stoppedActivity === "price-analyze") {
         broadcastProcessorEvent({ type: "price-done", mode: "analysis", stopped: true, files: [] });
       }
@@ -577,9 +856,10 @@ function stopProcessorProcess(): Promise<void> {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   installContentSecurityPolicy();
+  await markInterruptedTasks();
 
   ipcMain.handle("app:get-runtime-config", (event) => {
     requireTrustedIpc(event);
@@ -603,6 +883,35 @@ app.whenReady().then(() => {
   ipcMain.handle("app:set-runtime-config", (event, payload: unknown) => {
     requireTrustedIpc(event);
     return writeRuntimeConfig(validateRuntimeConfigUpdate(payload));
+  });
+  ipcMain.handle("config:get-document", (event, candidatePath?: unknown) => {
+    requireTrustedIpc(event);
+    if (candidatePath !== undefined && typeof candidatePath !== "string") {
+      throw new TypeError("配置路径必须是字符串");
+    }
+    return readConfigDocument(candidatePath);
+  });
+  ipcMain.handle("config:validate-document", (event, content: unknown) => {
+    requireTrustedIpc(event);
+    if (typeof content !== "string") throw new TypeError("配置内容必须是字符串");
+    return validateConfigContent(content);
+  });
+  ipcMain.handle("config:save-document", (event, payload: unknown) => {
+    requireTrustedIpc(event);
+    return saveConfigDocument(payload);
+  });
+  ipcMain.handle("config:save-document-as", (event, content: unknown) => {
+    requireTrustedIpc(event);
+    if (typeof content !== "string") throw new TypeError("配置内容必须是字符串");
+    return saveConfigDocumentAs(content);
+  });
+  ipcMain.handle("config:restore-default", (event) => {
+    requireTrustedIpc(event);
+    return restoreDefaultConfig();
+  });
+  ipcMain.handle("history:get-summary", (event) => {
+    requireTrustedIpc(event);
+    return getTaskHistorySummary();
   });
   ipcMain.handle("app:append-runtime-log", (event, payload: RuntimeLogRow) => {
     requireTrustedIpc(event);
@@ -663,8 +972,23 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("processor:price-check-run", async (event, payload: unknown) => {
     requireTrustedIpc(event);
+    const validated = await validatePricePayload(payload);
+    const files = validated.files as string[];
+    activeTask = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      startedAt: new Date().toISOString(),
+      status: "running",
+      totalFiles: files.length,
+      completedFiles: 0,
+      failedFiles: 0,
+      totalRows: 0,
+      matchedRows: 0,
+      exceptionRows: 0,
+      ...(typeof validated.outputDir === "string" ? { outputDir: validated.outputDir } : {}),
+    };
+    await persistTaskRecord(activeTask);
     processorActivity = "price-run";
-    sendProcessorCommand({ ...(await validatePricePayload(payload)), action: "price-check-run" });
+    sendProcessorCommand({ ...validated, action: "price-check-run" });
   });
   ipcMain.handle("processor:pause", (event) => {
     requireTrustedIpc(event);
@@ -708,8 +1032,13 @@ app.whenReady().then(() => {
     if (result.canceled || !result.filePaths[0]) {
       return null;
     }
-    await writeRuntimeConfig({ recent_config_path: result.filePaths[0] });
-    return result.filePaths[0];
+    const selectedDocument = await readConfigDocument(result.filePaths[0]);
+    const validation = validateConfigContent(selectedDocument.content);
+    if (!validation.valid) {
+      throw new Error(`配置校验失败：${validation.issues[0]?.path} ${validation.issues[0]?.message}`);
+    }
+    await writeDefaultConfigPointer(selectedDocument.path);
+    return selectedDocument.path;
   });
 
   createWindow();

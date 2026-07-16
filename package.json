@@ -40,7 +40,7 @@
     ],
     "extraResources": [
       {
-        "from": "config",
+        "from": "resources/defaults",
         "to": "config",
         "filter": [
           "extract_rules.json"
@@ -60,6 +60,13 @@
         "to": "licenses",
         "filter": [
           "*.txt"
+        ]
+      },
+      {
+        "from": "resources/defaults",
+        "to": "defaults",
+        "filter": [
+          "extract_rules.json"
         ]
       },
       {

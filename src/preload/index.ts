@@ -4,6 +4,29 @@ export type RuntimeConfig = {
   recent_input_dir?: string;
   recent_output_dir?: string;
   recent_config_path?: string;
+  archive_standard_files?: boolean;
+};
+
+export type ConfigValidationIssue = { path: string; message: string };
+export type ConfigValidationResult = { valid: boolean; issues: ConfigValidationIssue[] };
+export type ConfigDocument = { path: string; content: string; modifiedAt: number; isDefault: boolean };
+export type TaskHistoryRecord = {
+  id: string;
+  startedAt: string;
+  completedAt?: string;
+  status: "running" | "completed" | "failed" | "stopped" | "interrupted";
+  totalFiles: number;
+  completedFiles: number;
+  failedFiles: number;
+  totalRows: number;
+  matchedRows: number;
+  exceptionRows: number;
+  outputDir?: string;
+};
+export type TaskHistorySummary = {
+  today: { files: number; tasks: number; matchRate: number; exceptions: number };
+  trend: Array<{ date: string; files: number; matchedRows: number; totalRows: number; exceptions: number }>;
+  recent: TaskHistoryRecord[];
 };
 
 export type PriceCheckMapping = {
@@ -115,6 +138,12 @@ const desktopAPI = {
   closeWindow: (): Promise<void> => ipcRenderer.invoke("window:close"),
   getRuntimeConfig: (): Promise<RuntimeConfig> => ipcRenderer.invoke("app:get-runtime-config"),
   setRuntimeConfig: (config: RuntimeConfig): Promise<RuntimeConfig> => ipcRenderer.invoke("app:set-runtime-config", config),
+  getConfigDocument: (path?: string): Promise<ConfigDocument> => ipcRenderer.invoke("config:get-document", path),
+  validateConfigDocument: (content: string): Promise<ConfigValidationResult> => ipcRenderer.invoke("config:validate-document", content),
+  saveConfigDocument: (payload: { path: string; content: string; expectedModifiedAt: number }): Promise<ConfigDocument> => ipcRenderer.invoke("config:save-document", payload),
+  saveConfigDocumentAs: (content: string): Promise<ConfigDocument | null> => ipcRenderer.invoke("config:save-document-as", content),
+  restoreDefaultConfig: (): Promise<ConfigDocument> => ipcRenderer.invoke("config:restore-default"),
+  getTaskHistorySummary: (): Promise<TaskHistorySummary> => ipcRenderer.invoke("history:get-summary"),
   appendRuntimeLogs: (rows: RuntimeLogRow[]): Promise<void> => ipcRenderer.invoke("app:append-runtime-logs", rows),
   exportRuntimeLog: (): Promise<string | null> => ipcRenderer.invoke("app:export-runtime-log"),
   openPath: (filePath: string): Promise<string> => ipcRenderer.invoke("app:open-path", filePath),

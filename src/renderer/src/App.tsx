@@ -51,6 +51,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { ProgressChart } from "@/components/progress-chart";
+import { ConfigCenterPage } from "@/components/config-center-page";
+import { DashboardPage } from "@/components/dashboard-page";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useUIStore, type FileTab, type WorkbenchPage } from "@/stores/ui-store";
 import type {
@@ -919,7 +921,7 @@ export function App(): React.JSX.Element {
           {sidebarCollapsed ? renderTaskActions("cyber-rail-actions") : null}
 
           <div className="cyber-sidebar-tools">
-            <SidebarTooltip label="选择配置文件" enabled={sidebarCollapsed}><button type="button" aria-label="选择配置文件" onClick={() => void chooseConfigFile()}><Settings /></button></SidebarTooltip>
+            <SidebarTooltip label="配置中心" enabled={sidebarCollapsed}><button type="button" aria-label="配置中心" onClick={() => setActivePage("config")}><Settings /></button></SidebarTooltip>
             <SidebarTooltip label="帮助" enabled={sidebarCollapsed}><button type="button" aria-label="帮助" onClick={() => showComingSoon("帮助中心")}><CircleHelp /></button></SidebarTooltip>
             <SidebarTooltip label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} enabled={sidebarCollapsed}><button type="button" aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} onClick={toggleTheme}>{theme === "dark" ? <Moon /> : <Sun />}</button></SidebarTooltip>
             <SidebarTooltip label={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"} enabled={sidebarCollapsed}><button type="button" aria-label={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"} onClick={toggleSidebar}>{sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}</button></SidebarTooltip>
@@ -970,8 +972,18 @@ export function App(): React.JSX.Element {
           </> : null}
         </AnimatePresence>
 
-        <section className={"cyber-workspace" + (activePage === "workbench" ? "" : " is-coming-soon")}>
-          {activePage === "workbench" ? <>
+        <section className={`cyber-workspace is-${activePage}` + (!["workbench", "files", "config"].includes(activePage) ? " is-coming-soon" : "")}>
+          {activePage === "workbench" ? (
+            <DashboardPage
+              api={getDesktopAPI()}
+              dark={theme === "dark"}
+              currentFileCount={files.length}
+              outputDir={outputDir}
+              onNewProcessing={() => { setActivePage("files"); openFilePicker(); }}
+              onOpenFiles={() => setActivePage("files")}
+              onOpenConfig={() => setActivePage("config")}
+            />
+          ) : activePage === "files" ? <>
           <section className="cyber-upload-panel" aria-labelledby="upload-title">
             <header>
               <div><span className="panel-icon"><FileBox /></span><h2 id="upload-title">文件处理</h2></div>
@@ -1043,7 +1055,9 @@ export function App(): React.JSX.Element {
               <select aria-label="每页条数" value={pageSize} onChange={(event) => setPageSize(Number(event.currentTarget.value))}><option value={50}>50 条/页</option><option value={100}>100 条/页</option><option value={200}>200 条/页</option></select>
             </footer>
           </section>
-          </> : (
+          </> : activePage === "config" ? (
+            <ConfigCenterPage api={getDesktopAPI()} />
+          ) : (
             <section className="coming-soon-page" aria-labelledby="coming-soon-title">
               <div className="coming-soon-icon" aria-hidden="true"><ActiveNavigationIcon /></div>
               <span className="coming-soon-eyebrow">{activeNavigationItem.label}</span>
