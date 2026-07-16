@@ -173,8 +173,15 @@ describe("AutoPricingTool cyber workstation", () => {
     await waitFor(() => expect(api.selectConfig).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: "折叠侧栏" }));
     expect(document.querySelector(".cyber-app")).toHaveClass("is-sidebar-collapsed");
+    expect(document.querySelector(".cyber-rail-actions")?.querySelectorAll("button")).toHaveLength(4);
+    expect(document.querySelector(".cyber-workbench-actions")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "导入 Excel" })).toHaveAttribute("data-state", "closed");
+    expect(screen.getByRole("button", { name: "工作台" })).toHaveAttribute("data-state", "closed");
+    expect(screen.getByRole("button", { name: "展开侧栏" })).toHaveAttribute("data-state", "closed");
     fireEvent.click(screen.getByRole("button", { name: "展开侧栏" }));
     expect(document.querySelector(".cyber-app")).not.toHaveClass("is-sidebar-collapsed");
+    expect(document.querySelector(".cyber-rail-actions")).not.toBeInTheDocument();
+    expect(document.querySelector(".cyber-workbench-actions")?.querySelectorAll("button")).toHaveLength(4);
   });
 
   it("runs pricing after analysis completes", async () => {

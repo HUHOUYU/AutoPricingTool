@@ -18,10 +18,12 @@ import {
   FileCog,
   FilePlus2,
   FileSpreadsheet,
+  FileUp,
   FolderOpen,
   FolderOutput,
   FolderUp,
   LayoutDashboard,
+  Inbox,
   List,
   Minus,
   Moon,
@@ -42,8 +44,6 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import brandExcelUrl from "@/assets/brand-excel.png";
-import emptyFileBoxUrl from "@/assets/empty-file-box.png";
-import uploadFolderUrl from "@/assets/upload-folder.png";
 import { useDropzone } from "react-dropzone";
 import { toast, Toaster } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -893,7 +893,7 @@ export function App(): React.JSX.Element {
         <aside className="cyber-sidebar">
           <div className="cyber-brand">
             <img src={brandExcelUrl} alt="" />
-            <div><strong>Excel 订单批量处理工具</strong><span>高效 · 准确 · 智能</span></div>
+            <div><strong>Excel 批量核价</strong><span>快速 · 准确</span></div>
           </div>
 
           <nav className="cyber-nav" aria-label="主导航">
@@ -980,12 +980,11 @@ export function App(): React.JSX.Element {
             </header>
             <div {...getRootProps({ className: "cyber-dropzone" + (isDragActive ? " is-dragging" : "") })}>
               <div className="cyber-wave" aria-hidden="true" />
-              <img className="cyber-upload-visual" src={uploadFolderUrl} alt="" />
+              <div className="cyber-upload-visual" aria-hidden="true"><FileUp /></div>
               <strong>拖拽 Excel 文件到此处</strong>
               <span>或点击选择本地文件</span>
               <small>支持格式：.xlsx、.xls、.xlsm、.xlsb</small>
               <Button type="button" className="cyber-select-file" onClick={(event) => { event.stopPropagation(); openFilePicker(); }}>选择文件</Button>
-              <em>支持大文件批量处理</em>
             </div>
           </section>
 
@@ -1008,7 +1007,7 @@ export function App(): React.JSX.Element {
               <table className="cyber-file-table">
                 <thead><tr>{fileTable.getVisibleLeafColumns().map((column) => <th key={column.id} className={column.id === "select" ? "checkbox-column" : column.id === "index" ? "index-column" : column.id === "actions" ? "action-column" : undefined}>{column.id === "select" ? <Checkbox checked={selectedAll} onCheckedChange={() => toggleAllSelected()} aria-label="全选当前状态文件" /> : <button type="button" disabled={!column.getCanSort()} onClick={column.getToggleSortingHandler()}>{String(column.columnDef.header)}{column.getCanSort() ? <ArrowUpDown /> : null}</button>}</th>)}</tr></thead>
                 <tbody style={shouldVirtualizeRows ? { height: rowVirtualizer.getTotalSize(), position: "relative" } : undefined}>
-                  {renderedTableRows.length === 0 ? <tr><td colSpan={fileTable.getVisibleLeafColumns().length}><div className="cyber-empty"><img className="cyber-empty-visual" src={emptyFileBoxUrl} alt="" /><strong>暂无文件</strong><span>导入 Excel 文件后将显示在这里</span></div></td></tr> : null}
+                  {renderedTableRows.length === 0 ? <tr><td colSpan={fileTable.getVisibleLeafColumns().length}><div className="cyber-empty"><div className="cyber-empty-visual" aria-hidden="true"><Inbox /></div><strong>暂无文件</strong><span>导入后将在这里显示</span></div></td></tr> : null}
                   {renderedTableRows.map(({ row, virtualRow }) => {
                     const path = row.original;
                     const analysis = analyses[path];
