@@ -7,9 +7,10 @@ echarts.use([GaugeChart, CanvasRenderer]);
 
 type ProgressChartProps = {
   value: number;
+  color?: string;
 };
 
-export function ProgressChart({ value }: ProgressChartProps): React.JSX.Element {
+export function ProgressChart({ value, color = "#3b82f6" }: ProgressChartProps): React.JSX.Element {
   const chartElementRef = useRef<HTMLDivElement>(null);
   const boundedValue = Math.max(0, Math.min(100, value));
 
@@ -35,8 +36,8 @@ export function ProgressChart({ value }: ProgressChartProps): React.JSX.Element 
         endAngle: -270,
         radius: "92%",
         pointer: { show: false },
-        progress: { show: true, width: 6, roundCap: true, itemStyle: { color: "#3b82f6" } },
-        axisLine: { lineStyle: { width: 6, color: [[1, "rgba(59, 130, 246, 0.14)"]] } },
+        progress: { show: true, width: 6, roundCap: true, itemStyle: { color } },
+        axisLine: { lineStyle: { width: 6, color: [[1, color + "24"]] } },
         axisTick: { show: false },
         splitLine: { show: false },
         axisLabel: { show: false },
@@ -45,7 +46,7 @@ export function ProgressChart({ value }: ProgressChartProps): React.JSX.Element 
         data: [{ value: boundedValue }],
       }],
     });
-  }, [boundedValue]);
+  }, [boundedValue, color]);
 
   return <div ref={chartElementRef} className="progress-chart" aria-hidden="true" />;
 }
