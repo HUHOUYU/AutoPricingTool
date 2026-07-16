@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Columns3,
   Download,
+  ExternalLink,
   FileBox,
   FileCheck2,
   FileClock,
@@ -21,10 +22,8 @@ import {
   FileUp,
   FolderOpen,
   FolderOutput,
-  FolderUp,
   LayoutDashboard,
   Inbox,
-  List,
   Minus,
   Moon,
   PanelLeftClose,
@@ -73,6 +72,14 @@ type FileResult = {
   coverage?: number;
   status: "completed" | "failed";
   message?: string;
+  completedAt: string;
+};
+
+type ImportMode = "file" | "folder" | "config";
+
+type ImportSummary = {
+  imported: number;
+  duplicates: number;
 };
 
 type LogEntry = {
@@ -180,7 +187,7 @@ function isAnalysisError(analysis: PriceAnalysisFile | undefined): boolean {
 }
 
 function tabForStatus(status: FileStatus): FileTab {
-  if (status === "pending") return "pending";
+  if (status === "pending" || status === "running") return "pending";
   if (status === "success") return "success";
   if (status === "warning" || status === "error") return "error";
   return "confirm";
@@ -200,7 +207,7 @@ function statusForFile(
   if (result?.status === "failed") return "error";
   if (result?.status === "completed") return (result.exceptionRows ?? 0) > 0 ? "warning" : "success";
   if (isBusy && activePath === path) return "running";
-  if (analysis) return isAnalysisError(analysis) ? "error" : "ready";
+  if (analysis) return isAnalysisError(analysis) || analysis.automationDecision.status === "error" ? "error" : "ready";
   return "pending";
 }
 
@@ -229,6 +236,19 @@ function IconAction({ icon: Icon, label, onClick, disabled = false, active = fal
       <Icon size={20} strokeWidth={1.9} aria-hidden="true" />
       <span>{label}</span>
     </Button>
+  );
+}
+
+function mappingIsComplete(mapping: PriceCheckMapping | null | undefined): boolean {
+  return Boolean(
+    mapping &&
+    (mapping.businessOrderNumberColumn || mapping.platformOrderNumberColumn) &&
+    (mapping.countryCodeColumn || mapping.countryEnglishColumn || mapping.countryChineseColumn) &&
+    mapping.skuQtyPairs.length > 0 &&
+    mapping.pricingSkuColumn > 0 &&
+    mapping.pricingCountryColumn > 0 &&
+    mapping.quantityTierColumns.length > 0 &&
+    mapping.orderSheet !== mapping.pricingSheet,
   );
 }
 
@@ -262,6 +282,7 @@ export function App(): React.JSX.Element {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [importedAt, setImportedAt] = useState<Record<string, string>>({});
+  const [importModes, setImportModes] = useState<Record<string, ImportMode>>({});
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [activePath, setActivePath] = useState("");
@@ -269,9 +290,12 @@ export function App(): React.JSX.Element {
   const [progress, setProgress] = useState({ current: 0, total: 0, phase: "", path: "" });
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isLogDrawerOpen, setIsLogDrawerOpen] = useState(false);
+  const [detailPath, setDetailPath] = useState<string | null>(null);
+  const [analysisCompletedToken, setAnalysisCompletedToken] = useState(0);
   const analysesRef = useRef<Record<string, PriceAnalysisFile>>({});
   const mappingsRef = useRef<Record<string, PriceCheckMapping>>({});
   const confirmedPathsRef = useRef<Set<string>>(new Set());
+  const autoRunRequestedRef = useRef(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -366,6 +390,7 @@ export function App(): React.JSX.Element {
           exceptionRows: event.exceptionRows,
           coverage: event.coverage,
           message: event.message,
+          completedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
         };
         setResults((current) => ({ ...current, [event.path]: result }));
         appendLog(
@@ -387,12 +412,17 @@ export function App(): React.JSX.Element {
         if (event.mode === "analysis") {
           setIsAnalyzing(false);
           appendLog(event.stopped ? "分析已停止" : "分析完成，请检查待确认文件", event.stopped ? "warning" : "success");
-          if (!event.stopped) toast.success("文件分析完成");
+          if (!event.stopped) setAnalysisCompletedToken((current) => current + 1);
         } else {
           setIsRunning(false);
           setIsPaused(false);
           appendLog(event.stopped ? "核价已停止" : "核价完成", event.stopped ? "warning" : "success");
-          if (!event.stopped) toast.success("批量核价完成");
+          if (!event.stopped) {
+            const completedCount = event.files.filter((item) => Number(item.exceptionRows ?? 0) === 0).length;
+            const exceptionCount = event.files.filter((item) => Number(item.exceptionRows ?? 0) > 0).length + (event.failures?.length ?? 0);
+            const confirmCount = Object.values(analysesRef.current).filter((analysis) => analysis.automationDecision.status === "confirm").length;
+            toast.success(`批次完成：完成 ${completedCount}，待确认 ${confirmCount}，异常 ${exceptionCount}`);
+          }
         }
         return;
       }
@@ -427,54 +457,65 @@ export function App(): React.JSX.Element {
     return api?.onProcessorEvent(handleProcessorEvent);
   }, [handleProcessorEvent]);
 
-  const addFiles = useCallback(
-    (incoming: File[]): void => {
-      const api = getDesktopAPI();
-      if (!api) return;
-      const paths = incoming
-        .filter(isExcelFile)
-        .map((file) => {
-          try {
-            return api.getPathForFile(file);
-          } catch {
-            return "";
-          }
-        })
-        .filter(Boolean);
-      if (paths.length === 0) {
-        appendLog("没有发现支持的 Excel 文件（xlsx、xlsm、xlsb、xls）", "warning");
-        return;
-      }
-      const nextFiles = Array.from(new Set([...files, ...paths]));
-      if (nextFiles.length > MAX_INPUT_FILES) {
-        appendLog(`文件数量超过上限，最多支持 ${MAX_INPUT_FILES} 个 Excel 文件`, "error");
-        return;
-      }
-      setFiles(nextFiles);
-      const importedTime = new Date().toLocaleString("zh-CN", { hour12: false });
-      setImportedAt((current) => ({ ...current, ...Object.fromEntries(paths.map((path) => [path, current[path] ?? importedTime])) }));
-      setSelectedPaths([]);
-      setActiveTab("pending");
-      setInputDirectorySelected(false);
-      setInputDir((current) => current || parentDirectory(paths[0]));
-      analysesRef.current = {};
-      mappingsRef.current = {};
-      setAnalyses({});
-      setMappings({});
-      setResults({});
-      setExpandedPath(null);
-      setProgress({ current: 0, total: 0, phase: "", path: "" });
-      setPageIndex(0);
-      setActivePath("");
-      confirmedPathsRef.current = new Set();
-      setOutputDir((current) => current || parentDirectory(paths[0]));
-      appendLog("已加入 " + paths.length + " 个 Excel 文件");
-      toast.success("已导入 " + paths.length + " 个 Excel 文件");
-    },
-    [appendLog, files, setActiveTab],
-  );
+  const registerPaths = useCallback((paths: string[], mode: ImportMode): ImportSummary => {
+    const existingKeys = new Set(files.map((path) => path.toLocaleLowerCase()));
+    const uniqueIncoming = Array.from(new Map(paths.map((path) => [path.toLocaleLowerCase(), path])).values());
+    const newPaths = uniqueIncoming.filter((path) => !existingKeys.has(path.toLocaleLowerCase()));
+    const duplicateCount = paths.length - newPaths.length;
+    if (newPaths.length === 0) {
+      toast.info(duplicateCount > 0 ? `已跳过 ${duplicateCount} 个重复文件` : "没有发现支持的 Excel 文件");
+      return { imported: 0, duplicates: duplicateCount };
+    }
+    const nextFiles = [...files, ...newPaths];
+    if (nextFiles.length > MAX_INPUT_FILES) {
+      appendLog(`文件数量超过上限，最多支持 ${MAX_INPUT_FILES} 个 Excel 文件`, "error");
+      toast.error(`最多支持 ${MAX_INPUT_FILES} 个 Excel 文件`);
+      return { imported: 0, duplicates: duplicateCount };
+    }
+    const importedTime = new Date().toLocaleString("zh-CN", { hour12: false });
+    setFiles(nextFiles);
+    setImportedAt((current) => ({ ...current, ...Object.fromEntries(newPaths.map((path) => [path, importedTime])) }));
+    setImportModes((current) => ({ ...current, ...Object.fromEntries(newPaths.map((path) => [path, mode])) }));
+    setSelectedPaths([]);
+    setActiveTab("pending");
+    setInputDirectorySelected(mode !== "file");
+    setInputDir((current) => current || parentDirectory(newPaths[0]));
+    analysesRef.current = {};
+    mappingsRef.current = {};
+    setAnalyses({});
+    setMappings({});
+    setResults({});
+    setExpandedPath(null);
+    setDetailPath(null);
+    setProgress({ current: 0, total: 0, phase: "", path: "" });
+    setPageIndex(0);
+    setActivePath("");
+    confirmedPathsRef.current = new Set();
+    const modeLabel = mode === "file" ? "文件" : mode === "folder" ? "文件夹" : "配置目录";
+    appendLog(`已通过${modeLabel}模式加入 ${newPaths.length} 个 Excel 文件`);
+    toast.success(`已导入 ${newPaths.length} 个 Excel 文件${duplicateCount ? `，跳过 ${duplicateCount} 个重复文件` : ""}`);
+    return { imported: newPaths.length, duplicates: duplicateCount };
+  }, [appendLog, files, setActiveTab]);
 
-  const { getRootProps, isDragActive, open: openFilePicker } = useDropzone({
+  const addFiles = useCallback((incoming: File[]): void => {
+    const api = getDesktopAPI();
+    if (!api) return;
+    const paths = incoming.filter(isExcelFile).map((file) => {
+      try {
+        return api.getPathForFile(file);
+      } catch {
+        return "";
+      }
+    }).filter(Boolean);
+    if (paths.length === 0) {
+      appendLog("没有发现支持的 Excel 文件（xlsx、xlsm、xlsb、xls）", "warning");
+      toast.warning("没有发现支持的 Excel 文件");
+      return;
+    }
+    registerPaths(paths, "file");
+  }, [appendLog, registerPaths]);
+
+  const { getRootProps, getInputProps, isDragActive, open: openFilePicker } = useDropzone({
     accept: {
       "application/vnd.ms-excel": [".xls"],
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx", ".xlsm", ".xlsb"],
@@ -546,16 +587,15 @@ export function App(): React.JSX.Element {
       appendLog("仍有文件没有可执行字段映射，请先分析并确认", "warning");
       return;
     }
-    const effectiveOutputDir = outputDir || parentDirectory(runnableFiles[0]);
+    const effectiveOutputDir = outputDir || await api.getDefaultPriceOutputDir();
     setIsAnalyzing(false);
-    setOutputDir(effectiveOutputDir);
     setIsRunning(true);
     setIsPaused(false);
     setResults({});
     setExpandedPath(null);
     setActivePath("");
     setProgress({ current: 0, total: runnableFiles.length, phase: "run", path: "" });
-    appendLog("开始核价 " + runnableFiles.length + " 个文件，结果写入：" + effectiveOutputDir + "\\核价结果");
+    appendLog("开始核价 " + runnableFiles.length + " 个文件，结果写入：" + effectiveOutputDir);
     try {
       await api.runPriceCheck({
         files: runnableFiles,
@@ -563,7 +603,7 @@ export function App(): React.JSX.Element {
         mappings: runMappings,
         ...(configPath ? { configPath } : {}),
       });
-      await api.setRuntimeConfig({ recent_output_dir: effectiveOutputDir });
+      if (outputDir) await api.setRuntimeConfig({ recent_output_dir: outputDir });
     } catch (error) {
       setIsRunning(false);
       appendLog("提交核价失败：" + String(error), "error");
@@ -577,9 +617,64 @@ export function App(): React.JSX.Element {
     if (!selected) return;
     setInputDir(selected);
     setInputDirectorySelected(true);
-    if (!outputDir) setOutputDir(selected);
-    appendLog("目标文件夹已选择：" + selected + "，点击“扫描”开始分析", "success");
+    try {
+      const scan = await api.listExcelFiles(selected);
+      registerPaths(scan.files, "folder");
+      const skipped = scan.skippedTemporary + scan.skippedUnsupported + scan.skippedOutput;
+      if (skipped > 0) {
+        toast.info(`文件夹扫描完成，已跳过 ${skipped} 项`);
+      }
+      appendLog(`文件夹扫描完成：发现 ${scan.files.length} 个 Excel 文件，跳过 ${skipped} 项`, "success");
+    } catch (error) {
+      appendLog("扫描文件夹失败：" + String(error), "error");
+      toast.error("文件夹扫描失败");
+    }
   };
+
+  const scanConfiguredDirectory = async (): Promise<void> => {
+    const api = getDesktopAPI();
+    if (!api || isAnalyzing || isRunning) return;
+    try {
+      const runtime = await api.getRuntimeConfig();
+      const configuredDirectory = runtime.recent_input_dir?.trim();
+      if (!configuredDirectory) {
+        toast.error("尚未配置输入目录", {
+          action: { label: "打开配置中心", onClick: () => setActivePage("config") },
+        });
+        return;
+      }
+      const scan = await api.listExcelFiles(configuredDirectory);
+      setInputDir(configuredDirectory);
+      setInputDirectorySelected(true);
+      const summary = registerPaths(scan.files, "config");
+      const skipped = scan.skippedTemporary + scan.skippedUnsupported + scan.skippedOutput;
+      appendLog(
+        `配置目录扫描完成：发现 ${scan.files.length} 个，导入 ${summary.imported} 个，重复 ${summary.duplicates} 个，跳过 ${skipped} 项`,
+        "success",
+      );
+      toast.info(`扫描完成：导入 ${summary.imported}，重复 ${summary.duplicates}，跳过 ${skipped}`);
+    } catch (error) {
+      appendLog("扫描配置目录失败：" + String(error), "error");
+      toast.error("配置输入目录不可访问", {
+        action: { label: "打开配置中心", onClick: () => setActivePage("config") },
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (analysisCompletedToken === 0 || !autoRunRequestedRef.current) return;
+    autoRunRequestedRef.current = false;
+    const analyzedFiles = files.filter((path) => analysesRef.current[path]);
+    const eligibleFiles = analyzedFiles.filter((path) => analysesRef.current[path]?.automationDecision.status === "eligible");
+    const confirmCount = analyzedFiles.filter((path) => analysesRef.current[path]?.automationDecision.status === "confirm").length;
+    const errorCount = analyzedFiles.filter((path) => analysesRef.current[path]?.automationDecision.status === "error").length;
+    if (eligibleFiles.length === 0) {
+      toast.warning(`分析完成：待确认 ${confirmCount}，异常 ${errorCount}，没有可自动核价的文件`);
+      return;
+    }
+    toast.success(`分析完成：自动核价 ${eligibleFiles.length}，待确认 ${confirmCount}，异常 ${errorCount}`);
+    void runPricing(eligibleFiles);
+  }, [analysisCompletedToken]);
 
   const scanFiles = async (): Promise<void> => {
     const api = getDesktopAPI();
@@ -587,7 +682,8 @@ export function App(): React.JSX.Element {
     let targetFiles = actionFiles;
     if (inputDirectorySelected && inputDir) {
       try {
-        const discovered = await api.listExcelFiles(inputDir);
+        const scan = await api.listExcelFiles(inputDir);
+        const discovered = scan.files;
         if (discovered.length > MAX_INPUT_FILES) {
           appendLog(`文件夹超过 ${MAX_INPUT_FILES} 个文件上限，未开始分析`, "error");
           return;
@@ -670,11 +766,13 @@ export function App(): React.JSX.Element {
     setActivePath("");
     setFiles([]);
     setImportedAt({});
+    setImportModes({});
     setSelectedPaths([]);
     setAnalyses({});
     setMappings({});
     setResults({});
     setExpandedPath(null);
+    setDetailPath(null);
     analysesRef.current = {};
     mappingsRef.current = {};
     confirmedPathsRef.current = new Set();
@@ -711,6 +809,12 @@ export function App(): React.JSX.Element {
       delete next[path];
       return next;
     });
+    setImportModes((current) => {
+      const next = { ...current };
+      delete next[path];
+      return next;
+    });
+    if (detailPath === path) setDetailPath(null);
     if (expandedPath === path) setExpandedPath(null);
   };
 
@@ -736,8 +840,43 @@ export function App(): React.JSX.Element {
       const nextMapping = buildMapping(order, pricing);
       mappingsRef.current = { ...mappingsRef.current, [path]: nextMapping };
       setMappings((current) => ({ ...current, [path]: nextMapping }));
-      confirmedPathsRef.current.add(path);
     }
+  };
+
+  const confirmAndContinue = async (path: string): Promise<void> => {
+    const mapping = mappingsRef.current[path] ?? mappings[path];
+    if (!mappingIsComplete(mapping)) {
+      toast.error("字段映射不完整，或订单 Sheet 与核价 Sheet 相同");
+      return;
+    }
+    confirmedPathsRef.current.add(path);
+    setDetailPath(null);
+    toast.success("映射已确认，开始处理当前文件");
+    await runPricing([path]);
+  };
+
+  const retryAnalysis = async (path: string): Promise<void> => {
+    setResults((current) => {
+      const next = { ...current };
+      delete next[path];
+      return next;
+    });
+    setAnalyses((current) => {
+      const next = { ...current };
+      delete next[path];
+      analysesRef.current = next;
+      return next;
+    });
+    setMappings((current) => {
+      const next = { ...current };
+      delete next[path];
+      mappingsRef.current = next;
+      return next;
+    });
+    confirmedPathsRef.current.delete(path);
+    setActiveTab("pending");
+    autoRunRequestedRef.current = true;
+    await analyzeFiles([path]);
   };
 
   const fileStatusByPath = useMemo<Record<string, FileStatus>>(
@@ -793,18 +932,30 @@ export function App(): React.JSX.Element {
   );
 
   const tableColumns = useMemo<ColumnDef<string>[]>(
-    () => [
-      { id: "select", header: "", enableSorting: false, enableHiding: false },
-      { id: "index", header: "序号", enableSorting: false, enableHiding: false },
-      { id: "fileName", header: "原始文件名", accessorFn: fileNameFromPath },
-      { id: "orderSheet", header: "订单 Sheet", accessorFn: (path) => (mappings[path] ?? analyses[path]?.suggestedMapping)?.orderSheet ?? "" },
-      { id: "pricingSheet", header: "核价 Sheet", accessorFn: (path) => (mappings[path] ?? analyses[path]?.suggestedMapping)?.pricingSheet ?? "" },
-      { id: "coverage", header: "匹配成功率", accessorFn: (path) => analyses[path]?.coverage ?? -1 },
-      { id: "status", header: "状态", accessorFn: (path) => fileStatusByPath[path] },
-      { id: "createdAt", header: "创建时间", accessorFn: (path) => importedAt[path] ?? "" },
-      { id: "actions", header: "操作", enableSorting: false, enableHiding: false },
-    ],
-    [analyses, fileStatusByPath, importedAt, mappings],
+    () => {
+      const selectColumn: ColumnDef<string> = { id: "select", header: "", enableSorting: false, enableHiding: false };
+      const indexColumn: ColumnDef<string> = { id: "index", header: "序号", enableSorting: false, enableHiding: false };
+      const fileColumn: ColumnDef<string> = { id: "fileName", header: "原始文件名", accessorFn: fileNameFromPath };
+      const actionColumn: ColumnDef<string> = { id: "actions", header: "操作", enableSorting: false, enableHiding: false };
+      const orderColumn: ColumnDef<string> = { id: "orderSheet", header: "订单 Sheet", accessorFn: (path) => (mappings[path] ?? analyses[path]?.suggestedMapping)?.orderSheet ?? "" };
+      const pricingColumn: ColumnDef<string> = { id: "pricingSheet", header: "核价 Sheet", accessorFn: (path) => (mappings[path] ?? analyses[path]?.suggestedMapping)?.pricingSheet ?? "" };
+      const coverageColumn: ColumnDef<string> = { id: "coverage", header: "匹配率", accessorFn: (path) => results[path]?.coverage ?? analyses[path]?.coverage ?? -1 };
+      if (activeTab === "pending") return [selectColumn, indexColumn, fileColumn,
+        { id: "importMode", header: "导入方式", accessorFn: (path) => importModes[path] ?? "file" },
+        { id: "status", header: "处理阶段", accessorFn: (path) => fileStatusByPath[path] },
+        { id: "createdAt", header: "导入时间", accessorFn: (path) => importedAt[path] ?? "" }, actionColumn];
+      if (activeTab === "confirm") return [selectColumn, indexColumn, fileColumn, orderColumn, pricingColumn, coverageColumn,
+        { id: "evidence", header: "试算行数", accessorFn: (path) => analyses[path]?.automationDecision.evaluatedRows ?? 0 },
+        { id: "issue", header: "待确认原因", accessorFn: (path) => analyses[path]?.automationDecision.reasons.join("；") ?? "" }, actionColumn];
+      if (activeTab === "error") return [selectColumn, indexColumn, fileColumn,
+        { id: "issue", header: "问题摘要", accessorFn: (path) => results[path]?.message ?? analyses[path]?.automationDecision.reasons.join("；") ?? "" },
+        { id: "rows", header: "匹配行数", accessorFn: (path) => results[path]?.matchedRows ?? 0 }, coverageColumn,
+        { id: "completedAt", header: "更新时间", accessorFn: (path) => results[path]?.completedAt ?? importedAt[path] ?? "" }, actionColumn];
+      return [selectColumn, indexColumn, fileColumn, orderColumn, pricingColumn,
+        { id: "rows", header: "匹配行数", accessorFn: (path) => results[path]?.matchedRows ?? 0 }, coverageColumn,
+        { id: "completedAt", header: "完成时间", accessorFn: (path) => results[path]?.completedAt ?? "" }, actionColumn];
+    },
+    [activeTab, analyses, fileStatusByPath, importModes, importedAt, mappings, results],
   );
 
   const fileTable = useReactTable({
@@ -839,36 +990,55 @@ export function App(): React.JSX.Element {
   const matchedRate = totalRows > 0 ? ((totalMatched / totalRows) * 100).toFixed(1) + "%" : "—";
   const selectedAll = visibleFiles.length > 0 && visibleFiles.every((path) => selectedSet.has(path));
   const phaseLabel = progress.phase === "analyze" ? "分析" : progress.phase === "rows" ? "写入" : progress.phase === "run" ? "核价" : "等待操作";
+  const detailAnalysis = detailPath ? analyses[detailPath] : undefined;
+  const detailResult = detailPath ? results[detailPath] : undefined;
+  const detailMapping = detailPath ? mappings[detailPath] ?? detailAnalysis?.suggestedMapping ?? null : null;
 
   const startCurrentTask = async (): Promise<void> => {
+    if (isAnalyzing || isRunning) {
+      toast.info("当前任务正在处理中");
+      return;
+    }
     if (actionFiles.length === 0) {
       toast.warning("请先导入 Excel 文件");
       return;
     }
     const needsAnalysis = actionFiles.some((path) => !analysesRef.current[path] && !analyses[path]);
-    if (needsAnalysis) await analyzeFiles(actionFiles);
+    if (needsAnalysis) {
+      autoRunRequestedRef.current = true;
+      await analyzeFiles(actionFiles);
+    }
     else await runPricing(actionFiles);
   };
 
   const togglePauseTask = async (): Promise<void> => {
     const api = getDesktopAPI();
-    if (!api || (!isAnalyzing && !isRunning)) return;
+    if (!api) return;
+    if (!isAnalyzing && !isRunning) {
+      toast.info("当前没有运行中的任务");
+      return;
+    }
     if (isPaused) await api.resumeProcessing();
     else await api.pauseProcessing();
   };
 
   const stopCurrentTask = async (): Promise<void> => {
     const api = getDesktopAPI();
-    if (!api || (!isAnalyzing && !isRunning)) return;
+    if (!api) return;
+    if (!isAnalyzing && !isRunning) {
+      toast.info("当前没有可停止的任务");
+      return;
+    }
     await api.stopProcessing();
   };
 
-  const renderTaskActions = (className: string): React.JSX.Element => (
+  const renderTaskActions = (className: string, showReset = false): React.JSX.Element => (
     <div className={className} aria-label="快捷操作">
-      <SidebarTooltip label="导入 Excel" enabled={sidebarCollapsed}><button type="button" aria-label="导入 Excel" className="cyber-action is-import" onClick={openFilePicker}><FolderUp /><strong>导入 Excel</strong></button></SidebarTooltip>
-      <SidebarTooltip label="开始处理" enabled={sidebarCollapsed}><button type="button" aria-label="开始处理" className="cyber-action is-start" onClick={() => void startCurrentTask()} disabled={isAnalyzing || isRunning}><Play /><strong>开始处理</strong></button></SidebarTooltip>
-      <SidebarTooltip label={isPaused ? "继续任务" : "暂停任务"} enabled={sidebarCollapsed}><button type="button" aria-label={isPaused ? "继续任务" : "暂停任务"} className="cyber-action is-pause" onClick={() => void togglePauseTask()} disabled={!isAnalyzing && !isRunning}>{isPaused ? <Play /> : <Pause />}<strong>{isPaused ? "继续任务" : "暂停任务"}</strong></button></SidebarTooltip>
-      <SidebarTooltip label="停止任务" enabled={sidebarCollapsed}><button type="button" aria-label="停止任务" className="cyber-action is-stop" onClick={() => void stopCurrentTask()} disabled={!isAnalyzing && !isRunning}><CircleStop /><strong>停止任务</strong></button></SidebarTooltip>
+      <SidebarTooltip label="扫描配置中的输入目录" enabled={sidebarCollapsed}><button type="button" aria-label="扫描配置中的输入目录" className="cyber-action is-scan" onClick={() => void scanConfiguredDirectory()} data-unavailable={isAnalyzing || isRunning}><ScanSearch /><strong>扫描目录</strong></button></SidebarTooltip>
+      <SidebarTooltip label="开始处理" enabled={sidebarCollapsed}><button type="button" aria-label="开始处理" className="cyber-action is-start" onClick={() => void startCurrentTask()} data-unavailable={isAnalyzing || isRunning}><Play /><strong>开始处理</strong></button></SidebarTooltip>
+      <SidebarTooltip label={isPaused ? "继续任务" : "暂停任务"} enabled={sidebarCollapsed}><button type="button" aria-label={isPaused ? "继续任务" : "暂停任务"} className="cyber-action is-pause" onClick={() => void togglePauseTask()} data-unavailable={!isAnalyzing && !isRunning}>{isPaused ? <Play /> : <Pause />}<strong>{isPaused ? "继续任务" : "暂停任务"}</strong></button></SidebarTooltip>
+      <SidebarTooltip label="停止任务" enabled={sidebarCollapsed}><button type="button" aria-label="停止任务" className="cyber-action is-stop" onClick={() => void stopCurrentTask()} data-unavailable={!isAnalyzing && !isRunning}><CircleStop /><strong>停止任务</strong></button></SidebarTooltip>
+      {showReset ? <button type="button" aria-label="重置任务" className="cyber-action is-reset" onClick={() => void resetTask()}><RefreshCw /><strong>重置</strong></button> : null}
     </div>
   );
 
@@ -972,6 +1142,26 @@ export function App(): React.JSX.Element {
           </> : null}
         </AnimatePresence>
 
+        <AnimatePresence>
+          {detailPath ? <>
+            <motion.button type="button" className="cyber-drawer-backdrop" aria-label="关闭问题详情" onClick={() => setDetailPath(null)} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+            <motion.aside className="cyber-issue-drawer" role="dialog" aria-modal="true" aria-label="文件处理详情" initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ duration: 0.2 }}>
+              <header><div><FileSpreadsheet /><div><strong>{fileNameFromPath(detailPath)}</strong><small title={detailPath}>{detailPath}</small></div></div><div className="issue-header-actions"><Button type="button" variant="outline" className="issue-open-source" onClick={() => void getDesktopAPI()?.openPath(detailPath)}><ExternalLink />打开原始文件</Button><button type="button" aria-label="关闭文件详情" onClick={() => setDetailPath(null)}><X /></button></div></header>
+              <div className="issue-timeline" aria-label="处理时间线">
+                {["导入", "分析", "确认", "核价", "完成"].map((label, index) => {
+                  const reached = index === 0 || index === 1 && Boolean(detailAnalysis) || index === 2 && detailAnalysis?.automationDecision.status === "confirm" || index === 3 && Boolean(detailResult) || index === 4 && detailResult?.status === "completed" && (detailResult.exceptionRows ?? 0) === 0;
+                  return <span className={reached ? "is-reached" : ""} key={label}><i />{label}</span>;
+                })}
+              </div>
+              <div className="issue-drawer-content">
+                <section><h3>自动化判定</h3>{detailAnalysis ? <><div className={"decision-card is-" + detailAnalysis.automationDecision.status}><strong>{detailAnalysis.automationDecision.status === "eligible" ? "可自动处理" : detailAnalysis.automationDecision.status === "confirm" ? "需要人工确认" : "分析异常"}</strong><span>试算 {detailAnalysis.automationDecision.matchedRows}/{detailAnalysis.automationDecision.evaluatedRows} 行 · {formatCoverage(detailAnalysis.automationDecision.coverage)}</span></div><ul>{detailAnalysis.automationDecision.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></> : <p>文件尚未分析。</p>}</section>
+                {detailAnalysis ? <section><h3>候选映射</h3><div className="candidate-grid"><div><strong>订单 Sheet</strong>{detailAnalysis.orderSheetCandidates.slice(0, 3).map((candidate) => <span key={candidate.sheetName}>{candidate.sheetName}<em>{candidate.score.toFixed(1)}</em></span>)}</div><div><strong>核价 Sheet</strong>{detailAnalysis.pricingSheetCandidates.slice(0, 3).map((candidate) => <span key={candidate.sheetName}>{candidate.sheetName}<em>{candidate.score.toFixed(1)}</em></span>)}</div></div>{detailAnalysis.automationDecision.status === "confirm" ? <div className="drawer-mapping-actions"><label>订单 Sheet<select value={detailMapping?.orderSheet ?? ""} onChange={(event) => updateMapping(detailPath, event.currentTarget.value, detailMapping?.pricingSheet ?? "")}>{detailAnalysis.orderSheetCandidates.map((candidate) => <option key={candidate.sheetName}>{candidate.sheetName}</option>)}</select></label><label>核价 Sheet<select value={detailMapping?.pricingSheet ?? ""} onChange={(event) => updateMapping(detailPath, detailMapping?.orderSheet ?? "", event.currentTarget.value)}>{detailAnalysis.pricingSheetCandidates.map((candidate) => <option key={candidate.sheetName}>{candidate.sheetName}</option>)}</select></label><Button onClick={() => void confirmAndContinue(detailPath)}>确认并继续</Button></div> : null}</section> : null}
+                {detailResult ? <section><h3>处理结果</h3><div className="result-summary"><span>总行数<strong>{detailResult.totalRows ?? 0}</strong></span><span>已匹配<strong>{detailResult.matchedRows ?? 0}</strong></span><span>异常行<strong>{detailResult.exceptionRows ?? 0}</strong></span></div>{detailResult.message ? <p>{detailResult.message}</p> : null}{detailResult.outputPath ? <Button variant="outline" onClick={() => void getDesktopAPI()?.openPath(detailResult.outputPath ?? "")}>打开结果文件</Button> : null}</section> : null}
+              </div>
+            </motion.aside>
+          </> : null}
+        </AnimatePresence>
+
         <section className={`cyber-workspace is-${activePage}` + (!["workbench", "files", "config"].includes(activePage) ? " is-coming-soon" : "")}>
           {activePage === "workbench" ? (
             <DashboardPage
@@ -987,16 +1177,27 @@ export function App(): React.JSX.Element {
           <section className="cyber-upload-panel" aria-labelledby="upload-title">
             <header>
               <div><span className="panel-icon"><FileBox /></span><h2 id="upload-title">文件处理</h2></div>
-              {!sidebarCollapsed ? renderTaskActions("cyber-workbench-actions") : null}
+              {!sidebarCollapsed ? renderTaskActions("cyber-workbench-actions", true) : null}
               <div className="panel-note">原始 Excel 不会被覆盖 <Badge variant="outline">{files.length} 个文件</Badge></div>
             </header>
+            <div className="cyber-pipeline" aria-label="自动处理流程">
+              <span className={files.length ? "is-done" : ""}><b>1</b>导入<em>{files.length}</em></span>
+              <span className={Object.keys(analyses).length ? "is-done" : isAnalyzing ? "is-active" : ""}><b>2</b>分析<em>{Object.keys(analyses).length}</em></span>
+              <span className={tabCounts.confirm ? "is-warning" : ""}><b>3</b>确认<em>{tabCounts.confirm}</em></span>
+              <span className={isRunning ? "is-active" : Object.keys(results).length ? "is-done" : ""}><b>4</b>核价<em>{Object.keys(results).length}</em></span>
+              <span className={tabCounts.success ? "is-done" : ""}><b>5</b>完成<em>{tabCounts.success}</em></span>
+            </div>
             <div {...getRootProps({ className: "cyber-dropzone" + (isDragActive ? " is-dragging" : "") })}>
+              <input {...getInputProps()} />
               <div className="cyber-wave" aria-hidden="true" />
               <div className="cyber-upload-visual" aria-hidden="true"><FileUp /></div>
               <strong>拖拽 Excel 文件到此处</strong>
               <span>或点击选择本地文件</span>
               <small>支持格式：.xlsx、.xls、.xlsm、.xlsb</small>
-              <Button type="button" className="cyber-select-file" onClick={(event) => { event.stopPropagation(); openFilePicker(); }}>选择文件</Button>
+              <div className="cyber-import-choices">
+                <Button type="button" className="cyber-select-file" onClick={(event) => { event.stopPropagation(); openFilePicker(); }}><FileUp />选择文件</Button>
+                <Button type="button" variant="outline" className="cyber-select-folder" onClick={(event) => { event.stopPropagation(); void chooseInputDirectory(); }}><FolderOpen />选择文件夹</Button>
+              </div>
             </div>
           </section>
 
@@ -1004,7 +1205,6 @@ export function App(): React.JSX.Element {
             <header className="cyber-table-toolbar">
               <h2>文件列表 <span>（{visibleFiles.length}）</span></h2>
               <div className="cyber-table-actions">
-                <span className="view-label"><List />列表视图</span>
                 <div className="cyber-tabs" aria-label="文件状态统计">
                   {fileTabs.map((tab) => <button type="button" className={activeTab === tab.key ? "is-active" : ""} key={tab.key} onClick={() => setActiveTab(tab.key)}>{tab.label}<b>{tabCounts[tab.key]}</b></button>)}
                 </div>
@@ -1016,7 +1216,7 @@ export function App(): React.JSX.Element {
             </header>
 
             <div className="cyber-table-scroll" ref={tableScrollRef}>
-              <table className="cyber-file-table">
+              <table className={`cyber-file-table is-${activeTab}`}>
                 <thead><tr>{fileTable.getVisibleLeafColumns().map((column) => <th key={column.id} className={column.id === "select" ? "checkbox-column" : column.id === "index" ? "index-column" : column.id === "actions" ? "action-column" : undefined}>{column.id === "select" ? <Checkbox checked={selectedAll} onCheckedChange={() => toggleAllSelected()} aria-label="全选当前状态文件" /> : <button type="button" disabled={!column.getCanSort()} onClick={column.getToggleSortingHandler()}>{String(column.columnDef.header)}{column.getCanSort() ? <ArrowUpDown /> : null}</button>}</th>)}</tr></thead>
                 <tbody style={shouldVirtualizeRows ? { height: rowVirtualizer.getTotalSize(), position: "relative" } : undefined}>
                   {renderedTableRows.length === 0 ? <tr><td colSpan={fileTable.getVisibleLeafColumns().length}><div className="cyber-empty"><div className="cyber-empty-visual" aria-hidden="true"><Inbox /></div><strong>暂无文件</strong><span>导入后将在这里显示</span></div></td></tr> : null}
@@ -1032,13 +1232,18 @@ export function App(): React.JSX.Element {
                         {row.getVisibleCells().map((cell) => {
                           if (cell.column.id === "select") return <td key={cell.id} className="checkbox-column"><Checkbox checked={selectedSet.has(path)} onCheckedChange={() => toggleSelected(path)} aria-label={"选择 " + fileNameFromPath(path)} /></td>;
                           if (cell.column.id === "index") return <td key={cell.id} className="index-column">{files.indexOf(path) + 1}</td>;
-                          if (cell.column.id === "fileName") return <td key={cell.id} className="file-cell"><FileSpreadsheet /><button type="button" onClick={() => void openSourceDirectory(path)} title={path}>{fileNameFromPath(path)}</button></td>;
-                          if (cell.column.id === "orderSheet") return <td key={cell.id}>{currentMapping?.orderSheet ?? "—"}</td>;
-                          if (cell.column.id === "pricingSheet") return <td key={cell.id}>{currentMapping?.pricingSheet ?? "—"}</td>;
-                          if (cell.column.id === "coverage") return <td key={cell.id}>{analysis ? formatCoverage(analysis.coverage) : "—"}</td>;
-                          if (cell.column.id === "status") return <td key={cell.id}><span className={"cyber-status is-" + statusMeta[status].tone}><i />{statusMeta[status].label}</span>{result?.status === "completed" ? <small>{result.matchedRows ?? 0}/{result.totalRows ?? 0} 行</small> : null}</td>;
-                          if (cell.column.id === "createdAt") return <td key={cell.id}>{importedAt[path] ?? "—"}</td>;
-                          return <td key={cell.id} className="action-column"><button type="button" onClick={() => setExpandedPath(isExpanded ? null : path)}>{isExpanded ? <ChevronDown /> : <ChevronRight />}字段</button>{result?.outputPath ? <button type="button" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}<button type="button" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X /></button></td>;
+                           if (cell.column.id === "fileName") return <td key={cell.id} className="file-cell"><FileSpreadsheet /><button type="button" onClick={() => void openSourceDirectory(path)} title={path}>{fileNameFromPath(path)}</button></td>;
+                           if (cell.column.id === "orderSheet") return <td key={cell.id}>{currentMapping?.orderSheet ?? "—"}</td>;
+                           if (cell.column.id === "pricingSheet") return <td key={cell.id}>{currentMapping?.pricingSheet ?? "—"}</td>;
+                           if (cell.column.id === "coverage") { const value = result?.coverage ?? analysis?.coverage; return <td key={cell.id}>{value === undefined ? "—" : <div className="coverage-cell"><Progress value={value * 100} /><span>{formatCoverage(value)}</span></div>}</td>; }
+                           if (cell.column.id === "importMode") return <td key={cell.id}>{importModes[path] === "folder" ? "文件夹" : importModes[path] === "config" ? "配置目录" : "文件"}</td>;
+                           if (cell.column.id === "status") return <td key={cell.id}><span className={"cyber-status is-" + statusMeta[status].tone}><i />{statusMeta[status].label}</span>{result?.status === "completed" ? <small>{result.matchedRows ?? 0}/{result.totalRows ?? 0} 行</small> : null}</td>;
+                           if (cell.column.id === "createdAt") return <td key={cell.id}>{importedAt[path] ?? "—"}</td>;
+                           if (cell.column.id === "evidence") return <td key={cell.id}>{analysis?.automationDecision.evaluatedRows ?? 0} 行</td>;
+                           if (cell.column.id === "issue") { const issue = result?.status === "completed" && (result.exceptionRows ?? 0) > 0 ? `${result.exceptionRows} 行存在异常` : result?.message ?? analysis?.automationDecision.reasons[0] ?? analysis?.issues[0] ?? "—"; return <td key={cell.id} className="issue-cell" title={issue}>{issue}</td>; }
+                           if (cell.column.id === "rows") return <td key={cell.id}>{result ? `${result.matchedRows ?? 0}/${result.totalRows ?? 0}` : "—"}</td>;
+                           if (cell.column.id === "completedAt") return <td key={cell.id}>{result?.completedAt ?? importedAt[path] ?? "—"}</td>;
+                           return <td key={cell.id} className="action-column"><button type="button" onClick={() => setDetailPath(path)}>详情</button>{activeTab === "confirm" ? <><button type="button" onClick={() => setExpandedPath(isExpanded ? null : path)}>{isExpanded ? <ChevronDown /> : <ChevronRight />}字段</button><button type="button" onClick={() => void confirmAndContinue(path)}>确认</button></> : null}{activeTab === "error" ? <button type="button" onClick={() => void retryAnalysis(path)}>重试</button> : null}{result?.outputPath ? <button type="button" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}{activeTab === "pending" ? <button type="button" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X /></button> : null}</td>;
                         })}
                       </tr>
                       {isExpanded ? <tr className="cyber-detail"><td colSpan={fileTable.getVisibleLeafColumns().length}>{analysis ? <div><label>订单 Sheet<select value={currentMapping?.orderSheet ?? ""} onChange={(event) => updateMapping(path, event.currentTarget.value, currentMapping?.pricingSheet ?? "")}>{analysis.orderSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName}</option>)}</select></label><label>核价 Sheet<select value={currentMapping?.pricingSheet ?? ""} onChange={(event) => updateMapping(path, currentMapping?.orderSheet ?? "", event.currentTarget.value)}>{analysis.pricingSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName}</option>)}</select></label></div> : <span>尚未分析此文件</span>}</td></tr> : null}

@@ -110,6 +110,16 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
     if (selected) await loadDocument(selected);
   };
 
+  const selectRuntimeDirectory = async (key: "recent_input_dir" | "recent_output_dir", purpose: "input" | "output"): Promise<void> => {
+    if (!api) return;
+    try {
+      const selected = await api.selectDirectory(purpose, false);
+      if (selected) updateField("runtime", key, selected);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "目录选择失败");
+    }
+  };
+
   const restore = async (): Promise<void> => {
     if (!api || !window.confirm("恢复默认配置会覆盖当前文件，并创建 .bak 备份。是否继续？")) return;
     try {
@@ -122,6 +132,7 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
 
   const runtime = useMemo(() => asObject(parsed.runtime), [parsed]);
   const performance = useMemo(() => asObject(parsed.performance), [parsed]);
+  const automation = useMemo(() => asObject(parsed.automation), [parsed]);
   const pricing = useMemo(() => asObject(parsed.pricing), [parsed]);
 
   return (
@@ -148,8 +159,8 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
           <div className="config-form-scroll">
             <fieldset>
               <legend>运行路径</legend>
-              <label>输入目录<input value={String(runtime.recent_input_dir ?? "")} onChange={(event) => updateField("runtime", "recent_input_dir", event.currentTarget.value)} /></label>
-              <label>输出目录<input value={String(runtime.recent_output_dir ?? "")} onChange={(event) => updateField("runtime", "recent_output_dir", event.currentTarget.value)} /></label>
+              <div className="config-field"><span>输入目录</span><div className="config-path-field"><input aria-label="输入目录" value={String(runtime.recent_input_dir ?? "")} onChange={(event) => updateField("runtime", "recent_input_dir", event.currentTarget.value)} /><Button type="button" variant="outline" aria-label="选择输入目录" onClick={() => void selectRuntimeDirectory("recent_input_dir", "input")}><FolderOpen />选择</Button></div></div>
+              <div className="config-field"><span>输出目录</span><div className="config-path-field"><input aria-label="输出目录" value={String(runtime.recent_output_dir ?? "")} onChange={(event) => updateField("runtime", "recent_output_dir", event.currentTarget.value)} /><Button type="button" variant="outline" aria-label="选择输出目录" onClick={() => void selectRuntimeDirectory("recent_output_dir", "output")}><FolderOpen />选择</Button></div></div>
               <label className="config-check"><input type="checkbox" checked={Boolean(runtime.archive_standard_files)} onChange={(event) => updateField("runtime", "archive_standard_files", event.currentTarget.checked)} />归档标准文件</label>
             </fieldset>
             <fieldset>
@@ -157,6 +168,14 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
               <label>处理线程数<input type="number" min="0" value={Number(performance.processing_workers ?? 0)} onChange={(event) => updateField("performance", "processing_workers", Number(event.currentTarget.value))} /></label>
               <label>最大处理行数<input type="number" min="1" value={Number(performance.processing_max_rows ?? 200000)} onChange={(event) => updateField("performance", "processing_max_rows", Number(event.currentTarget.value))} /></label>
               <label>工作簿上限（MB）<input type="number" min="1" value={Number(performance.processing_workbook_max_mb ?? 512)} onChange={(event) => updateField("performance", "processing_workbook_max_mb", Number(event.currentTarget.value))} /></label>
+            </fieldset>
+            <fieldset>
+              <legend>自动化门槛</legend>
+              <label className="config-check"><input type="checkbox" checked={Boolean(automation.auto_run ?? true)} onChange={(event) => updateField("automation", "auto_run", event.currentTarget.checked)} />分析后自动核价</label>
+              <label>覆盖率门槛（%）<input type="number" min="0" max="100" step="0.1" value={Number(automation.coverage_threshold ?? 0.98) * 100} onChange={(event) => updateField("automation", "coverage_threshold", Number(event.currentTarget.value) / 100)} /></label>
+              <label>最低试算行数<input type="number" min="1" value={Number(automation.min_trial_rows ?? 10)} onChange={(event) => updateField("automation", "min_trial_rows", Number(event.currentTarget.value))} /></label>
+              <label>候选覆盖率差（%）<input type="number" min="0" max="100" step="0.1" value={Number(automation.candidate_coverage_gap ?? 0.02) * 100} onChange={(event) => updateField("automation", "candidate_coverage_gap", Number(event.currentTarget.value) / 100)} /></label>
+              <label>候选评分差<input type="number" min="0" step="0.5" value={Number(automation.candidate_score_gap ?? 12)} onChange={(event) => updateField("automation", "candidate_score_gap", Number(event.currentTarget.value))} /></label>
             </fieldset>
             <fieldset>
               <legend>核价策略</legend>
