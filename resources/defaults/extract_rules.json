@@ -34,6 +34,13 @@
     "processing_max_rows": 200000,
     "processing_workers": 0
   },
+  "automation": {
+    "auto_run": true,
+    "coverage_threshold": 0.98,
+    "min_trial_rows": 10,
+    "candidate_coverage_gap": 0.02,
+    "candidate_score_gap": 12
+  },
   "pricing": {
     "country_identity": [
       "iso2",

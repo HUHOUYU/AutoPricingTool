@@ -189,7 +189,20 @@ pub(crate) struct PriceAnalysisFile {
     pub(crate) suggested_mapping: Option<PriceCheckMapping>,
     pub(crate) coverage: f64,
     pub(crate) requires_confirmation: bool,
+    pub(crate) automation_decision: AutomationDecision,
     pub(crate) issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AutomationDecision {
+    pub(crate) status: String,
+    pub(crate) reasons: Vec<String>,
+    pub(crate) evaluated_rows: usize,
+    pub(crate) matched_rows: usize,
+    pub(crate) coverage: f64,
+    pub(crate) runner_up_coverage: Option<f64>,
+    pub(crate) score_gap: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -341,6 +354,11 @@ pub(crate) fn run_price_check_analyze(command: &Value, state: &RuntimeState) -> 
                         .to_string(),
                     issues: vec![format!("读取失败: {error:#}")],
                     requires_confirmation: true,
+                    automation_decision: AutomationDecision {
+                        status: "error".to_string(),
+                        reasons: vec![format!("读取失败: {error:#}")],
+                        ..AutomationDecision::default()
+                    },
                     ..PriceAnalysisFile::default()
                 };
                 emit(json!({"type": "price-analysis", "file": analysis}));
@@ -499,7 +517,11 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
 
     let mut suggested_mapping = None;
     let mut coverage = 0.0;
-    let mut tied = false;
+    let mut evaluated_rows = 0;
+    let mut matched_rows = 0;
+    let mut runner_up_coverage = None;
+    let mut score_gap = None;
+    let mut ambiguous = false;
     if !order_candidates.is_empty() && !pricing_candidates.is_empty() {
         let mut combinations = Vec::new();
         for order in order_candidates.iter().take(6) {
@@ -532,7 +554,13 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
                             })
                             .count();
                         let pair_coverage = ratio(matched, total);
-                        combinations.push((pair_coverage, order.score + pricing.score, mapping));
+                        combinations.push((
+                            pair_coverage,
+                            order.score + pricing.score,
+                            total,
+                            matched,
+                            mapping,
+                        ));
                     }
                 }
             }
@@ -545,37 +573,49 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
         });
         if combinations
             .iter()
-            .any(|item| item.2.order_sheet != item.2.pricing_sheet)
+            .any(|item| item.4.order_sheet != item.4.pricing_sheet)
         {
-            combinations.retain(|item| item.2.order_sheet != item.2.pricing_sheet);
+            combinations.retain(|item| item.4.order_sheet != item.4.pricing_sheet);
         }
-        if let Some((best_coverage, best_score, best_mapping)) = combinations.first().cloned() {
+        if let Some((best_coverage, best_score, total, matched, best_mapping)) =
+            combinations.first().cloned()
+        {
             coverage = best_coverage;
+            evaluated_rows = total;
+            matched_rows = matched;
             suggested_mapping = Some(best_mapping);
-            tied = combinations.iter().skip(1).any(|item| {
-                (item.0 - best_coverage).abs() < 0.01 && (item.1 - best_score).abs() < 8.0
-            });
-            if tied {
+            if let Some(runner_up) = combinations.get(1) {
+                runner_up_coverage = Some(runner_up.0);
+                score_gap = Some((best_score - runner_up.1).max(0.0));
+                ambiguous = best_coverage - runner_up.0 < config.automation.candidate_coverage_gap
+                    && best_score - runner_up.1 < config.automation.candidate_score_gap;
+            }
+            if ambiguous {
                 issues.push("存在多个覆盖率接近的 Sheet/字段组合，需要确认".to_string());
             }
         }
     }
 
-    let requires_confirmation = suggested_mapping.is_none()
-        || coverage < 0.95
-        || tied
-        || order_candidates.len() > 1
-        || pricing_candidates.len() > 1
-        || suggested_mapping
-            .as_ref()
-            .is_some_and(|mapping| mapping.order_sheet == mapping.pricing_sheet);
+    let automation_decision = decide_automation(
+        config,
+        suggested_mapping.as_ref(),
+        !order_candidates.is_empty(),
+        !pricing_candidates.is_empty(),
+        evaluated_rows,
+        matched_rows,
+        coverage,
+        runner_up_coverage,
+        score_gap,
+        ambiguous,
+    );
+    let requires_confirmation = automation_decision.status != "eligible";
     if suggested_mapping
         .as_ref()
         .is_some_and(|mapping| mapping.order_sheet == mapping.pricing_sheet)
     {
         issues.push("订单 Sheet 与核价 Sheet 被识别为同一页，需要确认".to_string());
     }
-    if coverage < 0.95 && suggested_mapping.is_some() {
+    if coverage < config.automation.coverage_threshold && suggested_mapping.is_some() {
         issues.push(format!(
             "当前建议映射的试算覆盖率为 {:.1}%",
             coverage * 100.0
@@ -593,8 +633,82 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
         suggested_mapping,
         coverage,
         requires_confirmation,
+        automation_decision,
         issues,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decide_automation(
+    config: &Config,
+    mapping: Option<&PriceCheckMapping>,
+    has_order_candidate: bool,
+    has_pricing_candidate: bool,
+    evaluated_rows: usize,
+    matched_rows: usize,
+    coverage: f64,
+    runner_up_coverage: Option<f64>,
+    score_gap: Option<f64>,
+    ambiguous: bool,
+) -> AutomationDecision {
+    let mut reasons = Vec::new();
+    if mapping.is_none() {
+        reasons.push("没有生成可用字段映射".to_string());
+    } else if !mapping.is_some_and(mapping_is_complete) {
+        reasons.push("订单号、国家、SKU/数量或核价档位等必需字段不完整".to_string());
+    }
+    if mapping.is_some_and(|value| value.order_sheet == value.pricing_sheet) {
+        reasons.push("订单 Sheet 与核价 Sheet 不能相同".to_string());
+    }
+    if evaluated_rows == 0 {
+        reasons.push("没有可用于试算的订单行".to_string());
+    } else if evaluated_rows < config.automation.min_trial_rows && coverage < 1.0 {
+        reasons.push(format!(
+            "试算少于 {} 行时覆盖率必须达到 100%",
+            config.automation.min_trial_rows
+        ));
+    } else if evaluated_rows >= config.automation.min_trial_rows
+        && coverage < config.automation.coverage_threshold
+    {
+        reasons.push(format!(
+            "试算覆盖率低于 {:.1}%",
+            config.automation.coverage_threshold * 100.0
+        ));
+    }
+    if ambiguous {
+        reasons.push("最优候选与次优候选差距不足".to_string());
+    }
+    if !config.automation.auto_run {
+        reasons.push("配置已关闭自动核价".to_string());
+    }
+    let status = if mapping.is_none() || !has_order_candidate || !has_pricing_candidate {
+        "error"
+    } else if reasons.is_empty() {
+        "eligible"
+    } else {
+        "confirm"
+    };
+    AutomationDecision {
+        status: status.to_string(),
+        reasons,
+        evaluated_rows,
+        matched_rows,
+        coverage,
+        runner_up_coverage,
+        score_gap,
+    }
+}
+
+fn mapping_is_complete(mapping: &PriceCheckMapping) -> bool {
+    (mapping.business_order_number_column.is_some()
+        || mapping.platform_order_number_column.is_some())
+        && (mapping.country_code_column.is_some()
+            || mapping.country_english_column.is_some()
+            || mapping.country_chinese_column.is_some())
+        && !mapping.sku_qty_pairs.is_empty()
+        && mapping.pricing_sku_column > 0
+        && mapping.pricing_country_column > 0
+        && !mapping.quantity_tier_columns.is_empty()
 }
 
 fn mapping_from_candidates(
@@ -1859,7 +1973,7 @@ fn output_path_for(input_path: &Path, output_dir: &Path) -> PathBuf {
         .and_then(|value| value.to_str())
         .unwrap_or("未命名");
     let file_name = format!("{}_核价结果.xlsx", safe_file_name(stem));
-    output_dir.join("核价结果").join(file_name)
+    output_dir.join(file_name)
 }
 
 fn safe_file_name(value: &str) -> String {
@@ -2231,5 +2345,112 @@ mod tests {
         assert_eq!(variants.len(), 3);
         assert_eq!(variants[1].sku_qty_pairs.len(), 1);
         assert_eq!(variants[2].sku_qty_pairs.len(), 1);
+    }
+
+    fn complete_mapping() -> PriceCheckMapping {
+        PriceCheckMapping {
+            order_sheet: "订单".to_string(),
+            pricing_sheet: "核价".to_string(),
+            business_order_number_column: Some(1),
+            country_code_column: Some(2),
+            sku_qty_pairs: vec![SkuQtyPair {
+                sku_column: 3,
+                qty_column: 4,
+                ..SkuQtyPair::default()
+            }],
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 3,
+                header: "1".to_string(),
+            }],
+            ..PriceCheckMapping::default()
+        }
+    }
+
+    fn decision(rows: usize, coverage: f64, ambiguous: bool) -> AutomationDecision {
+        let config = Config::default();
+        let mapping = complete_mapping();
+        decide_automation(
+            &config,
+            Some(&mapping),
+            true,
+            true,
+            rows,
+            (rows as f64 * coverage).round() as usize,
+            coverage,
+            Some(coverage - 0.01),
+            Some(10.0),
+            ambiguous,
+        )
+    }
+
+    #[test]
+    fn automation_accepts_threshold_and_rejects_lower_coverage() {
+        assert_eq!(decision(100, 0.98, false).status, "eligible");
+        assert_eq!(decision(100, 0.979, false).status, "confirm");
+    }
+
+    #[test]
+    fn automation_requires_full_coverage_for_small_samples() {
+        assert_eq!(decision(9, 1.0, false).status, "eligible");
+        assert_eq!(decision(9, 0.99, false).status, "confirm");
+    }
+
+    #[test]
+    fn automation_rejects_missing_fields_same_sheet_and_tied_candidates() {
+        let config = Config::default();
+        let mut mapping = complete_mapping();
+        mapping.sku_qty_pairs.clear();
+        let missing = decide_automation(
+            &config,
+            Some(&mapping),
+            true,
+            true,
+            20,
+            20,
+            1.0,
+            None,
+            None,
+            false,
+        );
+        assert_eq!(missing.status, "confirm");
+        assert!(
+            missing
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("必需字段"))
+        );
+
+        let mut same_sheet = complete_mapping();
+        same_sheet.pricing_sheet = same_sheet.order_sheet.clone();
+        let conflict = decide_automation(
+            &config,
+            Some(&same_sheet),
+            true,
+            true,
+            20,
+            20,
+            1.0,
+            None,
+            None,
+            false,
+        );
+        assert_eq!(conflict.status, "confirm");
+        assert!(
+            conflict
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("不能相同"))
+        );
+        assert_eq!(decision(20, 1.0, true).status, "confirm");
+    }
+
+    #[test]
+    fn price_result_is_written_directly_to_the_selected_output_directory() {
+        let output_dir = Path::new("output");
+        let output_path = output_path_for(Path::new("orders/order.xlsx"), output_dir);
+        assert_eq!(output_path, output_dir.join("order_核价结果.xlsx"));
     }
 }

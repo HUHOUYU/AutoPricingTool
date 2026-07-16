@@ -23,11 +23,39 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) performance: PerformanceRules,
     #[serde(default)]
+    pub(crate) automation: AutomationRules,
+    #[serde(default)]
     pub(crate) filename_rules: FilenameRules,
     #[serde(default)]
     pub(crate) fields: IndexMap<String, FieldRule>,
     #[serde(default)]
     pub(crate) output: OutputRules,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct AutomationRules {
+    #[serde(default = "default_auto_run")]
+    pub(crate) auto_run: bool,
+    #[serde(default = "default_coverage_threshold")]
+    pub(crate) coverage_threshold: f64,
+    #[serde(default = "default_min_trial_rows")]
+    pub(crate) min_trial_rows: usize,
+    #[serde(default = "default_candidate_coverage_gap")]
+    pub(crate) candidate_coverage_gap: f64,
+    #[serde(default = "default_candidate_score_gap")]
+    pub(crate) candidate_score_gap: f64,
+}
+
+impl Default for AutomationRules {
+    fn default() -> Self {
+        Self {
+            auto_run: default_auto_run(),
+            coverage_threshold: default_coverage_threshold(),
+            min_trial_rows: default_min_trial_rows(),
+            candidate_coverage_gap: default_candidate_coverage_gap(),
+            candidate_score_gap: default_candidate_score_gap(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -240,6 +268,26 @@ impl Default for OutputRules {
 
 fn default_header_scan_rows() -> usize {
     20
+}
+
+fn default_auto_run() -> bool {
+    true
+}
+
+fn default_coverage_threshold() -> f64 {
+    0.98
+}
+
+fn default_min_trial_rows() -> usize {
+    10
+}
+
+fn default_candidate_coverage_gap() -> f64 {
+    0.02
+}
+
+fn default_candidate_score_gap() -> f64 {
+    12.0
 }
 
 fn default_data_sample_rows() -> usize {
