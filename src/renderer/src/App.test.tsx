@@ -127,6 +127,29 @@ describe("AutoPricingTool cyber workstation", () => {
     });
   });
 
+  it("navigates placeholder pages and opens logs in a drawer", async () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    render(<App />);
+
+    for (const label of ["文件处理", "配置中心", "规则管理", "模板管理", "数据统计"]) {
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      expect(screen.getByRole("heading", { name: "正在装修中" })).toBeInTheDocument();
+      expect(screen.getByText(label, { selector: ".coming-soon-eyebrow" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "返回工作台" })).toBeInTheDocument();
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "返回工作台" }));
+    expect(screen.getByRole("button", { name: "工作台" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "文件处理" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "日志中心" }));
+    expect(screen.getByRole("dialog", { name: "运行日志" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "文件处理" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭日志抽屉" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "运行日志" })).not.toBeInTheDocument());
+  });
+
   it("paginates a 5000 file workload", async () => {
     const api = createDesktopAPI();
     installAPI(api);

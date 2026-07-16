@@ -1,9 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useGSAP } from "@gsap/react";
 import { type ColumnDef, type SortingState, type VisibilityState, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import gsap from "gsap";
-import { MotionConfig, motion } from "motion/react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import {
   BarChart3,
   CircleHelp,
@@ -12,7 +10,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Clock3,
   Columns3,
   Download,
   FileBox,
@@ -54,7 +51,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { ProgressChart } from "@/components/progress-chart";
-import { useUIStore, type FileTab } from "@/stores/ui-store";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useUIStore, type FileTab, type WorkbenchPage } from "@/stores/ui-store";
 import type {
   DesktopAPI,
   PriceAnalysisCandidate,
@@ -114,6 +112,16 @@ const fileTabs: Array<{ key: FileTab; label: string }> = [
   { key: "confirm", label: "待确认" },
   { key: "error", label: "异常" },
   { key: "success", label: "完成" },
+];
+
+const navigationItems: Array<{ key: WorkbenchPage; label: string; icon: LucideIcon }> = [
+  { key: "workbench", label: "工作台", icon: LayoutDashboard },
+  { key: "files", label: "文件处理", icon: FileCheck2 },
+  { key: "config", label: "配置中心", icon: Settings2 },
+  { key: "rules", label: "规则管理", icon: Workflow },
+  { key: "templates", label: "模板管理", icon: FileCog },
+  { key: "logs", label: "日志中心", icon: FileClock },
+  { key: "analytics", label: "数据统计", icon: BarChart3 },
 ];
 
 const MAX_INPUT_FILES = 5_000;
@@ -222,9 +230,20 @@ function IconAction({ icon: Icon, label, onClick, disabled = false, active = fal
   );
 }
 
+function SidebarTooltip({ label, enabled, children }: { label: string; enabled: boolean; children: React.JSX.Element }): React.JSX.Element {
+  if (!enabled) return children;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="right" sideOffset={10} collisionPadding={8} className="cyber-rail-tooltip">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function App(): React.JSX.Element {
   const shellRef = useRef<HTMLElement>(null);
   const tableScrollRef = useRef<HTMLDivElement>(null);
+  const logDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const [files, setFiles] = useState<string[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [analyses, setAnalyses] = useState<Record<string, PriceAnalysisFile>>({});
@@ -234,7 +253,7 @@ export function App(): React.JSX.Element {
   const [inputDirectorySelected, setInputDirectorySelected] = useState(false);
   const [outputDir, setOutputDir] = useState("");
   const [configPath, setConfigPath] = useState("");
-  const { activeTab, setActiveTab, theme, toggleTheme, sidebarCollapsed, toggleSidebar } = useUIStore();
+  const { activeTab, setActiveTab, activePage, setActivePage, theme, toggleTheme, sidebarCollapsed, toggleSidebar } = useUIStore();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -247,6 +266,7 @@ export function App(): React.JSX.Element {
   const [expandedPath, setExpandedPath] = useState<string | null>(null);
   const [progress, setProgress] = useState({ current: 0, total: 0, phase: "", path: "" });
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [isLogDrawerOpen, setIsLogDrawerOpen] = useState(false);
   const analysesRef = useRef<Record<string, PriceAnalysisFile>>({});
   const mappingsRef = useRef<Record<string, PriceCheckMapping>>({});
   const confirmedPathsRef = useRef<Set<string>>(new Set());
@@ -255,19 +275,15 @@ export function App(): React.JSX.Element {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
-  useGSAP(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    gsap.fromTo(".progress-chart", {
-      filter: "drop-shadow(0 0 0 rgba(37, 99, 235, 0))",
-    }, {
-      filter: "drop-shadow(0 0 8px rgba(37, 99, 235, 0.32))",
-      duration: 0.38,
-      repeat: 1,
-      yoyo: true,
-      ease: "power2.inOut",
-      clearProps: "filter",
-    });
-  }, { scope: shellRef, dependencies: [progress.current, progress.total] });
+  useEffect(() => {
+    if (!isLogDrawerOpen) return;
+    logDrawerCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setIsLogDrawerOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [isLogDrawerOpen]);
 
   const appendLog = useCallback((message: string, level: LogEntry["level"] = "info"): void => {
     setLogs((current) => [
@@ -845,11 +861,24 @@ export function App(): React.JSX.Element {
     await api.stopProcessing();
   };
 
+  const renderTaskActions = (className: string): React.JSX.Element => (
+    <div className={className} aria-label="快捷操作">
+      <SidebarTooltip label="导入 Excel" enabled={sidebarCollapsed}><button type="button" aria-label="导入 Excel" className="cyber-action is-import" onClick={openFilePicker}><FolderUp /><strong>导入 Excel</strong></button></SidebarTooltip>
+      <SidebarTooltip label="开始处理" enabled={sidebarCollapsed}><button type="button" aria-label="开始处理" className="cyber-action is-start" onClick={() => void startCurrentTask()} disabled={isAnalyzing || isRunning}><Play /><strong>开始处理</strong></button></SidebarTooltip>
+      <SidebarTooltip label={isPaused ? "继续任务" : "暂停任务"} enabled={sidebarCollapsed}><button type="button" aria-label={isPaused ? "继续任务" : "暂停任务"} className="cyber-action is-pause" onClick={() => void togglePauseTask()} disabled={!isAnalyzing && !isRunning}>{isPaused ? <Play /> : <Pause />}<strong>{isPaused ? "继续任务" : "暂停任务"}</strong></button></SidebarTooltip>
+      <SidebarTooltip label="停止任务" enabled={sidebarCollapsed}><button type="button" aria-label="停止任务" className="cyber-action is-stop" onClick={() => void stopCurrentTask()} disabled={!isAnalyzing && !isRunning}><CircleStop /><strong>停止任务</strong></button></SidebarTooltip>
+    </div>
+  );
+
   const showComingSoon = (label: string): void => {
     toast.info(label + "正在建设中");
   };
 
+  const activeNavigationItem = navigationItems.find((item) => item.key === activePage) ?? navigationItems[0];
+  const ActiveNavigationIcon = activeNavigationItem.icon;
+
   return (
+    <TooltipProvider delayDuration={220} skipDelayDuration={80}>
     <MotionConfig reducedMotion="user">
       <main className={"cyber-app" + (sidebarCollapsed ? " is-sidebar-collapsed" : "")} ref={shellRef}>
         <Toaster richColors position="top-right" closeButton theme={theme} />
@@ -868,61 +897,87 @@ export function App(): React.JSX.Element {
           </div>
 
           <nav className="cyber-nav" aria-label="主导航">
-            <button type="button" className="is-active"><LayoutDashboard /><span>工作台</span></button>
-            <button type="button" onClick={() => showComingSoon("文件处理")}><FileCheck2 /><span>文件处理</span></button>
-            <button type="button" onClick={() => showComingSoon("配置中心")}><Settings2 /><span>配置中心</span></button>
-            <button type="button" onClick={() => showComingSoon("规则管理")}><Workflow /><span>规则管理</span></button>
-            <button type="button" onClick={() => showComingSoon("模板管理")}><FileCog /><span>模板管理</span></button>
-            <button type="button" onClick={() => showComingSoon("日志中心")}><FileClock /><span>日志中心</span></button>
-            <button type="button" onClick={() => showComingSoon("数据统计")}><BarChart3 /><span>数据统计</span></button>
+            {navigationItems.map(({ key, label, icon: Icon }) => {
+              const isLogEntry = key === "logs";
+              const isActive = isLogEntry ? isLogDrawerOpen : activePage === key;
+              const navigationButton = (
+                <button
+                  type="button"
+                  className={isActive ? "is-active" : undefined}
+                  aria-current={!isLogEntry && isActive ? "page" : undefined}
+                  aria-controls={isLogEntry ? "log-drawer" : undefined}
+                  aria-expanded={isLogEntry ? isLogDrawerOpen : undefined}
+                  onClick={() => isLogEntry ? setIsLogDrawerOpen(true) : setActivePage(key)}
+                >
+                  <Icon /><span>{label}</span>
+                </button>
+              );
+              return <SidebarTooltip label={label} enabled={sidebarCollapsed} key={key}>{navigationButton}</SidebarTooltip>;
+            })}
           </nav>
 
-          <section className="cyber-quick" aria-label="快捷操作">
-            <div className="cyber-section-label"><span>快捷操作</span><ChevronDown /></div>
-            <div className="cyber-quick-grid">
-              <button type="button" aria-label="导入 Excel" className="cyber-action is-import" onClick={openFilePicker}><FolderUp /><span><strong>导入 Excel</strong><small>拖拽或选择文件</small></span></button>
-              <button type="button" aria-label="开始处理" className="cyber-action is-start" onClick={() => void startCurrentTask()} disabled={isAnalyzing || isRunning}><Play /><span><strong>开始处理</strong><small>自动批量处理</small></span></button>
-              <button type="button" aria-label={isPaused ? "继续任务" : "暂停任务"} className="cyber-action is-pause" onClick={() => void togglePauseTask()} disabled={!isAnalyzing && !isRunning}>{isPaused ? <Play /> : <Pause />}<strong>{isPaused ? "继续任务" : "暂停任务"}</strong></button>
-              <button type="button" aria-label="停止任务" className="cyber-action is-stop" onClick={() => void stopCurrentTask()} disabled={!isAnalyzing && !isRunning}><CircleStop /><strong>停止任务</strong></button>
-              <button type="button" aria-label="清空日志" className="cyber-action is-clear" onClick={() => setLogs([])} disabled={logs.length === 0}><Trash2 /><strong>清空日志</strong></button>
-            </div>
-          </section>
-
-          <section className="cyber-log" aria-label="运行日志">
-            <header><strong>运行日志</strong><button type="button" onClick={() => setLogs([])}>清空</button></header>
-            <div className="cyber-log-list" role="log" aria-live="polite">
-              {logs.length === 0 ? <div className="cyber-log-empty">等待文件导入和处理日志</div> : null}
-              {logs.map((log) => (
-                <div className={"cyber-log-row is-" + log.level} key={log.id} title={log.message}>
-                  <i /><time>{log.time}</time><em>{log.level === "success" ? "成功" : log.level === "error" ? "异常" : log.level === "warning" ? "提示" : "信息"}</em><span>{log.message}</span>
-                </div>
-              ))}
-            </div>
-          </section>
+          {sidebarCollapsed ? renderTaskActions("cyber-rail-actions") : null}
 
           <div className="cyber-sidebar-tools">
-            <button type="button" aria-label="选择配置文件" onClick={() => void chooseConfigFile()}><Settings /></button>
-            <button type="button" aria-label="帮助" onClick={() => showComingSoon("帮助中心")}><CircleHelp /></button>
-            <button type="button" aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} onClick={toggleTheme}>{theme === "dark" ? <Moon /> : <Sun />}</button>
-            <button type="button" aria-label={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"} onClick={toggleSidebar}>{sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}</button>
+            <SidebarTooltip label="选择配置文件" enabled={sidebarCollapsed}><button type="button" aria-label="选择配置文件" onClick={() => void chooseConfigFile()}><Settings /></button></SidebarTooltip>
+            <SidebarTooltip label="帮助" enabled={sidebarCollapsed}><button type="button" aria-label="帮助" onClick={() => showComingSoon("帮助中心")}><CircleHelp /></button></SidebarTooltip>
+            <SidebarTooltip label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} enabled={sidebarCollapsed}><button type="button" aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} onClick={toggleTheme}>{theme === "dark" ? <Moon /> : <Sun />}</button></SidebarTooltip>
+            <SidebarTooltip label={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"} enabled={sidebarCollapsed}><button type="button" aria-label={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"} onClick={toggleSidebar}>{sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}</button></SidebarTooltip>
           </div>
         </aside>
 
-        <section className="cyber-workspace">
-          <div className="cyber-metrics" aria-label="任务统计">
-            <motion.article className="cyber-metric is-progress" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}>
-              <div className="metric-title"><span className="metric-icon"><RefreshCw /></span><strong>总进度</strong></div>
-              <div className="metric-progress"><ProgressChart value={progressPercent} /><div><b>{progressPercent}%</b><small>{phaseLabel}</small></div></div>
-            </motion.article>
-            <motion.article className="cyber-metric" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.03 }}><div className="metric-title"><span className="metric-icon is-blue"><FileBox /></span><strong>文件数</strong></div><b>{files.length}</b><small>已导入 {files.length} 个文件</small></motion.article>
-            <motion.article className="cyber-metric" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.06 }}><div className="metric-title"><span className="metric-icon is-green"><FileCheck2 /></span><strong>处理完成</strong></div><b>{completedDotCount}</b><small>共 {files.length} 个文件</small></motion.article>
-            <motion.article className="cyber-metric" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.09 }}><div className="metric-title"><span className="metric-icon is-cyan"><BarChart3 /></span><strong>匹配成功率</strong></div><b>{matchedRate}</b><small>{totalMatched}/{totalRows} 行</small></motion.article>
-            <motion.article className="cyber-metric" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.12 }}><div className="metric-title"><span className="metric-icon is-amber"><Clock3 /></span><strong>待确认</strong></div><b>{tabCounts.confirm}</b><small>需要人工确认</small></motion.article>
-            <motion.article className="cyber-metric" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}><div className="metric-title"><span className="metric-icon is-red"><CircleStop /></span><strong>异常数据</strong></div><b>{tabCounts.error}</b><small>处理异常数据</small></motion.article>
-          </div>
+        <AnimatePresence>
+          {isLogDrawerOpen ? <>
+            <motion.button
+              type="button"
+              className="cyber-drawer-backdrop"
+              aria-label="关闭运行日志"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsLogDrawerOpen(false)}
+            />
+            <motion.aside
+              id="log-drawer"
+              className="cyber-log-drawer"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="log-drawer-title"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+            >
+              <header>
+                <div><span className="panel-icon"><FileClock /></span><div><strong id="log-drawer-title">运行日志</strong><small>{logs.length} 条记录</small></div></div>
+                <div className="cyber-log-drawer-actions">
+                  <button type="button" onClick={() => setLogs([])} disabled={logs.length === 0}><Trash2 />清空</button>
+                  <button type="button" ref={logDrawerCloseRef} aria-label="关闭日志抽屉" onClick={() => setIsLogDrawerOpen(false)}><X /></button>
+                </div>
+              </header>
+              <div className="cyber-log-summary" aria-label="任务状态">
+                {fileTabs.map((tab) => <span key={tab.key}><i className={"is-" + tab.key} />{tab.label}<b>{tabCounts[tab.key]}</b></span>)}
+              </div>
+              <div className="cyber-log-list" role="log" aria-live="polite">
+                {logs.length === 0 ? <div className="cyber-log-empty"><FileClock /><strong>暂无运行日志</strong><span>导入或处理文件后，日志会显示在这里</span></div> : null}
+                {logs.map((log) => (
+                  <div className={"cyber-log-row is-" + log.level} key={log.id} title={log.message}>
+                    <i /><time>{log.time}</time><em>{log.level === "success" ? "成功" : log.level === "error" ? "异常" : log.level === "warning" ? "提示" : "信息"}</em><span>{log.message}</span>
+                  </div>
+                ))}
+              </div>
+            </motion.aside>
+          </> : null}
+        </AnimatePresence>
 
+        <section className={"cyber-workspace" + (activePage === "workbench" ? "" : " is-coming-soon")}>
+          {activePage === "workbench" ? <>
           <section className="cyber-upload-panel" aria-labelledby="upload-title">
-            <header><div><span className="panel-icon"><FileBox /></span><h2 id="upload-title">文件处理</h2></div><div className="panel-note">原始 Excel 不会被覆盖 <Badge variant="outline">{files.length} 个文件</Badge></div></header>
+            <header>
+              <div><span className="panel-icon"><FileBox /></span><h2 id="upload-title">文件处理</h2></div>
+              {!sidebarCollapsed ? renderTaskActions("cyber-workbench-actions") : null}
+              <div className="panel-note">原始 Excel 不会被覆盖 <Badge variant="outline">{files.length} 个文件</Badge></div>
+            </header>
             <div {...getRootProps({ className: "cyber-dropzone" + (isDragActive ? " is-dragging" : "") })}>
               <div className="cyber-wave" aria-hidden="true" />
               <img className="cyber-upload-visual" src={uploadFolderUrl} alt="" />
@@ -989,11 +1044,21 @@ export function App(): React.JSX.Element {
               <select aria-label="每页条数" value={pageSize} onChange={(event) => setPageSize(Number(event.currentTarget.value))}><option value={50}>50 条/页</option><option value={100}>100 条/页</option><option value={200}>200 条/页</option></select>
             </footer>
           </section>
+          </> : (
+            <section className="coming-soon-page" aria-labelledby="coming-soon-title">
+              <div className="coming-soon-icon" aria-hidden="true"><ActiveNavigationIcon /></div>
+              <span className="coming-soon-eyebrow">{activeNavigationItem.label}</span>
+              <h1 id="coming-soon-title">正在装修中</h1>
+              <p>该功能页面正在设计和开发，后续版本将逐步开放。</p>
+              <Button type="button" className="coming-soon-back" onClick={() => setActivePage("workbench")}><LayoutDashboard />返回工作台</Button>
+            </section>
+          )}
         </section>
 
         <footer className="cyber-footer">{fileTabs.map((tab) => <span key={tab.key}><i className={"is-" + tab.key} />{tab.label} {tabCounts[tab.key]}</span>)}</footer>
       </main>
     </MotionConfig>
+    </TooltipProvider>
   );
 
   return (
