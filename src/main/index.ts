@@ -137,38 +137,35 @@ function isSupportedExcelPath(path: string): boolean {
 
 const skippedInputDirectoryNames = new Set([".git", "node_modules", "dist-electron", "target", "核价结果"]);
 
-async function collectExcelFiles(directory: string): Promise<string[]> {
+async function collectExcelFiles(directory: string): Promise<{ files: string[]; skippedTemporary: number; skippedUnsupported: number; skippedOutput: number }> {
   const files: string[] = [];
-
-  async function visit(currentDirectory: string): Promise<void> {
-    if (files.length > MAX_INPUT_FILES) return;
-
-    let entries;
-    try {
-      entries = await readdir(currentDirectory, { withFileTypes: true });
-    } catch {
-      return;
+  let skippedTemporary = 0;
+  let skippedUnsupported = 0;
+  let skippedOutput = 0;
+  const resolvedDirectory = resolve(directory);
+  const entries = await readdir(resolvedDirectory, { withFileTypes: true });
+  entries.sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      if (entry.isDirectory() && skippedInputDirectoryNames.has(entry.name)) skippedOutput += 1;
+      continue;
     }
-
-    entries.sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
-    for (const entry of entries) {
-      if (files.length > MAX_INPUT_FILES) return;
-      if (entry.name.startsWith("~$")) continue;
-      const candidate = join(currentDirectory, entry.name);
-      if (entry.isDirectory()) {
-        if (skippedInputDirectoryNames.has(entry.name)) continue;
-        await visit(candidate);
-      } else if (entry.isFile() && isSupportedExcelPath(candidate)) {
-        files.push(resolve(candidate));
-      }
+    if (entry.name.startsWith("~$")) {
+      skippedTemporary += 1;
+      continue;
     }
+    const candidate = join(resolvedDirectory, entry.name);
+    if (!isSupportedExcelPath(candidate)) {
+      skippedUnsupported += 1;
+      continue;
+    }
+    files.push(resolve(candidate));
+    if (files.length > MAX_INPUT_FILES) break;
   }
-
-  await visit(resolve(directory));
   if (files.length > MAX_INPUT_FILES) {
     throw new RangeError(`输入文件夹包含 ${files.length} 个 Excel 文件，最多支持 ${MAX_INPUT_FILES} 个`);
   }
-  return files;
+  return { files, skippedTemporary, skippedUnsupported, skippedOutput };
 }
 
 async function validatePricePayload(value: unknown): Promise<Record<string, unknown>> {
@@ -268,7 +265,7 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
     };
   }
 
-  const objectSections = ["sheet_rules", "sheet_selection", "performance", "pricing", "runtime", "fields", "output"];
+  const objectSections = ["sheet_rules", "sheet_selection", "performance", "automation", "pricing", "runtime", "fields", "output"];
   for (const key of objectSections) {
     const value = config[key];
     if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
@@ -286,6 +283,25 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
     }
     if (performance.processing_workers !== undefined && (!Number.isInteger(performance.processing_workers) || Number(performance.processing_workers) < 0)) {
       issues.push({ path: "performance.processing_workers", message: "必须是大于或等于 0 的整数" });
+    }
+  }
+
+  const automation = config.automation as Record<string, unknown> | undefined;
+  if (automation) {
+    if (automation.auto_run !== undefined && typeof automation.auto_run !== "boolean") {
+      issues.push({ path: "automation.auto_run", message: "必须是布尔值" });
+    }
+    for (const key of ["coverage_threshold", "candidate_coverage_gap"] as const) {
+      const value = automation[key];
+      if (value !== undefined && (typeof value !== "number" || value < 0 || value > 1)) {
+        issues.push({ path: `automation.${key}`, message: "必须是 0 到 1 之间的数字" });
+      }
+    }
+    if (automation.min_trial_rows !== undefined && (!Number.isInteger(automation.min_trial_rows) || Number(automation.min_trial_rows) < 1)) {
+      issues.push({ path: "automation.min_trial_rows", message: "必须是大于 0 的整数" });
+    }
+    if (automation.candidate_score_gap !== undefined && (typeof automation.candidate_score_gap !== "number" || automation.candidate_score_gap < 0)) {
+      issues.push({ path: "automation.candidate_score_gap", message: "必须是大于或等于 0 的数字" });
     }
   }
 
@@ -865,6 +881,10 @@ app.whenReady().then(async () => {
     requireTrustedIpc(event);
     return readRuntimeConfig();
   });
+  ipcMain.handle("app:get-default-price-output-dir", (event) => {
+    requireTrustedIpc(event);
+    return join(dirname(app.getPath("exe")), "核价结果");
+  });
   ipcMain.handle("window:minimize", (event) => {
     requireTrustedIpc(event);
     BrowserWindow.fromWebContents(event.sender)?.minimize();
@@ -1003,7 +1023,7 @@ app.whenReady().then(async () => {
     return stopProcessorProcess();
   });
 
-  ipcMain.handle("dialog:select-directory", async (event, purpose: "input" | "output" = "input") => {
+  ipcMain.handle("dialog:select-directory", async (event, purpose: "input" | "output" = "input", persist = true) => {
     requireTrustedIpc(event);
     const config = await readRuntimeConfig();
     const configKey = purpose === "output" ? "recent_output_dir" : "recent_input_dir";
@@ -1014,7 +1034,9 @@ app.whenReady().then(async () => {
     if (result.canceled || !result.filePaths[0]) {
       return null;
     }
-    await writeRuntimeConfig({ [configKey]: result.filePaths[0] });
+    if (persist) {
+      await writeRuntimeConfig({ [configKey]: result.filePaths[0] });
+    }
     return result.filePaths[0];
   });
 

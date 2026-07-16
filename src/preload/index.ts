@@ -7,6 +7,13 @@ export type RuntimeConfig = {
   archive_standard_files?: boolean;
 };
 
+export type DirectoryScanResult = {
+  files: string[];
+  skippedTemporary: number;
+  skippedUnsupported: number;
+  skippedOutput: number;
+};
+
 export type ConfigValidationIssue = { path: string; message: string };
 export type ConfigValidationResult = { valid: boolean; issues: ConfigValidationIssue[] };
 export type ConfigDocument = { path: string; content: string; modifiedAt: number; isDefault: boolean };
@@ -89,6 +96,15 @@ export type PriceAnalysisFile = {
   suggestedMapping?: PriceCheckMapping | null;
   coverage: number;
   requiresConfirmation: boolean;
+  automationDecision: {
+    status: "eligible" | "confirm" | "error";
+    reasons: string[];
+    evaluatedRows: number;
+    matchedRows: number;
+    coverage: number;
+    runnerUpCoverage?: number | null;
+    scoreGap?: number | null;
+  };
   issues: string[];
 };
 
@@ -137,6 +153,7 @@ const desktopAPI = {
   toggleMaximizeWindow: (): Promise<void> => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: (): Promise<void> => ipcRenderer.invoke("window:close"),
   getRuntimeConfig: (): Promise<RuntimeConfig> => ipcRenderer.invoke("app:get-runtime-config"),
+  getDefaultPriceOutputDir: (): Promise<string> => ipcRenderer.invoke("app:get-default-price-output-dir"),
   setRuntimeConfig: (config: RuntimeConfig): Promise<RuntimeConfig> => ipcRenderer.invoke("app:set-runtime-config", config),
   getConfigDocument: (path?: string): Promise<ConfigDocument> => ipcRenderer.invoke("config:get-document", path),
   validateConfigDocument: (content: string): Promise<ConfigValidationResult> => ipcRenderer.invoke("config:validate-document", content),
@@ -147,9 +164,9 @@ const desktopAPI = {
   appendRuntimeLogs: (rows: RuntimeLogRow[]): Promise<void> => ipcRenderer.invoke("app:append-runtime-logs", rows),
   exportRuntimeLog: (): Promise<string | null> => ipcRenderer.invoke("app:export-runtime-log"),
   openPath: (filePath: string): Promise<string> => ipcRenderer.invoke("app:open-path", filePath),
-  selectDirectory: (purpose?: "input" | "output"): Promise<string | null> => ipcRenderer.invoke("dialog:select-directory", purpose),
+  selectDirectory: (purpose?: "input" | "output", persist = true): Promise<string | null> => ipcRenderer.invoke("dialog:select-directory", purpose, persist),
   selectConfig: (): Promise<string | null> => ipcRenderer.invoke("dialog:select-config"),
-  listExcelFiles: (directory: string): Promise<string[]> => ipcRenderer.invoke("app:list-excel-files", directory),
+  listExcelFiles: (directory: string): Promise<DirectoryScanResult> => ipcRenderer.invoke("app:list-excel-files", directory),
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   analyzePriceFiles: (payload: { files: string[]; configPath?: string }): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-analyze", payload),
