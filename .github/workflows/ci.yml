@@ -15,11 +15,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -27,13 +31,13 @@ jobs:
           components: clippy,rustfmt
 
       - name: Install Node.js dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Audit Node.js dependencies
-        run: npm audit --audit-level=high
+        run: pnpm audit --audit-level=high
 
       - name: Run quality gate
-        run: npm run quality
+        run: pnpm run quality
 
   rust-audit:
     runs-on: ubuntu-latest
