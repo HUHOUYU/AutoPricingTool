@@ -138,7 +138,7 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
   return (
     <div className="config-center-page">
       <header className="config-center-header">
-        <div><span>唯一配置入口</span><h1>配置中心</h1></div>
+        <h1>配置中心</h1>
         <div className="config-center-actions">
           <Button variant="outline" onClick={() => void selectDocument()} disabled={loading}><FolderOpen />选择</Button>
           <Button variant="outline" onClick={() => void loadDocument(document?.path)} disabled={loading}><RefreshCw />重新加载</Button>

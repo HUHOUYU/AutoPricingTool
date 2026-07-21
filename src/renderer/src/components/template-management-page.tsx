@@ -258,7 +258,7 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
   return (
     <section className="template-page" aria-labelledby="template-page-title">
       <header className="template-page-header">
-        <div><span>模板配置</span><h1 id="template-page-title">模板管理</h1><p>{usingFallbackFields ? "当前配置未声明必填项，按完整核价所需字段建立映射。" : "维护表头模板，并按配置中的必填字段建立映射。"}</p></div>
+        <h1 id="template-page-title">模板管理</h1>
         <Button type="button" onClick={() => void createTemplate()} disabled={!api || creating}>{creating ? <LoaderCircle className="is-spinning" /> : <FilePlus2 />}新建模板</Button>
       </header>
 
