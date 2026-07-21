@@ -772,8 +772,8 @@ async function nextAvailableCopyPath(directory: string, fileName: string): Promi
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: 1650,
+    height: 1120,
     minWidth: 1100,
     minHeight: 700,
     title: "Excel 订单批量核价工具",
