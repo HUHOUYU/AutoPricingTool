@@ -1017,11 +1017,11 @@ describe("AutoPricingTool cyber workstation", () => {
     }));
 
     fireEvent.click(screen.getByRole("button", { name: "关闭模板详情" }));
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    expect(await screen.findByRole("alertdialog", { name: "删除这个模板？" })).toHaveTextContent("此操作无法撤销");
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(api.deleteHeaderTemplate).toHaveBeenCalledWith("template-1"));
     expect(screen.queryByText("headers.xlsx")).not.toBeInTheDocument();
-    confirm.mockRestore();
   });
 
   it("synchronizes grouped config fields with JSON while preserving unknown fields", async () => {

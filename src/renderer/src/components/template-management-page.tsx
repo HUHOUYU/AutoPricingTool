@@ -3,6 +3,7 @@ import { Check, FilePlus2, FileSpreadsheet, LoaderCircle, Save, X } from "lucide
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { DesktopAPI, HeaderTemplateFieldMapping, HeaderTemplateRecord } from "../../../preload";
 
 type RequiredTemplateField = {
@@ -112,6 +113,7 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<HeaderTemplateRecord | null>(null);
   const [detail, setDetail] = useState<HeaderTemplateRecord | null>(null);
   const [sheets, setSheets] = useState<TemplateSheet[]>([]);
   const [activeSheetName, setActiveSheetName] = useState("");
@@ -175,7 +177,7 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
   };
 
   const deleteTemplate = async (record: HeaderTemplateRecord): Promise<void> => {
-    if (!api || deletingId || !window.confirm(`确定删除模板“${record.fileName}”吗？`)) return;
+    if (!api || deletingId) return;
     setDeletingId(record.id);
     try {
       await api.deleteHeaderTemplate(record.id);
@@ -186,6 +188,7 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
       toast.error(error instanceof Error ? error.message : "模板删除失败");
     } finally {
       setDeletingId(null);
+      setDeleteCandidate(null);
     }
   };
 
@@ -267,7 +270,7 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
           <thead><tr><th>创建时间</th><th>创建人</th><th>模板文件</th><th>映射状态</th><th>操作</th></tr></thead>
           <tbody>{templates.map((record) => {
             const mapped = requiredFields.filter((field) => record.mappings.some((mapping) => mapping.fieldKey === field.key)).length;
-            return <tr key={record.id}><td>{formatCreatedAt(record.createdAt)}</td><td>{record.createdBy}</td><td><span className="template-file-cell"><FileSpreadsheet />{record.fileName}</span></td><td><span className={mapped === requiredFields.length ? "template-mapping-status is-complete" : "template-mapping-status"}>{mapped}/{requiredFields.length} 项</span></td><td><div className="template-row-actions"><button type="button" onClick={() => void openDetail(record)}>详情</button><button type="button" className="is-delete" disabled={deletingId === record.id} onClick={() => void deleteTemplate(record)}>{deletingId === record.id ? "删除中" : "删除"}</button></div></td></tr>;
+            return <tr key={record.id}><td>{formatCreatedAt(record.createdAt)}</td><td>{record.createdBy}</td><td><span className="template-file-cell"><FileSpreadsheet />{record.fileName}</span></td><td><span className={mapped === requiredFields.length ? "template-mapping-status is-complete" : "template-mapping-status"}>{mapped}/{requiredFields.length} 项</span></td><td><div className="template-row-actions"><button type="button" onClick={() => void openDetail(record)}>详情</button><button type="button" className="is-delete" disabled={deletingId === record.id} onClick={() => setDeleteCandidate(record)}>{deletingId === record.id ? "删除中" : "删除"}</button></div></td></tr>;
           })}</tbody>
         </table>
         {loading ? <div className="template-table-state"><LoaderCircle className="is-spinning" /><strong>正在读取模板</strong></div> : templates.length === 0 ? <div className="template-table-state"><FileSpreadsheet /><strong>暂无模板</strong><span>点击“新建模板”导入表头文件</span></div> : null}
@@ -310,6 +313,16 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
           </div>
         </aside>
       </div> : null}
+      <ConfirmDialog
+        open={Boolean(deleteCandidate)}
+        title="删除这个模板？"
+        description={deleteCandidate ? `模板“${deleteCandidate.fileName}”将被永久删除，此操作无法撤销。` : ""}
+        confirmLabel="确认删除"
+        tone="danger"
+        busy={Boolean(deletingId)}
+        onConfirm={() => { if (deleteCandidate) void deleteTemplate(deleteCandidate); }}
+        onCancel={() => setDeleteCandidate(null)}
+      />
     </section>
   );
 }

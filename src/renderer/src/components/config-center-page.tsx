@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, FileJson2, FolderOpen, RefreshCw, RotateCcw, Save, SaveAll } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ConfigDocument, ConfigValidationResult, DesktopAPI } from "../../../preload";
 
 type JsonObject = Record<string, unknown>;
@@ -25,6 +26,8 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
   const [validation, setValidation] = useState<ConfigValidationResult>({ valid: true, issues: [] });
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [restoring, setRestoring] = useState(false);
 
   const applyDocument = useCallback((next: ConfigDocument): void => {
     setDocument(next);
@@ -121,12 +124,16 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
   };
 
   const restore = async (): Promise<void> => {
-    if (!api || !window.confirm("恢复默认配置会覆盖当前文件，并创建 .bak 备份。是否继续？")) return;
+    if (!api || restoring) return;
+    setRestoring(true);
     try {
       applyDocument(await api.restoreDefaultConfig());
       toast.success("已恢复默认配置");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "恢复默认配置失败");
+    } finally {
+      setRestoring(false);
+      setRestoreDialogOpen(false);
     }
   };
 
@@ -143,7 +150,7 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
           <Button variant="outline" onClick={() => void selectDocument()} disabled={loading}><FolderOpen />选择</Button>
           <Button variant="outline" onClick={() => void loadDocument(document?.path)} disabled={loading}><RefreshCw />重新加载</Button>
           <Button variant="outline" onClick={() => void saveAs()} disabled={loading}><SaveAll />另存为</Button>
-          <Button variant="outline" onClick={() => void restore()} disabled={loading}><RotateCcw />恢复默认</Button>
+          <Button variant="outline" onClick={() => setRestoreDialogOpen(true)} disabled={loading || restoring}><RotateCcw />恢复默认</Button>
           <Button onClick={() => void save()} disabled={loading || !dirty}><Save />保存</Button>
         </div>
       </header>
@@ -194,6 +201,15 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
           {validation.issues.length > 0 ? <div className="config-issues">{validation.issues.map((issue, index) => <button type="button" key={`${issue.path}-${index}`}><code>{issue.path}</code><span>{issue.message}</span></button>)}</div> : null}
         </section>
       </div>
+      <ConfirmDialog
+        open={restoreDialogOpen}
+        title="恢复默认配置？"
+        description="当前配置文件将被默认配置覆盖，系统会在覆盖前创建 .bak 备份。"
+        confirmLabel="恢复默认"
+        busy={restoring}
+        onConfirm={() => void restore()}
+        onCancel={() => setRestoreDialogOpen(false)}
+      />
     </div>
   );
 }
