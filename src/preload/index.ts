@@ -14,6 +14,12 @@ export type DirectoryScanResult = {
   skippedOutput: number;
 };
 
+export type ExcelPreviewFileData = {
+  bytes: Uint8Array;
+  size: number;
+  modifiedAt: number;
+};
+
 export type ConfigValidationIssue = { path: string; message: string };
 export type ConfigValidationResult = { valid: boolean; issues: ConfigValidationIssue[] };
 export type ConfigDocument = { path: string; content: string; modifiedAt: number; isDefault: boolean };
@@ -108,10 +114,21 @@ export type PriceAnalysisFile = {
   issues: string[];
 };
 
+export type PriceMappingValidation = {
+  inputPath: string;
+  requestVersion: number;
+  evaluatedRows: number;
+  matchedRows: number;
+  coverage: number;
+  errors: string[];
+  warnings: string[];
+};
+
 export type ProcessorEvent =
   | { type: "ready" }
   | { type: "price-analysis"; file: PriceAnalysisFile }
   | { type: "price-mapping-required"; file: PriceAnalysisFile }
+  | ({ type: "price-validation" } & PriceMappingValidation)
   | { type: "price-progress"; phase: "analyze" | "run" | "rows"; current: number; total: number; path: string }
   | {
       type: "price-file-result";
@@ -167,9 +184,12 @@ const desktopAPI = {
   selectDirectory: (purpose?: "input" | "output", persist = true): Promise<string | null> => ipcRenderer.invoke("dialog:select-directory", purpose, persist),
   selectConfig: (): Promise<string | null> => ipcRenderer.invoke("dialog:select-config"),
   listExcelFiles: (directory: string): Promise<DirectoryScanResult> => ipcRenderer.invoke("app:list-excel-files", directory),
+  readExcelPreviewFile: (filePath: string): Promise<ExcelPreviewFileData> => ipcRenderer.invoke("app:read-excel-preview-file", filePath),
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   analyzePriceFiles: (payload: { files: string[]; configPath?: string }): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-analyze", payload),
+  validatePriceMapping: (payload: { inputPath: string; mapping: PriceCheckMapping; requestVersion: number; configPath?: string }): Promise<void> =>
+    ipcRenderer.invoke("processor:price-check-validate", payload),
   runPriceCheck: (payload: PriceCheckRunPayload): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-run", payload),
   pauseProcessing: (): Promise<void> => ipcRenderer.invoke("processor:pause"),

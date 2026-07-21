@@ -452,6 +452,211 @@ pub(crate) fn run_price_check(command: &Value, state: &RuntimeState) -> Result<(
     Ok(())
 }
 
+pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -> Result<()> {
+    let input_path = command
+        .get("inputPath")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("缺少 inputPath 参数"))?;
+    let request_version = command
+        .get("requestVersion")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let mapping: PriceCheckMapping = serde_json::from_value(
+        command
+            .get("mapping")
+            .cloned()
+            .ok_or_else(|| anyhow!("缺少 mapping 参数"))?,
+    )
+    .map_err(|error| anyhow!("字段映射格式错误: {error}"))?;
+    let config = load_config(&config_path(command))?;
+    let result = validate_price_mapping(Path::new(input_path), &mapping, &config);
+    match result {
+        Ok((evaluated_rows, matched_rows, coverage, warnings)) => emit(json!({
+            "type": "price-validation",
+            "inputPath": input_path,
+            "requestVersion": request_version,
+            "evaluatedRows": evaluated_rows,
+            "matchedRows": matched_rows,
+            "coverage": coverage,
+            "errors": [],
+            "warnings": warnings,
+        })),
+        Err(errors) => emit(json!({
+            "type": "price-validation",
+            "inputPath": input_path,
+            "requestVersion": request_version,
+            "evaluatedRows": 0,
+            "matchedRows": 0,
+            "coverage": 0.0,
+            "errors": errors,
+            "warnings": [],
+        })),
+    }
+    Ok(())
+}
+
+fn validate_price_mapping(
+    path: &Path,
+    mapping: &PriceCheckMapping,
+    config: &Config,
+) -> std::result::Result<(usize, usize, f64, Vec<String>), Vec<String>> {
+    let workbook = read_workbook_for_processing(path, config)
+        .map_err(|error| vec![format!("读取文件失败: {error:#}")])?;
+    let mut errors = Vec::new();
+    if mapping.order_sheet == mapping.pricing_sheet {
+        errors.push("订单 Sheet 与核价 Sheet 不能相同".to_string());
+    }
+    let order_sheet = workbook
+        .sheets
+        .iter()
+        .find(|sheet| sheet.name == mapping.order_sheet);
+    let pricing_sheet = workbook
+        .sheets
+        .iter()
+        .find(|sheet| sheet.name == mapping.pricing_sheet);
+    if order_sheet.is_none() {
+        errors.push("订单 Sheet 不存在".to_string());
+    }
+    if pricing_sheet.is_none() {
+        errors.push("核价 Sheet 不存在".to_string());
+    }
+    let (Some(order_sheet), Some(pricing_sheet)) = (order_sheet, pricing_sheet) else {
+        return Err(errors);
+    };
+    if !mapping_is_complete(mapping) {
+        errors.push("订单号、国家、SKU/数量或核价档位等必需字段不完整".to_string());
+    }
+    if mapping.order_header_row == 0 || mapping.order_header_row > order_sheet.rows.len() {
+        errors.push("订单表头行超出有效范围".to_string());
+    }
+    if mapping.pricing_header_row == 0 || mapping.pricing_header_row > pricing_sheet.rows.len() {
+        errors.push("核价表头行超出有效范围".to_string());
+    }
+    if mapping
+        .pricing_quantity_header_row
+        .is_some_and(|row| row == 0 || row > pricing_sheet.rows.len())
+    {
+        errors.push("数量档位表头行超出有效范围".to_string());
+    }
+    let order_columns = order_sheet
+        .rows
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or_default();
+    let pricing_columns = pricing_sheet
+        .rows
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or_default();
+    let order_mapped_columns = [
+        mapping.business_order_number_column,
+        mapping.platform_order_number_column,
+        mapping.country_code_column,
+        mapping.country_english_column,
+        mapping.country_chinese_column,
+        mapping.shipping_method_column,
+        mapping.order_price_column,
+    ]
+    .into_iter()
+    .flatten()
+    .chain(
+        mapping
+            .sku_qty_pairs
+            .iter()
+            .flat_map(|pair| [pair.sku_column, pair.qty_column]),
+    )
+    .collect::<Vec<_>>();
+    if order_mapped_columns
+        .iter()
+        .any(|column| *column == 0 || *column > order_columns)
+    {
+        errors.push("订单字段列超出有效范围".to_string());
+    }
+    if mapping.pricing_sku_column == 0
+        || mapping.pricing_country_column == 0
+        || mapping.pricing_sku_column > pricing_columns
+        || mapping.pricing_country_column > pricing_columns
+        || mapping
+            .pricing_shipping_method_column
+            .is_some_and(|column| column == 0 || column > pricing_columns)
+        || mapping
+            .quantity_tier_columns
+            .iter()
+            .any(|tier| tier.column == 0 || tier.column > pricing_columns || tier.quantity < 0)
+    {
+        errors.push("核价字段列或数量档位超出有效范围".to_string());
+    }
+    if mapping
+        .sku_qty_pairs
+        .iter()
+        .any(|pair| pair.sku_column == pair.qty_column)
+    {
+        errors.push("SKU 列与数量列不能相同".to_string());
+    }
+    let mut order_unique_columns = HashSet::new();
+    if order_mapped_columns
+        .iter()
+        .any(|column| !order_unique_columns.insert(*column))
+    {
+        errors.push("订单字段映射中存在重复列".to_string());
+    }
+    let mut pricing_unique_columns =
+        HashSet::from([mapping.pricing_sku_column, mapping.pricing_country_column]);
+    if let Some(column) = mapping.pricing_shipping_method_column
+        && !pricing_unique_columns.insert(column)
+    {
+        errors.push("核价字段映射中存在重复列".to_string());
+    }
+    let mut tier_quantities = HashSet::new();
+    if mapping.quantity_tier_columns.iter().any(|tier| {
+        !pricing_unique_columns.insert(tier.column) || !tier_quantities.insert(tier.quantity)
+    }) {
+        errors.push("数量档位中存在重复列或重复数量".to_string());
+    }
+    if !errors.is_empty() {
+        errors.sort();
+        errors.dedup();
+        return Err(errors);
+    }
+
+    let index = build_price_index(pricing_sheet, mapping);
+    let lines = read_order_lines(order_sheet, mapping).0;
+    let evaluated_rows = lines.len();
+    let matched_rows = lines
+        .iter()
+        .filter(|line| {
+            index
+                .lookup(
+                    &line.country.code,
+                    &line.matched_sku,
+                    &line.shipping_method,
+                    line.quantity.round() as i64,
+                )
+                .status
+                == "matched"
+        })
+        .count();
+    let coverage = ratio(matched_rows, evaluated_rows);
+    let mut warnings = Vec::new();
+    if evaluated_rows == 0 {
+        warnings.push("没有可用于试算的订单行".to_string());
+    } else if evaluated_rows < config.automation.min_trial_rows && coverage < 1.0 {
+        warnings.push(format!(
+            "试算少于 {} 行时覆盖率必须达到 100%",
+            config.automation.min_trial_rows
+        ));
+    } else if coverage < config.automation.coverage_threshold {
+        warnings.push(format!(
+            "试算覆盖率低于 {:.1}%",
+            config.automation.coverage_threshold * 100.0
+        ));
+    }
+    Ok((evaluated_rows, matched_rows, coverage, warnings))
+}
+
 fn command_files(command: &Value) -> Result<Vec<PathBuf>> {
     let values = command
         .get("files")
@@ -2452,5 +2657,74 @@ mod tests {
         let output_dir = Path::new("output");
         let output_path = output_path_for(Path::new("orders/order.xlsx"), output_dir);
         assert_eq!(output_path, output_dir.join("order_核价结果.xlsx"));
+    }
+
+    #[test]
+    fn manual_sku_column_validation_recalculates_coverage() -> Result<()> {
+        let path = std::env::temp_dir().join(format!(
+            "auto-pricing-mapping-{}-{}.xlsx",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let mut workbook = rust_xlsxwriter::Workbook::new();
+        {
+            let order = workbook.add_worksheet();
+            order.set_name("订单")?;
+            for (column, value) in ["订单号", "国家二字码", "SKU", "SKU", "数量"]
+                .iter()
+                .enumerate()
+            {
+                order.write_string(0, column as u16, *value)?;
+            }
+            for (column, value) in ["A-1", "US", "10001", "GOOD-1", "1"].iter().enumerate() {
+                order.write_string(1, column as u16, *value)?;
+            }
+        }
+        {
+            let pricing = workbook.add_worksheet();
+            pricing.set_name("核价")?;
+            for (column, value) in ["SKU", "Country", "1"].iter().enumerate() {
+                pricing.write_string(0, column as u16, *value)?;
+            }
+            for (column, value) in ["GOOD-1", "US", "9.5"].iter().enumerate() {
+                pricing.write_string(1, column as u16, *value)?;
+            }
+        }
+        workbook.save(&path)?;
+
+        let mut mapping = PriceCheckMapping {
+            order_sheet: "订单".to_string(),
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            country_code_column: Some(2),
+            sku_qty_pairs: vec![SkuQtyPair {
+                sku_column: 3,
+                qty_column: 5,
+                sku_header: "SKU".to_string(),
+                qty_header: "数量".to_string(),
+            }],
+            pricing_sheet: "核价".to_string(),
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 3,
+                header: "1".to_string(),
+            }],
+            ..PriceCheckMapping::default()
+        };
+        let wrong =
+            validate_price_mapping(&path, &mapping, &Config::default()).expect("valid mapping");
+        assert_eq!((wrong.0, wrong.1, wrong.2), (1, 0, 0.0));
+        mapping.sku_qty_pairs[0].sku_column = 4;
+        let corrected =
+            validate_price_mapping(&path, &mapping, &Config::default()).expect("valid mapping");
+        assert_eq!((corrected.0, corrected.1, corrected.2), (1, 1, 1.0));
+        std::fs::remove_file(path)?;
+        Ok(())
     }
 }

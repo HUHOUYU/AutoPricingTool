@@ -5,6 +5,7 @@ import { access, appendFile, copyFile, mkdir, readFile, readdir, rename, rm, sta
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { assertTrustedIpcSender, isTrustedRendererUrl } from "./security";
+import { readExcelPreviewFile } from "./excel-preview-file";
 
 type RuntimeConfig = {
   recent_input_dir?: string;
@@ -85,7 +86,7 @@ const outputArtifactDirs = ["汇总", "正式命名", "待确认", "异常"];
 const supportedExcelExtensions = new Set([".xlsx", ".xlsm", ".xlsb", ".xls"]);
 const MAX_INPUT_FILES = 5_000;
 let processor: ChildProcessWithoutNullStreams | null = null;
-let processorActivity: "scan" | "start" | "merge" | "price-analyze" | "price-run" | null = null;
+let processorActivity: "scan" | "start" | "merge" | "price-analyze" | "price-validate" | "price-run" | null = null;
 let activeTask: TaskHistoryRecord | null = null;
 
 type ProcessorCommand = Record<string, unknown> & {
@@ -970,6 +971,10 @@ app.whenReady().then(async () => {
     }
     return collectExcelFiles(directory);
   });
+  ipcMain.handle("app:read-excel-preview-file", (event, filePath: unknown) => {
+    requireTrustedIpc(event);
+    return readExcelPreviewFile(filePath);
+  });
   ipcMain.handle("processor:scan", (event, payload: unknown) => {
     requireTrustedIpc(event);
     processorActivity = "scan";
@@ -1009,6 +1014,17 @@ app.whenReady().then(async () => {
     await persistTaskRecord(activeTask);
     processorActivity = "price-run";
     sendProcessorCommand({ ...validated, action: "price-check-run" });
+  });
+  ipcMain.handle("processor:price-check-validate", async (event, payload: unknown) => {
+    requireTrustedIpc(event);
+    const input = requireRecord(payload, "字段映射试算参数");
+    const validated = await validatePricePayload({ ...input, files: [input.inputPath] });
+    processorActivity = "price-validate";
+    sendProcessorCommand({
+      ...input,
+      inputPath: (validated.files as string[])[0],
+      action: "price-check-validate",
+    });
   });
   ipcMain.handle("processor:pause", (event) => {
     requireTrustedIpc(event);

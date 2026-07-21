@@ -39,6 +39,12 @@ fn write_result_sheet(workbook: &mut Workbook, report: &PriceCheckReport) -> Res
         "原始行号",
     ];
     write_headers(worksheet, &headers)?;
+    let sku_header_format = Format::new()
+        .set_bold()
+        .set_background_color("#E89B82")
+        .set_font_color("#FFFFFF");
+    worksheet.write_string_with_format(0, 6, headers[6], &sku_header_format)?;
+    worksheet.write_string_with_format(0, 7, headers[7], &sku_header_format)?;
     for (row_index, row) in report.rows.iter().enumerate() {
         write_result_row(worksheet, row_index as u32 + 1, row)?;
     }
@@ -48,6 +54,7 @@ fn write_result_sheet(workbook: &mut Workbook, report: &PriceCheckReport) -> Res
 }
 
 fn write_result_row(worksheet: &mut Worksheet, row: u32, value: &PriceCheckRow) -> Result<()> {
+    let sku_format = Format::new().set_background_color("#FBE5DD");
     let strings = [
         &value.business_order_number,
         &value.platform_order_number,
@@ -59,7 +66,11 @@ fn write_result_row(worksheet: &mut Worksheet, row: u32, value: &PriceCheckRow) 
         &value.matched_sku,
     ];
     for (column, text) in strings.iter().enumerate() {
-        worksheet.write_string(row, column as u16, text.as_str())?;
+        if column == 6 || column == 7 {
+            worksheet.write_string_with_format(row, column as u16, text.as_str(), &sku_format)?;
+        } else {
+            worksheet.write_string(row, column as u16, text.as_str())?;
+        }
     }
     worksheet.write_number(row, 8, value.total_quantity)?;
     write_optional_number(worksheet, row, 9, value.original_price)?;
@@ -166,8 +177,14 @@ fn write_mapping_sheet(workbook: &mut Workbook, report: &PriceCheckReport) -> Re
     ];
     for (row_index, (key, value)) in rows.iter().enumerate() {
         let row = row_index as u32 + 1;
-        worksheet.write_string(row, 0, *key)?;
-        worksheet.write_string(row, 1, value)?;
+        if key.contains("SKU") {
+            let sku_format = Format::new().set_background_color("#FBE5DD");
+            worksheet.write_string_with_format(row, 0, *key, &sku_format)?;
+            worksheet.write_string_with_format(row, 1, value, &sku_format)?;
+        } else {
+            worksheet.write_string(row, 0, *key)?;
+            worksheet.write_string(row, 1, value)?;
+        }
     }
     worksheet.set_freeze_panes(1, 0)?;
     worksheet.autofilter(0, 0, rows.len() as u32, 1)?;
@@ -197,4 +214,77 @@ fn write_optional_number(
 
 fn optional_column(value: Option<usize>) -> String {
     value.map(|column| column.to_string()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pricing::{PriceCheckMapping, PriceTierColumn, SkuQtyPair};
+    use regex::Regex;
+    use std::io::Read;
+
+    #[test]
+    fn result_workbook_marks_sku_columns_and_mapping_rows() -> Result<()> {
+        let path = std::env::temp_dir().join(format!(
+            "auto-pricing-sku-style-{}-{}.xlsx",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let report = PriceCheckReport {
+            rows: vec![PriceCheckRow {
+                original_sku: "RAW-1".to_string(),
+                matched_sku: "MATCH-1".to_string(),
+                ..PriceCheckRow::default()
+            }],
+            mapping: PriceCheckMapping {
+                pricing_sku_column: 1,
+                pricing_country_column: 2,
+                sku_qty_pairs: vec![SkuQtyPair {
+                    sku_column: 3,
+                    qty_column: 4,
+                    ..SkuQtyPair::default()
+                }],
+                quantity_tier_columns: vec![PriceTierColumn {
+                    quantity: 1,
+                    column: 3,
+                    header: "1".to_string(),
+                }],
+                ..PriceCheckMapping::default()
+            },
+            ..PriceCheckReport::default()
+        };
+        write_price_result(&path, &report)?;
+
+        {
+            let file = fs::File::open(&path)?;
+            let mut archive = zip::ZipArchive::new(file)?;
+            let mut result_xml = String::new();
+            archive
+                .by_name("xl/worksheets/sheet1.xml")?
+                .read_to_string(&mut result_xml)?;
+            let styled = |cell: &str| {
+                Regex::new(&format!(r#"<c r="{cell}" s="\d+""#))
+                    .expect("regex")
+                    .is_match(&result_xml)
+            };
+            assert!(styled("G1") && styled("H1") && styled("G2") && styled("H2"));
+
+            let mut mapping_xml = String::new();
+            archive
+                .by_name("xl/worksheets/sheet3.xml")?
+                .read_to_string(&mut mapping_xml)?;
+            for cell in ["A14", "B14", "A18", "B18"] {
+                assert!(
+                    Regex::new(&format!(r#"<c r="{cell}" s="\d+""#))
+                        .expect("regex")
+                        .is_match(&mapping_xml)
+                );
+            }
+        }
+        fs::remove_file(path)?;
+        Ok(())
+    }
 }

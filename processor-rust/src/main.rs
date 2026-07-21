@@ -87,6 +87,16 @@ fn main() -> Result<()> {
                     pricing::run_price_check_analyze,
                 );
             }
+            "price-check-validate" => {
+                spawn_task(
+                    &task_running,
+                    &state,
+                    command,
+                    "字段映射试算失败",
+                    true,
+                    pricing::run_price_check_validate,
+                );
+            }
             "price-check-run" => {
                 spawn_task(
                     &task_running,
