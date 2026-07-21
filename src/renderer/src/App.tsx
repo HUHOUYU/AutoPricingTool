@@ -1934,7 +1934,7 @@ export function App(): React.JSX.Element {
               <button type="button" aria-label="上一页" disabled={pageIndex === 0} onClick={() => setPageIndex((current) => Math.max(0, current - 1))}><ChevronLeft /></button>
               <strong>{pageIndex + 1}</strong>
               <button type="button" aria-label="下一页" disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex((current) => Math.min(pageCount - 1, current + 1))}><ChevronRight /></button>
-              <select aria-label="每页条数" value={pageSize} onChange={(event) => setPageSize(Number(event.currentTarget.value))}><option value={50}>50 条/页</option><option value={100}>100 条/页</option><option value={200}>200 条/页</option></select>
+              <select aria-label="每页条数" value={pageSize} onChange={(event) => setPageSize(Number(event.currentTarget.value))}><option value={50}>50 条/页</option><option value={100}>100 条/页</option><option value={200}>200 条/页</option><option value={500}>500 条/页</option><option value={1000}>1000 条/页</option></select>
             </footer>
           </section>
           </> : activePage === "config" ? (
