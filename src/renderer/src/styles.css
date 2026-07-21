@@ -82,30 +82,30 @@
 }
 
 .dark {
-  --background: #07111f;
-  --foreground: #dce8f7;
-  --card: #0d1a2b;
-  --card-foreground: #dce8f7;
-  --popover: #101f32;
-  --popover-foreground: #e8f2ff;
-  --primary: #4f9cff;
-  --primary-foreground: #04101f;
-  --secondary: #13243a;
-  --secondary-foreground: #dbeafe;
-  --muted-surface: #14253a;
-  --muted-foreground: #8ea4bd;
-  --accent: #193653;
-  --accent-foreground: #dbeafe;
-  --destructive: #ef646f;
-  --border: #243950;
-  --input: #2b4159;
-  --ring: #4f9cff;
-  --blue: #4f9cff;
-  --blue-dark: #7db6ff;
-  --blue-soft: #142b46;
-  --line: #243950;
-  --line-soft: #1a2c40;
-  --muted: #8ea4bd;
+  --background: #211f1c;
+  --foreground: #f2eee7;
+  --card: #25231f;
+  --card-foreground: #f2eee7;
+  --popover: #2d2a25;
+  --popover-foreground: #f2eee7;
+  --primary: #cf8068;
+  --primary-foreground: #fffaf6;
+  --secondary: #302d28;
+  --secondary-foreground: #ded8cf;
+  --muted-surface: #2d2a25;
+  --muted-foreground: #aaa298;
+  --accent: #3b302b;
+  --accent-foreground: #f3c2b1;
+  --destructive: #d56f62;
+  --border: #4a453e;
+  --input: #514b43;
+  --ring: #d9957e;
+  --blue: #cf8068;
+  --blue-dark: #e3a18c;
+  --blue-soft: #3a2c28;
+  --line: #4a453e;
+  --line-soft: #39352f;
+  --muted: #aaa298;
 }
 
 * {
@@ -1526,21 +1526,22 @@ html:not(.dark) .coming-soon-page {
 }
 
 html.dark .coming-soon-page::before {
-  background: radial-gradient(circle, rgb(78 140 255 / 15%), transparent 68%);
+  background: radial-gradient(circle, rgb(207 128 104 / 15%), transparent 68%);
 }
 
 html.dark .coming-soon-page {
-  border-color: #252d3b;
-  background-color: #11161e;
-  background-image: radial-gradient(circle, rgb(195 203 215 / 10%) 0.7px, transparent 0.8px);
+  border-color: var(--cyber-border-soft);
+  background-color: var(--cyber-panel);
+  background-image: radial-gradient(circle, rgb(184 177 167 / 10%) 0.7px, transparent 0.8px);
   box-shadow:
     inset 1px 2px 5px rgb(0 0 0 / 18%),
     inset -1px -1px 0 rgb(255 255 255 / 4%);
 }
 
 html.dark .coming-soon-icon {
-  border-color: rgb(78 140 255 / 30%);
-  box-shadow: 0 14px 36px rgb(78 140 255 / 16%);
+  border-color: rgb(207 128 104 / 32%);
+  background: rgb(207 128 104 / 11%);
+  box-shadow: 0 14px 36px rgb(207 128 104 / 16%);
 }
 
 .cyber-metrics { display: grid; min-width: 0; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; }
@@ -4323,6 +4324,163 @@ html:not(.dark) .cyber-action:disabled {
   filter: none;
   opacity: .62;
   transform: none;
+}
+
+/* 暗色主题沿用浅色主题的信息层级，仅调整明度与对比度。 */
+html.dark body { background: #191816; }
+
+html.dark .cyber-app {
+  --cyber-bg: #191816;
+  --cyber-sidebar: #211f1c;
+  --cyber-panel: #25231f;
+  --cyber-panel-soft: #2d2a25;
+  --cyber-border: #4a453e;
+  --cyber-border-soft: #39352f;
+  --cyber-primary: #cf8068;
+  --cyber-primary-bright: #e3a18c;
+  --cyber-text: #f2eee7;
+  --cyber-muted: #b8b1a7;
+  --cyber-dim: #8d867c;
+  --cyber-green: #2ed573;
+  --cyber-cyan: var(--cyber-status-info);
+  --cyber-amber: #f7b731;
+  --cyber-red: #ff6b81;
+  color: var(--cyber-text);
+  background: var(--cyber-bg);
+}
+
+html.dark .cyber-sidebar {
+  border-color: var(--cyber-border-soft);
+  background: var(--cyber-sidebar);
+  box-shadow: 1px 0 0 rgb(0 0 0 / 18%);
+}
+
+html.dark .cyber-workspace {
+  background-color: #1c1a18;
+  background-image: radial-gradient(circle, rgb(184 177 167 / 8%) 0.7px, transparent 0.8px);
+  background-size: 20px 20px;
+}
+
+html.dark .cyber-nav button { color: var(--cyber-muted); }
+html.dark .cyber-nav button:hover { color: var(--cyber-text); background: color-mix(in srgb, var(--cyber-primary) 8%, transparent); }
+html.dark .cyber-nav button.is-active {
+  border-color: var(--cyber-border);
+  color: var(--cyber-text);
+  background: var(--cyber-panel);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 16%);
+}
+
+html.dark .cyber-upload-panel,
+html.dark .cyber-table-panel {
+  border-color: var(--cyber-border-soft);
+  background: var(--cyber-panel);
+  box-shadow: 0 6px 30px rgb(0 0 0 / 14%);
+}
+
+html.dark .cyber-dropzone {
+  border-color: var(--cyber-border);
+  background: radial-gradient(ellipse at 50% 52%, rgb(207 128 104 / 8%), transparent 44%), var(--cyber-panel-soft);
+}
+
+html.dark .cyber-dropzone:hover,
+html.dark .cyber-dropzone.is-dragging {
+  border-color: var(--cyber-primary-bright);
+  box-shadow: inset 0 0 34px rgb(207 128 104 / 10%), 0 0 16px rgb(207 128 104 / 10%);
+}
+
+html.dark .cyber-wave {
+  opacity: .1;
+  background: repeating-radial-gradient(ellipse at center, transparent 0 8px, var(--cyber-primary) 9px 10px, transparent 11px 18px);
+}
+
+html.dark .cyber-table-toolbar,
+html.dark .cyber-table-scroll,
+html.dark .cyber-pagination,
+html.dark .cyber-file-table tbody tr { background: var(--cyber-panel); }
+html.dark .cyber-file-table th { color: var(--cyber-muted); background: var(--cyber-panel-soft); }
+html.dark .cyber-file-table tbody tr:not(.cyber-detail):hover,
+html.dark .cyber-file-table tbody tr.is-selected { background: color-mix(in srgb, var(--cyber-primary) 8%, var(--cyber-panel)); }
+html.dark .cyber-detail td { background: var(--cyber-panel-soft); }
+html.dark .cyber-detail select,
+html.dark .cyber-pagination select { color: var(--cyber-text); background: var(--cyber-panel-soft); }
+
+html.dark .cyber-upload-visual,
+html.dark .cyber-empty-visual {
+  border-color: color-mix(in srgb, var(--cyber-primary) 34%, var(--cyber-border));
+  color: var(--cyber-primary-bright);
+  background: color-mix(in srgb, var(--cyber-primary) 12%, var(--cyber-panel));
+  box-shadow: 0 8px 20px rgb(0 0 0 / 18%);
+}
+
+html.dark .metric-icon:not(.is-green):not(.is-cyan):not(.is-amber):not(.is-red),
+html.dark .panel-icon {
+  color: var(--cyber-primary-bright);
+  background: color-mix(in srgb, var(--cyber-primary) 14%, var(--cyber-panel));
+  box-shadow: none;
+}
+
+html.dark .cyber-select-file {
+  border-color: var(--cyber-primary);
+  background: var(--cyber-primary);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 20%);
+}
+
+html.dark .cyber-action {
+  border-color: var(--cyber-border);
+  color: var(--cyber-muted);
+  background: var(--cyber-panel-soft);
+  box-shadow: none;
+}
+html.dark .cyber-action.is-start { border-color: #d58970; color: #ffffff; background: var(--cyber-primary); }
+html.dark .cyber-action.is-pause { border-color: color-mix(in srgb, var(--cyber-status-info) 48%, var(--cyber-border)); color: var(--cyber-status-info); background: color-mix(in srgb, var(--cyber-status-info) 10%, var(--cyber-panel)); }
+html.dark .cyber-action.is-stop { border-color: color-mix(in srgb, var(--cyber-status-error) 48%, var(--cyber-border)); color: var(--cyber-status-error); background: color-mix(in srgb, var(--cyber-status-error) 10%, var(--cyber-panel)); }
+html.dark .cyber-action.is-reset { border-color: var(--cyber-border); color: var(--cyber-muted); background: var(--cyber-panel); }
+
+html.dark .dashboard-hero > button,
+html.dark .template-page-header > button,
+html.dark .coming-soon-back {
+  border-color: var(--cyber-primary);
+  color: var(--primary-foreground);
+  background: var(--cyber-primary);
+  box-shadow: 0 7px 18px rgb(0 0 0 / 20%);
+}
+
+html.dark .dashboard-hero > button:hover,
+html.dark .template-page-header > button:hover,
+html.dark .coming-soon-back:hover {
+  background: var(--cyber-primary-bright);
+}
+
+html.dark .dashboard-health > button,
+html.dark .config-center-actions > button:not(:last-child),
+html.dark .config-path-field > button {
+  border-color: var(--cyber-border);
+  color: var(--cyber-text);
+  background: var(--cyber-panel-soft);
+  box-shadow: none;
+}
+
+html.dark .dashboard-health > button:hover:not(:disabled),
+html.dark .config-center-actions > button:not(:last-child):hover:not(:disabled),
+html.dark .config-path-field > button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cyber-primary) 55%, var(--cyber-border));
+  color: var(--cyber-primary-bright);
+  background: color-mix(in srgb, var(--cyber-primary) 10%, var(--cyber-panel-soft));
+}
+
+html.dark .dashboard-health > button:disabled,
+html.dark .config-center-actions > button:not(:last-child):disabled,
+html.dark .config-path-field > button:disabled {
+  border-color: var(--cyber-border-soft);
+  color: var(--cyber-dim);
+  background: color-mix(in srgb, var(--cyber-panel-soft) 72%, var(--cyber-bg));
+  opacity: .62;
+}
+
+html.dark [data-sonner-toast].cyber-toast {
+  --normal-bg: #25231f;
+  --normal-border: #4a453e;
+  --normal-text: #f2eee7;
 }
 
 .cyber-tabs button:nth-child(1).is-active { border-bottom-color: var(--cyber-status-pending); color: var(--cyber-status-pending); }
