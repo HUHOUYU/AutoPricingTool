@@ -4245,7 +4245,7 @@ html:not(.dark) .cyber-app {
   display: grid;
   min-width: 0;
   flex: 0 0 auto;
-  grid-template-columns: minmax(190px, auto) minmax(72px, 10%) minmax(0, 1fr) auto;
+  grid-template-columns: max-content minmax(72px, 10%) minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   overflow: hidden;
@@ -4267,7 +4267,17 @@ html:not(.dark) .cyber-app {
 .cyber-batch-progress [role="progressbar"] > div { background: var(--cyber-status-info); }
 .cyber-batch-progress.is-settled [role="progressbar"] > div { background: var(--cyber-status-success); }
 .cyber-progress-actions { justify-content: flex-end; gap: 6px; }
-.cyber-progress-actions .cyber-action { width: 96px; min-width: 96px; height: 34px; flex-basis: 96px; }
+.cyber-batch-progress .cyber-progress-actions .cyber-action {
+  box-sizing: border-box;
+  width: 96px;
+  min-width: 96px;
+  max-width: 96px;
+  height: 38px;
+  min-height: 38px;
+  max-height: 38px;
+  flex-basis: 96px;
+}
+.cyber-batch-progress .cyber-progress-actions .cyber-action svg { width: 18px; height: 18px; }
 
 @keyframes cyber-status-pulse {
   50% { opacity: .48; transform: scale(.82); }
@@ -4335,8 +4345,8 @@ html:not(.dark) .cyber-action:disabled {
   .cyber-continue-import { padding: 0 8px; }
   .cyber-banner-actions .cyber-action { min-width: 38px; width: 38px; padding: 0; }
   .cyber-banner-actions .cyber-action strong { display: none; }
-  .cyber-batch-progress { grid-template-columns: minmax(160px, auto) minmax(64px, 10%) minmax(0, 1fr) auto; gap: 8px; }
-  .cyber-progress-actions .cyber-action { min-width: 38px; width: 38px; padding: 0; }
+  .cyber-batch-progress { grid-template-columns: max-content minmax(64px, 10%) minmax(0, 1fr) auto; gap: 8px; }
+  .cyber-batch-progress .cyber-progress-actions .cyber-action { min-width: 38px; width: 38px; max-width: 38px; flex-basis: 38px; padding: 0; }
   .cyber-progress-actions .cyber-action strong { display: none; }
 }
 
