@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { type ColumnDef, type ColumnSizingState, type SortingState, type VisibilityState, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
+import { type Column, type ColumnDef, type ColumnPinningState, type ColumnSizingState, type SortingState, type VisibilityState, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import {
@@ -29,6 +29,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pause,
+  Pin,
+  PinOff,
   Play,
   RefreshCw,
   ScanSearch,
@@ -204,6 +206,38 @@ function buildMapping(order: PriceAnalysisCandidate, pricing: PriceAnalysisCandi
 
 function formatCoverage(value: number | undefined): string {
   return String(((value ?? 0) * 100).toFixed(1)) + "%";
+}
+
+function DecisionMappingText({ value }: { value: string }): React.JSX.Element {
+  const mappingPairs = value.split("、").map((pair) => /^(SKU\s+[A-Z]+(?:（[^）]*）|\([^)]*\))?)\s*\/\s*(数量\s+[A-Z]+(?:（[^）]*）|\([^)]*\))?)$/.exec(pair.trim()));
+  if (mappingPairs.every((pair) => pair !== null)) {
+    return (
+      <span className="decision-reason-value is-paired">
+        {mappingPairs.map((pair, index) => <span className="decision-mapping-pair" key={`${pair[1]}-${pair[2]}-${index}`}><em className="decision-mapping-token is-sku">{pair[1]}</em><em className="decision-mapping-token is-quantity">{pair[2]}</em></span>)}
+      </span>
+    );
+  }
+  const parts = value.split(/((?:SKU|数量)\s+[A-Z]+(?:（[^）]*）|\([^)]*\))?)/g).filter(Boolean);
+  return (
+    <span className="decision-reason-value is-inline">
+      {parts.map((part, index) => {
+        const tone = part.startsWith("SKU ") ? "is-sku" : part.startsWith("数量 ") ? "is-quantity" : "";
+        return tone ? <em className={`decision-mapping-token ${tone}`} key={`${part}-${index}`}>{part}</em> : <span key={`${part}-${index}`}>{part}</span>;
+      })}
+    </span>
+  );
+}
+
+function DecisionReason({ reason }: { reason: string }): React.JSX.Element {
+  const comparison = /^(.*?)(?:：|:)\s*最优\s*\[(.*?)\]\s*[；;]\s*次优\s*\[(.*?)\]\s*$/.exec(reason);
+  if (!comparison) return <li className="decision-reason is-plain">{reason}</li>;
+  return (
+    <li className="decision-reason is-comparison">
+      <p>{comparison[1]}</p>
+      <div className="decision-candidate is-best"><b>最优</b><DecisionMappingText value={comparison[2]} /></div>
+      <div className="decision-candidate is-alternate"><b>次优</b><DecisionMappingText value={comparison[3]} /></div>
+    </li>
+  );
 }
 
 function isAnalysisError(analysis: PriceAnalysisFile | undefined): boolean {
@@ -386,6 +420,7 @@ export function App(): React.JSX.Element {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
+  const [pinnedFileColumns, setPinnedFileColumns] = useState<Record<FileTab, string[]>>({ pending: [], confirm: [], error: [], success: [] });
   const [importedAt, setImportedAt] = useState<Record<string, string>>({});
   const [importModes, setImportModes] = useState<Record<string, ImportMode>>({});
   const [pageIndex, setPageIndex] = useState(0);
@@ -400,6 +435,7 @@ export function App(): React.JSX.Element {
   const [detailPreviewWorkbook, setDetailPreviewWorkbook] = useState<ExcelPreviewWorkbook | null>(null);
   const [activeMappingTarget, setActiveMappingTarget] = useState<MappingFieldTarget | null>(null);
   const [mappingValidations, setMappingValidations] = useState<Record<string, MappingValidationState>>({});
+  const [matchedOrderRowsBySheet, setMatchedOrderRowsBySheet] = useState<Record<string, Record<string, number[]>>>({});
   const [detailDrawerWidth, setDetailDrawerWidth] = useState(defaultDetailDrawerWidth);
   const [detailDrawerViewportWidth, setDetailDrawerViewportWidth] = useState(() => window.innerWidth);
   const [analysisCompletedToken, setAnalysisCompletedToken] = useState(0);
@@ -531,9 +567,17 @@ export function App(): React.JSX.Element {
                 evaluatedRows: analysis.automationDecision.evaluatedRows,
                 matchedRows: analysis.automationDecision.matchedRows,
                 coverage: analysis.automationDecision.coverage,
+                matchedOrderRows: analysis.matchedOrderRows ?? [],
                 errors: [],
                 warnings: analysis.automationDecision.reasons,
               },
+            },
+          }));
+          setMatchedOrderRowsBySheet((current) => ({
+            ...current,
+            [analysis.inputPath]: {
+              ...current[analysis.inputPath],
+              [analysis.suggestedMapping!.orderSheet]: analysis.matchedOrderRows ?? [],
             },
           }));
         }
@@ -558,6 +602,13 @@ export function App(): React.JSX.Element {
         const currentVersion = mappingValidationVersionsRef.current[event.inputPath] ?? 0;
         if (event.requestVersion === currentVersion) {
           setMappingValidations((current) => ({ ...current, [event.inputPath]: { status: "ready", result: event } }));
+          const orderSheet = mappingsRef.current[event.inputPath]?.orderSheet;
+          if (orderSheet && event.matchedOrderRows) {
+            setMatchedOrderRowsBySheet((current) => ({
+              ...current,
+              [event.inputPath]: { ...current[event.inputPath], [orderSheet]: event.matchedOrderRows ?? [] },
+            }));
+          }
         }
         const pending = pendingMappingValidationRef.current;
         pendingMappingValidationRef.current = null;
@@ -674,6 +725,7 @@ export function App(): React.JSX.Element {
     setAnalyses({});
     setMappings({});
     setMappingValidations({});
+    setMatchedOrderRowsBySheet({});
     setDetailPreviewWorkbook(null);
     setActiveMappingTarget(null);
     setResults({});
@@ -814,6 +866,7 @@ export function App(): React.JSX.Element {
     setAnalyses({});
     setMappings({});
     setMappingValidations({});
+    setMatchedOrderRowsBySheet({});
     setDetailPreviewWorkbook(null);
     setActiveMappingTarget(null);
     setResults({});
@@ -996,6 +1049,7 @@ export function App(): React.JSX.Element {
     setAnalyses({});
     setMappings({});
     setMappingValidations({});
+    setMatchedOrderRowsBySheet({});
     setResults({});
     setExpandedPath(null);
     setDetailPath(null);
@@ -1040,6 +1094,11 @@ export function App(): React.JSX.Element {
       return next;
     });
     setImportModes((current) => {
+      const next = { ...current };
+      delete next[path];
+      return next;
+    });
+    setMatchedOrderRowsBySheet((current) => {
       const next = { ...current };
       delete next[path];
       return next;
@@ -1123,6 +1182,11 @@ export function App(): React.JSX.Element {
       delete next[path];
       return next;
     });
+    setMatchedOrderRowsBySheet((current) => {
+      const next = { ...current };
+      delete next[path];
+      return next;
+    });
     delete mappingValidationVersionsRef.current[path];
     setMappingValidations((current) => {
       const next = { ...current };
@@ -1190,10 +1254,10 @@ export function App(): React.JSX.Element {
 
   const tableColumns = useMemo<ColumnDef<string>[]>(
     () => {
-      const selectColumn: ColumnDef<string> = { id: "select", header: "", size: 38, enableSorting: false, enableHiding: false, enableResizing: false };
-      const indexColumn: ColumnDef<string> = { id: "index", header: "序号", size: 64, enableSorting: false, enableHiding: false };
+      const selectColumn: ColumnDef<string> = { id: "select", header: "", size: 38, minSize: 38, maxSize: 38, enableSorting: false, enableHiding: false, enablePinning: false, enableResizing: false };
+      const indexColumn: ColumnDef<string> = { id: "index", header: "序号", size: 64, enableSorting: false, enableHiding: false, enablePinning: false, enableResizing: false };
       const fileColumn: ColumnDef<string> = { id: "fileName", header: "原始文件名", size: 320, minSize: 180, accessorFn: fileNameFromPath };
-      const actionColumn: ColumnDef<string> = { id: "actions", header: "操作", size: activeTab === "pending" ? 104 : 80, minSize: 64, maxSize: 180, enableSorting: false, enableHiding: false };
+      const actionColumn: ColumnDef<string> = { id: "actions", header: "操作", size: activeTab === "pending" ? 104 : 80, minSize: 64, maxSize: 180, enableSorting: false, enableHiding: false, enablePinning: false, enableResizing: false };
       const orderColumn: ColumnDef<string> = { id: "orderSheet", header: "订单 Sheet", size: 170, accessorFn: (path) => (mappings[path] ?? analyses[path]?.suggestedMapping)?.orderSheet ?? "" };
       const pricingColumn: ColumnDef<string> = { id: "pricingSheet", header: "核价 Sheet", size: 190, accessorFn: (path) => (mappings[path] ?? analyses[path]?.suggestedMapping)?.pricingSheet ?? "" };
       const coverageColumn: ColumnDef<string> = { id: "coverage", header: "匹配率", size: 230, minSize: 140, accessorFn: (path) => results[path]?.coverage ?? analyses[path]?.coverage ?? -1 };
@@ -1219,7 +1283,7 @@ export function App(): React.JSX.Element {
     data: pagedFiles,
     columns: tableColumns,
     defaultColumn: { size: 180, minSize: 80, maxSize: 560 },
-    state: { sorting, columnVisibility, columnSizing },
+    state: { sorting, columnVisibility, columnSizing, columnPinning: { left: pinnedFileColumns[activeTab], right: [] } satisfies ColumnPinningState },
     onSortingChange: setSorting,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnSizingChange: setColumnSizing,
@@ -1227,6 +1291,21 @@ export function App(): React.JSX.Element {
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
+  const visibleFileColumns = [...fileTable.getLeftVisibleLeafColumns(), ...fileTable.getCenterVisibleLeafColumns(), ...fileTable.getRightVisibleLeafColumns()];
+  const fileHeadersByColumn = new Map(fileTable.getHeaderGroups()[0].headers.map((header) => [header.column.id, header]));
+  const visibleFileHeaders = visibleFileColumns.map((column) => fileHeadersByColumn.get(column.id)).filter((header) => header !== undefined);
+  const toggleFileColumnPin = (columnId: string): void => {
+    setPinnedFileColumns((current) => {
+      const pinned = current[activeTab];
+      return { ...current, [activeTab]: pinned.includes(columnId) ? pinned.filter((id) => id !== columnId) : [...pinned, columnId] };
+    });
+  };
+  const filePinnedStyle = (column: Column<string, unknown>, header = false): CSSProperties => column.getIsPinned() === "left" ? {
+    left: `${column.getStart("left")}px`,
+    position: "sticky",
+    width: `${column.getSize()}px`,
+    zIndex: header ? 7 : 4,
+  } : { width: `${column.getSize()}px` };
   const tableRows = fileTable.getRowModel().rows;
   const shouldVirtualizeRows = tableRows.length > 100 && expandedPath === null;
   const rowVirtualizer = useVirtualizer({
@@ -1238,6 +1317,7 @@ export function App(): React.JSX.Element {
   const renderedTableRows = shouldVirtualizeRows
     ? rowVirtualizer.getVirtualItems().map((virtualRow) => ({ row: tableRows[virtualRow.index], virtualRow }))
     : tableRows.map((row) => ({ row, virtualRow: null }));
+  const hasTableRows = renderedTableRows.length > 0;
 
   const completedDotCount = progressDotCounts.success + progressDotCounts.warning + progressDotCounts.error;
   const progressPercent = progress.total > 0
@@ -1254,20 +1334,24 @@ export function App(): React.JSX.Element {
   const detailResult = detailPath ? results[detailPath] : undefined;
   const detailMapping = detailPath ? mappings[detailPath] ?? detailAnalysis?.suggestedMapping ?? null : null;
   const detailValidation: MappingValidationState = detailPath ? mappingValidations[detailPath] ?? { status: "idle", result: null } : { status: "idle", result: null };
+  const detailMatchedOrderRows = detailPath && detailMapping ? matchedOrderRowsBySheet[detailPath]?.[detailMapping.orderSheet] ?? [] : [];
   const detailPreviewCandidates = useMemo<ExcelPreviewCandidate[]>(() => {
     if (!detailAnalysis) return [];
     const rolesBySheet = new Map<string, Set<ExcelPreviewCandidate["roles"][number]>>();
+    const scoresBySheet = new Map<string, ExcelPreviewCandidate["scores"]>();
     for (const candidate of detailAnalysis.orderSheetCandidates) {
       const roles = rolesBySheet.get(candidate.sheetName) ?? new Set();
       roles.add("order");
       rolesBySheet.set(candidate.sheetName, roles);
+      scoresBySheet.set(candidate.sheetName, { ...scoresBySheet.get(candidate.sheetName), order: candidate.score });
     }
     for (const candidate of detailAnalysis.pricingSheetCandidates) {
       const roles = rolesBySheet.get(candidate.sheetName) ?? new Set();
       roles.add("pricing");
       rolesBySheet.set(candidate.sheetName, roles);
+      scoresBySheet.set(candidate.sheetName, { ...scoresBySheet.get(candidate.sheetName), pricing: candidate.score });
     }
-    return Array.from(rolesBySheet, ([name, roles]) => ({ name, roles: Array.from(roles) }));
+    return Array.from(rolesBySheet, ([name, roles]) => ({ name, roles: Array.from(roles), scores: scoresBySheet.get(name) }));
   }, [detailAnalysis]);
   const currentDetailDrawerBounds = detailDrawerBounds(detailDrawerViewportWidth);
 
@@ -1533,6 +1617,7 @@ export function App(): React.JSX.Element {
                   candidates={detailPreviewCandidates}
                   activeSheetName={detailPreviewSheetName}
                   mapping={detailMapping}
+                  matchedOrderRows={detailMatchedOrderRows}
                   activeTarget={activeMappingTarget}
                   selectionPrompt={activeMappingTarget ? `正在选择“${mappingTargetLabel(activeMappingTarget)}”` : undefined}
                   onActiveSheetChange={setDetailPreviewSheetName}
@@ -1541,7 +1626,7 @@ export function App(): React.JSX.Element {
                   onRowSelect={selectMappingRow}
                 />
                 <div className="issue-detail-column">
-                  <section><h3>自动化判定</h3>{detailAnalysis ? <><div className={"decision-card is-" + detailAnalysis.automationDecision.status}><strong>{detailAnalysis.automationDecision.status === "eligible" ? "可自动处理" : detailAnalysis.automationDecision.status === "confirm" ? "需要人工确认" : "分析异常"}</strong><span>试算 {detailAnalysis.automationDecision.matchedRows}/{detailAnalysis.automationDecision.evaluatedRows} 行 · {formatCoverage(detailAnalysis.automationDecision.coverage)}</span></div><ul>{detailAnalysis.automationDecision.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></> : <p>文件尚未分析。</p>}</section>
+                  <section><h3>自动化判定</h3>{detailAnalysis ? <><div className={"decision-card is-" + detailAnalysis.automationDecision.status}><strong>{detailAnalysis.automationDecision.status === "eligible" ? "可自动处理" : detailAnalysis.automationDecision.status === "confirm" ? "需要人工确认" : "分析异常"}</strong><span>试算 {detailAnalysis.automationDecision.matchedRows}/{detailAnalysis.automationDecision.evaluatedRows} 行 · {formatCoverage(detailAnalysis.automationDecision.coverage)}</span></div><ul className="decision-reasons">{detailAnalysis.automationDecision.reasons.map((reason) => <DecisionReason reason={reason} key={reason} />)}</ul></> : <p>文件尚未分析。</p>}</section>
                   {detailAnalysis && detailMapping ? <MappingEditor analysis={detailAnalysis} mapping={detailMapping} workbook={detailPreviewWorkbook} activeSheetName={detailPreviewSheetName} activeTarget={activeMappingTarget} validation={detailValidation} onActiveTargetChange={selectMappingTarget} onMappingChange={(mapping) => commitMapping(detailPath, mapping)} onColumnChange={(target, column, header) => changeMappingColumn(target, column, header)} onSheetChange={(orderSheet, pricingSheet, previewSheet) => { updateMapping(detailPath, orderSheet, pricingSheet); setDetailPreviewSheetName(previewSheet); }} onPreviewSheetChange={setDetailPreviewSheetName} onConfirm={() => void confirmAndContinue(detailPath)} /> : null}
                   {detailResult ? <section><h3>处理结果</h3><div className="result-summary"><span>总行数<strong>{detailResult.totalRows ?? 0}</strong></span><span>已匹配<strong>{detailResult.matchedRows ?? 0}</strong></span><span>异常行<strong>{detailResult.exceptionRows ?? 0}</strong></span></div>{detailResult.message ? <p>{detailResult.message}</p> : null}{detailResult.outputPath ? <Button variant="outline" onClick={() => void getDesktopAPI()?.openPath(detailResult.outputPath ?? "")}>打开结果文件</Button> : null}</section> : null}
                   {detailPath && fileStatusByPath[detailPath] && tabForStatus(fileStatusByPath[detailPath]) === "error" ? <section><h3>异常处理</h3><p>调整源文件或配置后，可以重新分析当前文件。</p><Button type="button" variant="outline" onClick={() => void retryAnalysis(detailPath)}><RefreshCw />重新分析此文件</Button></section> : null}
@@ -1622,19 +1707,26 @@ export function App(): React.JSX.Element {
               </div>
             </header>
 
-            <div className="cyber-table-scroll" ref={tableScrollRef}>
+            <div className={`cyber-table-scroll${hasTableRows ? "" : " is-empty"}`} ref={tableScrollRef}>
               <table className={`cyber-file-table is-${activeTab}`} style={{ "--cyber-table-width": `${fileTable.getTotalSize()}px` } as CSSProperties}>
-                <colgroup>{fileTable.getVisibleLeafColumns().map((column) => <col key={column.id} style={{ width: `${column.getSize()}px` }} />)}</colgroup>
-                <thead><tr>{fileTable.getHeaderGroups()[0].headers.map((header) => {
+                <colgroup>{visibleFileColumns.map((column) => <col key={column.id} className={column.id === "select" ? "checkbox-column" : column.id === "index" ? "index-column" : column.id === "actions" ? "action-column" : undefined} style={{ width: `${column.getSize()}px` }} />)}</colgroup>
+                <thead><tr>{visibleFileHeaders.map((header) => {
                   const column = header.column;
-                  const className = column.id === "select" ? "checkbox-column" : column.id === "index" ? "index-column" : column.id === "actions" ? "action-column" : undefined;
-                  return <th key={header.id} className={className} style={{ width: `${header.getSize()}px` }}>
+                  const className = `${column.id === "select" ? "checkbox-column" : column.id === "index" ? "index-column" : column.id === "actions" ? "action-column" : ""}${column.getIsPinned() ? " is-pinned-column" : ""}`.trim() || undefined;
+                  return <th key={header.id} className={className} style={filePinnedStyle(column, true)}>
                     {column.id === "select" ? <Checkbox checked={selectedAll} onCheckedChange={() => toggleAllSelected()} aria-label="全选当前状态文件" /> : <button type="button" disabled={!column.getCanSort()} onClick={column.getToggleSortingHandler()}>{String(column.columnDef.header)}{column.getCanSort() ? <ArrowUpDown /> : null}</button>}
-                    {column.getCanResize() ? <div className={`column-resizer${column.getIsResizing() ? " is-resizing" : ""}`} role="separator" aria-label={`调整 ${String(column.columnDef.header)} 列宽`} aria-orientation="vertical" aria-valuemin={column.columnDef.minSize ?? 80} aria-valuemax={column.columnDef.maxSize ?? 560} aria-valuenow={header.getSize()} onDoubleClick={() => column.resetSize()} onMouseDown={header.getResizeHandler()} onTouchStart={header.getResizeHandler()} /> : null}
+                    {column.getCanPin() ? <button type="button" className="table-column-pin" aria-label={`${column.getIsPinned() ? "取消冻结" : "冻结"} ${String(column.columnDef.header)} 列`} title={column.getIsPinned() ? "取消冻结列" : "冻结到左侧"} onClick={() => toggleFileColumnPin(column.id)}>{column.getIsPinned() ? <PinOff /> : <Pin />}</button> : null}
+                    {hasTableRows && column.getCanResize() ? <div className={`column-resizer${column.getIsResizing() ? " is-resizing" : ""}`} role="separator" tabIndex={0} title="拖动调整列宽，双击恢复默认" aria-label={`调整 ${String(column.columnDef.header)} 列宽`} aria-orientation="vertical" aria-valuemin={column.columnDef.minSize ?? 80} aria-valuemax={column.columnDef.maxSize ?? 560} aria-valuenow={header.getSize()} onDoubleClick={() => column.resetSize()} onMouseDown={header.getResizeHandler()} onTouchStart={header.getResizeHandler()} onKeyDown={(event) => {
+                      const delta = event.key === "ArrowLeft" ? -8 : event.key === "ArrowRight" ? 8 : 0;
+                      if (!delta) return;
+                      event.preventDefault();
+                      const minSize = column.columnDef.minSize ?? 80;
+                      const maxSize = column.columnDef.maxSize ?? 560;
+                      setColumnSizing((current) => ({ ...current, [column.id]: Math.min(maxSize, Math.max(minSize, header.getSize() + delta)) }));
+                    }} /> : null}
                   </th>;
                 })}</tr></thead>
                 <tbody style={shouldVirtualizeRows ? { height: rowVirtualizer.getTotalSize(), position: "relative" } : undefined}>
-                  {renderedTableRows.length === 0 ? <tr><td colSpan={fileTable.getVisibleLeafColumns().length}><div className="cyber-empty"><div className="cyber-empty-visual" aria-hidden="true"><Inbox /></div><strong>暂无文件</strong><span>导入后将在这里显示</span></div></td></tr> : null}
                   {renderedTableRows.map(({ row, virtualRow }) => {
                     const path = row.original;
                     const analysis = analyses[path];
@@ -1643,27 +1735,30 @@ export function App(): React.JSX.Element {
                     const status = fileStatusByPath[path];
                     return <Fragment key={path}>
                       <tr ref={virtualRow ? rowVirtualizer.measureElement : undefined} data-index={virtualRow?.index} className={selectedSet.has(path) ? "is-selected" : ""} style={virtualRow ? { position: "absolute", transform: `translateY(${virtualRow.start}px)`, width: "100%", display: "table", tableLayout: "fixed" } : undefined}>
-                        {row.getVisibleCells().map((cell) => {
-                          if (cell.column.id === "select") return <td key={cell.id} className="checkbox-column"><Checkbox checked={selectedSet.has(path)} onCheckedChange={() => toggleSelected(path)} aria-label={"选择 " + fileNameFromPath(path)} /></td>;
-                          if (cell.column.id === "index") return <td key={cell.id} className="index-column">{files.indexOf(path) + 1}</td>;
-                           if (cell.column.id === "fileName") return <td key={cell.id} className="file-cell"><FileSpreadsheet /><button type="button" onClick={() => void openSourceDirectory(path)} title={path}>{fileNameFromPath(path)}</button></td>;
-                           if (cell.column.id === "orderSheet") return <td key={cell.id}>{currentMapping?.orderSheet ?? "—"}</td>;
-                           if (cell.column.id === "pricingSheet") return <td key={cell.id}>{currentMapping?.pricingSheet ?? "—"}</td>;
-                           if (cell.column.id === "coverage") { const value = result?.coverage ?? analysis?.coverage; return <td key={cell.id}>{value === undefined ? "—" : <div className="coverage-cell"><Progress value={value * 100} /><span>{formatCoverage(value)}</span></div>}</td>; }
-                           if (cell.column.id === "importMode") return <td key={cell.id}>{importModes[path] === "folder" ? "文件夹" : importModes[path] === "config" ? "配置目录" : "文件"}</td>;
-                           if (cell.column.id === "status") return <td key={cell.id}><span className={"cyber-status is-" + statusMeta[status].tone}><i />{statusMeta[status].label}</span>{result?.status === "completed" ? <small>{result.matchedRows ?? 0}/{result.totalRows ?? 0} 行</small> : null}</td>;
-                           if (cell.column.id === "createdAt") return <td key={cell.id}>{importedAt[path] ?? "—"}</td>;
-                           if (cell.column.id === "evidence") return <td key={cell.id}>{analysis?.automationDecision.evaluatedRows ?? 0} 行</td>;
-                           if (cell.column.id === "issue") { const issue = result?.status === "completed" && (result.exceptionRows ?? 0) > 0 ? `${result.exceptionRows} 行存在异常` : result?.message ?? analysis?.automationDecision.reasons[0] ?? analysis?.issues[0] ?? "—"; return <td key={cell.id} className="issue-cell" title={issue}>{issue}</td>; }
-                           if (cell.column.id === "rows") return <td key={cell.id}>{result ? `${result.matchedRows ?? 0}/${result.totalRows ?? 0}` : "—"}</td>;
-                           if (cell.column.id === "completedAt") return <td key={cell.id}>{result?.completedAt ?? importedAt[path] ?? "—"}</td>;
-                           return <td key={cell.id} className="action-column"><button type="button" onClick={() => setDetailPath(path)}>详情</button>{result?.outputPath ? <button type="button" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}{activeTab === "pending" ? <button type="button" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X /></button> : null}</td>;
+                        {[...row.getLeftVisibleCells(), ...row.getCenterVisibleCells(), ...row.getRightVisibleCells()].map((cell) => {
+                          const pinnedClass = cell.column.getIsPinned() ? " is-pinned-column" : "";
+                          const pinnedStyle = filePinnedStyle(cell.column);
+                          if (cell.column.id === "select") return <td key={cell.id} className={`checkbox-column${pinnedClass}`} style={pinnedStyle}><Checkbox checked={selectedSet.has(path)} onCheckedChange={() => toggleSelected(path)} aria-label={"选择 " + fileNameFromPath(path)} /></td>;
+                          if (cell.column.id === "index") return <td key={cell.id} className={`index-column${pinnedClass}`} style={pinnedStyle}>{files.indexOf(path) + 1}</td>;
+                           if (cell.column.id === "fileName") return <td key={cell.id} className={`file-cell${pinnedClass}`} style={pinnedStyle}><FileSpreadsheet /><button type="button" onClick={() => void openSourceDirectory(path)} title={path}>{fileNameFromPath(path)}</button></td>;
+                           if (cell.column.id === "orderSheet") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{currentMapping?.orderSheet ?? "—"}</td>;
+                           if (cell.column.id === "pricingSheet") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{currentMapping?.pricingSheet ?? "—"}</td>;
+                           if (cell.column.id === "coverage") { const value = result?.coverage ?? analysis?.coverage; return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{value === undefined ? "—" : <div className="coverage-cell"><Progress value={value * 100} /><span>{formatCoverage(value)}</span></div>}</td>; }
+                           if (cell.column.id === "importMode") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{importModes[path] === "folder" ? "文件夹" : importModes[path] === "config" ? "配置目录" : "文件"}</td>;
+                           if (cell.column.id === "status") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}><span className={"cyber-status is-" + statusMeta[status].tone}><i />{statusMeta[status].label}</span>{result?.status === "completed" ? <small>{result.matchedRows ?? 0}/{result.totalRows ?? 0} 行</small> : null}</td>;
+                           if (cell.column.id === "createdAt") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{importedAt[path] ?? "—"}</td>;
+                           if (cell.column.id === "evidence") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{analysis?.automationDecision.evaluatedRows ?? 0} 行</td>;
+                           if (cell.column.id === "issue") { const issue = result?.status === "completed" && (result.exceptionRows ?? 0) > 0 ? `${result.exceptionRows} 行存在异常` : result?.message ?? analysis?.automationDecision.reasons[0] ?? analysis?.issues[0] ?? "—"; return <td key={cell.id} className={`issue-cell${pinnedClass}`} style={pinnedStyle} title={issue}>{issue}</td>; }
+                           if (cell.column.id === "rows") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{result ? `${result.matchedRows ?? 0}/${result.totalRows ?? 0}` : "—"}</td>;
+                           if (cell.column.id === "completedAt") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{result?.completedAt ?? importedAt[path] ?? "—"}</td>;
+                           return <td key={cell.id} className={`action-column${pinnedClass}`} style={pinnedStyle}><button type="button" onClick={() => setDetailPath(path)}>详情</button>{result?.outputPath ? <button type="button" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}{activeTab === "pending" ? <button type="button" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X /></button> : null}</td>;
                         })}
                       </tr>
                     </Fragment>;
                   })}
                 </tbody>
               </table>
+              {!hasTableRows ? <div className="cyber-empty cyber-empty-overlay"><div className="cyber-empty-visual" aria-hidden="true"><Inbox /></div><strong>暂无文件</strong><span>导入后将在这里显示</span></div> : null}
             </div>
 
             <footer className="cyber-pagination">

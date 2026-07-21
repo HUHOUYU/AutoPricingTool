@@ -8,6 +8,7 @@ export type ExcelPreviewSheetRole = "order" | "pricing";
 export type ExcelPreviewCandidate = {
   name: string;
   roles: ExcelPreviewSheetRole[];
+  scores?: Partial<Record<ExcelPreviewSheetRole, number>>;
 };
 
 export type ExcelPreviewSheet = {
@@ -39,15 +40,16 @@ export type ExcelPreviewWorkerResponse =
   | { requestId: number; ok: false; message: string };
 
 function normalizeCandidates(candidates: ExcelPreviewCandidate[]): ExcelPreviewCandidate[] {
-  const merged = new Map<string, Set<ExcelPreviewSheetRole>>();
+  const merged = new Map<string, { roles: Set<ExcelPreviewSheetRole>; scores: Partial<Record<ExcelPreviewSheetRole, number>> }>();
   for (const candidate of candidates) {
     const name = candidate.name.trim();
     if (!name) continue;
-    const roles = merged.get(name) ?? new Set<ExcelPreviewSheetRole>();
-    candidate.roles.forEach((role) => roles.add(role));
-    merged.set(name, roles);
+    const entry = merged.get(name) ?? { roles: new Set<ExcelPreviewSheetRole>(), scores: {} };
+    candidate.roles.forEach((role) => entry.roles.add(role));
+    Object.assign(entry.scores, candidate.scores);
+    merged.set(name, entry);
   }
-  return Array.from(merged, ([name, roles]) => ({ name, roles: Array.from(roles) }));
+  return Array.from(merged, ([name, entry]) => ({ name, roles: Array.from(entry.roles), scores: entry.scores }));
 }
 
 function stringValue(value: unknown): string {

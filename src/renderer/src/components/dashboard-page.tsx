@@ -30,7 +30,7 @@ const statusLabels: Record<TaskHistorySummary["recent"][number]["status"], strin
 
 export function DashboardPage({ api, dark, currentFileCount, outputDir, onNewProcessing, onOpenFiles, onOpenConfig }: DashboardPageProps): React.JSX.Element {
   const [summary, setSummary] = useState(emptySummary);
-  const [configHealth, setConfigHealth] = useState<{ healthy: boolean; label: string; path: string }>({ healthy: false, label: "正在检查", path: "" });
+  const [configHealth, setConfigHealth] = useState<{ healthy: boolean; label: string }>({ healthy: false, label: "正在检查" });
 
   useEffect(() => {
     let cancelled = false;
@@ -39,9 +39,9 @@ export function DashboardPage({ api, dark, currentFileCount, outputDir, onNewPro
       const validation = await api.validateConfigDocument(document.content);
       if (cancelled) return;
       setSummary(history);
-      setConfigHealth({ healthy: validation.valid, label: validation.valid ? "配置可用" : `${validation.issues.length} 项需要处理`, path: document.path });
+      setConfigHealth({ healthy: validation.valid, label: validation.valid ? "配置可用" : `${validation.issues.length} 项需要处理` });
     }).catch(() => {
-      if (!cancelled) setConfigHealth({ healthy: false, label: "配置读取失败", path: "" });
+      if (!cancelled) setConfigHealth({ healthy: false, label: "配置读取失败" });
     });
     return () => { cancelled = true; };
   }, [api]);
@@ -71,7 +71,7 @@ export function DashboardPage({ api, dark, currentFileCount, outputDir, onNewPro
         </article>
         <article className="dashboard-card dashboard-health">
           <header><div><span>运行准备</span><h2>配置健康状态</h2></div></header>
-          <div className={configHealth.healthy ? "is-healthy" : "is-warning"}>{configHealth.healthy ? <CheckCircle2 /> : <AlertTriangle />}<div><strong>{configHealth.label}</strong><span title={configHealth.path}>{configHealth.path || "尚未加载配置"}</span></div></div>
+          <div className={configHealth.healthy ? "is-healthy" : "is-warning"}>{configHealth.healthy ? <CheckCircle2 /> : <AlertTriangle />}<div><strong>{configHealth.label}</strong><span>{configHealth.healthy ? "规则文件已加载并通过校验" : "进入配置检查查看具体问题"}</span></div></div>
           <Button variant="outline" onClick={onOpenConfig}><Settings2 />配置检查<ArrowRight /></Button>
         </article>
       </section>

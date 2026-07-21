@@ -152,8 +152,8 @@ export function MappingEditor({
       </div>
 
       <div className="mapping-sheet-switches">
-        <label>订单 Sheet<select aria-label="订单 Sheet" value={mapping.orderSheet} onChange={(event) => onSheetChange(event.currentTarget.value, mapping.pricingSheet, event.currentTarget.value)}>{analysis.orderSheetCandidates.map((candidate) => <option key={candidate.sheetName}>{candidate.sheetName}</option>)}</select></label>
-        <label>核价 Sheet<select aria-label="核价 Sheet" value={mapping.pricingSheet} onChange={(event) => onSheetChange(mapping.orderSheet, event.currentTarget.value, event.currentTarget.value)}>{analysis.pricingSheetCandidates.map((candidate) => <option key={candidate.sheetName}>{candidate.sheetName}</option>)}</select></label>
+        <label>订单 Sheet<select aria-label="订单 Sheet" value={mapping.orderSheet} onChange={(event) => onSheetChange(event.currentTarget.value, mapping.pricingSheet, event.currentTarget.value)}>{analysis.orderSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.score.toFixed(1)} 分</option>)}</select></label>
+        <label>核价 Sheet<select aria-label="核价 Sheet" value={mapping.pricingSheet} onChange={(event) => onSheetChange(mapping.orderSheet, event.currentTarget.value, event.currentTarget.value)}>{analysis.pricingSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.score.toFixed(1)} 分</option>)}</select></label>
       </div>
 
       <details open={activeSheetName === mapping.orderSheet} onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.orderSheet); }}>

@@ -58,6 +58,7 @@ function createAnalysis(path: string): PriceAnalysisFile {
     }],
     suggestedMapping: mapping,
     coverage: 1,
+    matchedOrderRows: [2],
     requiresConfirmation: false,
     automationDecision: {
       status: "eligible",
@@ -183,11 +184,14 @@ describe("AutoPricingTool cyber workstation", () => {
     await waitFor(() => expect(api.openPath).toHaveBeenCalledWith("C:\\orders"));
   });
 
-  it("resizes data and action columns by dragging visible header handles", () => {
+  it("resizes data columns only when rows are available", async () => {
     const api = createDesktopAPI();
     installAPI(api);
     render(<App />);
     openFileProcessing();
+    expect(screen.queryByRole("separator", { name: "调整 原始文件名 列宽" })).not.toBeInTheDocument();
+    dropFiles([new File(["xlsx"], "order.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
 
     const resizer = screen.getByRole("separator", { name: "调整 原始文件名 列宽" });
     const header = resizer.closest("th")!;
@@ -199,15 +203,44 @@ describe("AutoPricingTool cyber workstation", () => {
     const table = header.closest("table")!;
     expect(table.querySelectorAll("col")[2]).toHaveStyle({ width: header.style.width });
 
-    const actionResizer = screen.getByRole("separator", { name: "调整 操作 列宽" });
-    const actionHeader = actionResizer.closest("th")!;
-    const initialActionWidth = Number.parseFloat(actionHeader.style.width);
-    fireEvent.mouseDown(actionResizer, { clientX: 900 });
-    fireEvent.mouseMove(document, { clientX: 940 });
-    fireEvent.mouseUp(document);
-    expect(Number.parseFloat(actionHeader.style.width)).toBeGreaterThan(initialActionWidth);
-    expect(table.querySelector("col:last-child")).toHaveStyle({ width: actionHeader.style.width });
+    expect(screen.queryByRole("separator", { name: "调整 操作 列宽" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("separator", { name: "调整 序号 列宽" })).not.toBeInTheDocument();
     expect(table.style.getPropertyValue("--cyber-table-width")).toMatch(/px$/);
+  });
+
+  it("pins file table columns by pin order and restores their original order", async () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    const { container } = render(<App />);
+    openFileProcessing();
+    dropFiles([new File(["xlsx"], "pinned.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("pinned.xlsx")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "冻结 导入方式 列" }));
+    fireEvent.click(screen.getByRole("button", { name: "冻结 原始文件名 列" }));
+    const table = container.querySelector(".cyber-file-table")!;
+    let headers = Array.from(table.querySelectorAll("thead th"));
+    expect(headers[0]).toHaveTextContent("导入方式");
+    expect(headers[1]).toHaveTextContent("原始文件名");
+    expect(headers[0]).toHaveStyle({ left: "0px", position: "sticky" });
+    expect(headers[1]).toHaveStyle({ left: "180px", position: "sticky" });
+
+    const importModeResizer = screen.getByRole("separator", { name: "调整 导入方式 列宽" });
+    fireEvent.mouseDown(importModeResizer, { clientX: 300 });
+    fireEvent.mouseMove(document, { clientX: 340 });
+    fireEvent.mouseUp(document);
+    await waitFor(() => expect(headers[1]).toHaveStyle({ left: "220px" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "取消冻结 导入方式 列" }));
+    headers = Array.from(table.querySelectorAll("thead th"));
+    expect(headers[0]).toHaveTextContent("原始文件名");
+    expect(headers[1]).toHaveClass("checkbox-column");
+    fireEvent.click(screen.getByRole("button", { name: "取消冻结 原始文件名 列" }));
+    headers = Array.from(table.querySelectorAll("thead th"));
+    expect(headers[0]).toHaveClass("checkbox-column");
+    expect(headers[1]).toHaveTextContent("序号");
+    expect(headers[2]).toHaveTextContent("原始文件名");
+    expect(headers[3]).toHaveTextContent("导入方式");
   });
 
   it("switches between validated single-file and folder import modes", async () => {
@@ -264,6 +297,20 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByText("请先导入 Excel 文件")).toBeInTheDocument();
     expect(await screen.findByText("当前没有运行中的任务")).toBeInTheDocument();
     expect(await screen.findByText("当前没有可停止的任务")).toBeInTheDocument();
+  });
+
+  it("centers the empty state independently from the table columns", () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    const { container } = render(<App />);
+    openFileProcessing();
+
+    const scroll = container.querySelector(".cyber-table-scroll");
+    expect(scroll).toHaveClass("is-empty");
+    expect(scroll?.querySelector("thead .checkbox-column")).toHaveStyle({ width: "38px" });
+    expect(scroll?.querySelector("thead .checkbox-column > button")).toHaveClass("size-4");
+    expect(scroll?.querySelector(".cyber-empty-overlay")).toBeInTheDocument();
+    expect(scroll?.querySelector("tbody .cyber-empty")).not.toBeInTheDocument();
   });
 
   it("resets the current batch while preserving the active configuration", async () => {
@@ -518,7 +565,14 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
     const analysis = createAnalysis("C:\\orders\\order.xlsx");
     analysis.requiresConfirmation = true;
-    analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["候选差距不足"] };
+    analysis.automationDecision = {
+      ...analysis.automationDecision,
+      status: "confirm",
+      reasons: [
+        "候选差距不足",
+        "同一 Sheet 组合下，字段列候选差距不足：最优 [SKU F（SKU） / 数量 G（产品总数）]；次优 [SKU D（SKU） / 数量 E（产品总数）、SKU F（SKU） / 数量 G（产品总数）]",
+      ],
+    };
     await act(async () => {
       api.emit({ type: "price-analysis", file: analysis });
       api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
@@ -527,6 +581,11 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "详情" }));
     expect(await screen.findByRole("dialog", { name: "文件处理详情" })).toBeInTheDocument();
     expect(screen.getAllByText("候选差距不足")).toHaveLength(2);
+    expect(screen.getByText("同一 Sheet 组合下，字段列候选差距不足")).toBeInTheDocument();
+    expect(screen.getByText("最优").closest(".decision-candidate")).toHaveClass("is-best");
+    expect(screen.getByText("次优").closest(".decision-candidate")).toHaveClass("is-alternate");
+    expect(screen.getAllByText("SKU F（SKU）", { selector: ".decision-mapping-token.is-sku" })).toHaveLength(2);
+    expect(screen.getByText("数量 E（产品总数）", { selector: ".decision-mapping-token.is-quantity" })).toBeInTheDocument();
     expect(await screen.findByText("无法预览工作簿")).toBeInTheDocument();
     expect(screen.getByText("文件超过 120MB，无法在应用内预览，请打开原始文件查看")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "打开原始文件" }));
@@ -568,6 +627,33 @@ describe("AutoPricingTool cyber workstation", () => {
 
     expect(await screen.findByText("订单-数据")).toBeInTheDocument();
     expect(FakeExcelPreviewWorker.instances[0].request?.candidates.map((candidate) => candidate.name)).toEqual(["订单", "核价", "报价二"]);
+    expect(screen.getByText("订单 90.0 分")).toBeInTheDocument();
+    expect(screen.getByText("核价 90.0 分")).toBeInTheDocument();
+    expect(screen.getByText("核价 80.0 分")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "冻结 C 列" }));
+    fireEvent.click(screen.getByRole("button", { name: "冻结 A 列" }));
+    const previewColumnOrder = (): Array<string | null> => Array.from(document.querySelectorAll(".excel-preview-header > [data-column-label]")).map((element) => element.getAttribute("data-column-label"));
+    expect(previewColumnOrder().slice(0, 4)).toEqual(["C", "A", "B", "D"]);
+    let pinnedAHeader = document.querySelector('.excel-preview-header > [data-column-label="A"]');
+    expect(document.querySelector('.excel-preview-header > [data-column-label="C"]')).toHaveStyle({ left: "52px" });
+    expect(pinnedAHeader).toHaveStyle({ left: "172px" });
+    const orderColumnResizer = screen.getByRole("separator", { name: "调整 C 列宽" });
+    expect(orderColumnResizer).toHaveAttribute("aria-valuenow", "120");
+    fireEvent.pointerDown(orderColumnResizer, { button: 0, clientX: 300 });
+    fireEvent.pointerMove(window, { clientX: 372 });
+    fireEvent.pointerUp(window);
+    await waitFor(() => expect(screen.getByRole("separator", { name: "调整 C 列宽" })).toHaveAttribute("aria-valuenow", "192"));
+    pinnedAHeader = document.querySelector('.excel-preview-header > [data-column-label="A"]');
+    expect(pinnedAHeader).toHaveStyle({ left: "244px" });
+    fireEvent.click(screen.getByText("核价", { selector: ".excel-preview-tabs button strong" }));
+    expect(await screen.findByText("核价-数据")).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "调整 A 列宽" })).toHaveAttribute("aria-valuenow", "120");
+    fireEvent.click(screen.getByText("订单", { selector: ".excel-preview-tabs button strong" }));
+    expect(await screen.findByText("订单-数据")).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "调整 C 列宽" })).toHaveAttribute("aria-valuenow", "192");
+    expect(previewColumnOrder().slice(0, 4)).toEqual(["C", "A", "B", "D"]);
+    fireEvent.click(screen.getByRole("button", { name: "取消冻结 C 列" }));
+    expect(previewColumnOrder().slice(0, 4)).toEqual(["A", "B", "C", "D"]);
     fireEvent.click(screen.getByText("核价", { selector: ".excel-preview-tabs button strong" }));
     expect(await screen.findByText("核价-数据")).toBeInTheDocument();
     const pricingSheetSelect = screen.getAllByLabelText("核价 Sheet").find((element) => element.tagName === "SELECT");
@@ -600,6 +686,11 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "详情" }));
     await screen.findByText("订单-数据");
 
+    expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
+    fireEvent.click(screen.getByText("核价", { selector: ".excel-preview-tabs button strong" }));
+    expect(document.querySelector(".excel-preview-row-number.is-matched-row")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("订单", { selector: ".excel-preview-tabs button strong" }));
+    expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
     expect(document.querySelectorAll(".excel-preview-header .is-sku-column").length).toBeGreaterThan(0);
     expect(document.querySelectorAll(".excel-preview-header .is-price-column").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("冻结表头，第 1 行")).toHaveTextContent("订单号");
@@ -630,9 +721,10 @@ describe("AutoPricingTool cyber workstation", () => {
     }
     expect(request.mapping.skuQtyPairs[0].skuColumn).toBe(3);
 
-    await act(async () => api.emit({ type: "price-validation", inputPath: request.inputPath, requestVersion: request.requestVersion, evaluatedRows: 1, matchedRows: 1, coverage: 1, errors: [], warnings: [] }));
+    await act(async () => api.emit({ type: "price-validation", inputPath: request.inputPath, requestVersion: request.requestVersion, evaluatedRows: 1, matchedRows: 1, coverage: 1, matchedOrderRows: [2], errors: [], warnings: [] }));
     expect(await screen.findByText(/试算 1\/1 行/)).toBeInTheDocument();
     expect(confirm).toBeEnabled();
+    expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
     await act(async () => api.emit({ type: "price-validation", inputPath: request.inputPath, requestVersion: 0, evaluatedRows: 1, matchedRows: 0, coverage: 0, errors: [], warnings: ["过期结果"] }));
     expect(screen.queryByText("过期结果")).not.toBeInTheDocument();
   });
@@ -712,6 +804,8 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByText("12")).toBeInTheDocument();
     expect(screen.getByText("97%")).toBeInTheDocument();
     expect(await screen.findByText("配置可用")).toBeInTheDocument();
+    expect(screen.getByText("规则文件已加载并通过校验")).toBeInTheDocument();
+    expect(screen.queryByText("C:\\config.json")).not.toBeInTheDocument();
   });
 
   it("synchronizes grouped config fields with JSON while preserving unknown fields", async () => {
