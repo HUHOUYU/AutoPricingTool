@@ -12,7 +12,7 @@ self.onmessage = (event: MessageEvent<ExcelPreviewWorkerRequest>): void => {
     response = {
       requestId: request.requestId,
       ok: true,
-      workbook: parseExcelPreview(request.buffer, request.candidates),
+      workbook: parseExcelPreview(request.buffer, request.candidates, request.loadAll ? 0 : undefined, request.loadAll ? 0 : undefined),
     };
   } catch (error) {
     response = {

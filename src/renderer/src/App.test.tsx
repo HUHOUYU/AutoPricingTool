@@ -735,9 +735,13 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "详情" }));
 
     const dialog = await screen.findByRole("dialog", { name: "文件处理详情" });
+    expect(screen.queryByLabelText("处理时间线")).not.toBeInTheDocument();
     const drawerContent = dialog.querySelector(".issue-drawer-content");
     expect(drawerContent?.firstElementChild).toHaveClass("excel-preview-panel");
     expect(drawerContent?.lastElementChild).toHaveClass("issue-detail-column");
+    const mappingEditor = screen.getByLabelText("字段映射编辑器");
+    expect(mappingEditor.firstElementChild).toHaveClass("mapping-editor-scroll");
+    expect(mappingEditor.lastElementChild).toHaveClass("mapping-editor-footer");
     const separator = screen.getByRole("separator", { name: "调整详情抽屉宽度" });
     const initialWidth = Number.parseFloat(dialog.style.width);
     expect(initialWidth).toBe(Math.min(Math.round(window.innerWidth * 0.9), window.innerWidth - 72));
@@ -746,12 +750,58 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.pointerDown(separator, { clientX: 500 });
     fireEvent.pointerMove(window, { clientX: 495 });
     expect(Number.parseFloat(dialog.style.width)).toBe(initialWidth + 29);
+    fireEvent.pointerUp(window);
+
+    const contentSeparator = screen.getByRole("separator", { name: "调整预览与字段映射宽度" });
+    expect(contentSeparator).toHaveAttribute("aria-valuenow", "320");
+    fireEvent.keyDown(contentSeparator, { key: "ArrowLeft" });
+    expect(contentSeparator).toHaveAttribute("aria-valuenow", "336");
+    fireEvent.pointerDown(contentSeparator, { clientX: 500 });
+    fireEvent.pointerMove(window, { clientX: 490 });
+    expect(contentSeparator).toHaveAttribute("aria-valuenow", "346");
+    fireEvent.pointerUp(window);
 
     expect(await screen.findByText("订单-数据")).toBeInTheDocument();
     expect(FakeExcelPreviewWorker.instances[0].request?.candidates.map((candidate) => candidate.name)).toEqual(["订单", "核价", "报价二"]);
     expect(screen.getByText("订单 90.0 分")).toBeInTheDocument();
     expect(screen.getByText("核价 90.0 分")).toBeInTheDocument();
     expect(screen.getByText("核价 80.0 分")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "f", ctrlKey: true });
+    const previewSearch = screen.getByRole("searchbox", { name: "搜索表格数据" });
+    await waitFor(() => expect(previewSearch).toHaveFocus());
+    fireEvent.change(previewSearch, { target: { value: "订单" } });
+    await waitFor(() => expect(screen.getByText("1/3")).toBeInTheDocument());
+    expect(dialog.querySelector(".excel-preview-rows .is-search-match")).toHaveTextContent("订单号");
+    const previewScroll = dialog.querySelector(".excel-preview-scroll") as HTMLDivElement;
+    previewScroll.scrollTop = 123;
+    previewScroll.scrollLeft = 57;
+    fireEvent.scroll(previewScroll);
+    fireEvent.pointerDown(contentSeparator, { clientX: 500 });
+    fireEvent.pointerMove(window, { clientX: 505 });
+    fireEvent.pointerUp(window);
+    expect(previewScroll.scrollTop).toBe(123);
+    expect(previewScroll.scrollLeft).toBe(57);
+    fireEvent.keyDown(previewSearch, { key: "Enter" });
+    expect(screen.getByText("2/3")).toBeInTheDocument();
+    expect(dialog.querySelector(".excel-preview-rows .is-search-match")).toHaveTextContent("平台订单号");
+    fireEvent.keyDown(previewSearch, { key: "ArrowDown" });
+    expect(screen.getByText("3/3")).toBeInTheDocument();
+    expect(dialog.querySelector(".excel-preview-rows .is-search-match")).toHaveTextContent("订单-数据");
+    fireEvent.keyDown(previewSearch, { key: "ArrowUp" });
+    expect(screen.getByText("2/3")).toBeInTheDocument();
+    expect(dialog.querySelector(".excel-preview-rows .is-search-match")).toHaveTextContent("平台订单号");
+    fireEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载全部数据" }));
+    await waitFor(() => expect(FakeExcelPreviewWorker.instances).toHaveLength(2));
+    expect(FakeExcelPreviewWorker.instances[1].request).toEqual(expect.objectContaining({
+      loadAll: true,
+      candidates: expect.arrayContaining([
+        expect.objectContaining({ name: "订单" }),
+        expect.objectContaining({ name: "核价" }),
+      ]),
+    }));
+    expect(FakeExcelPreviewWorker.instances[1].request?.candidates.map((candidate) => candidate.name)).not.toContain("报价二");
+    expect(await screen.findByText("已加载全部")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "冻结 C 列" }));
     fireEvent.click(screen.getByRole("button", { name: "冻结 A 列" }));
     const previewColumnOrder = (): Array<string | null> => Array.from(document.querySelectorAll(".excel-preview-header > [data-column-label]")).map((element) => element.getAttribute("data-column-label"));
@@ -813,15 +863,15 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(document.querySelector(".excel-preview-row-number.is-matched-row")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("订单", { selector: ".excel-preview-tabs button strong" }));
     expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
-    expect(document.querySelectorAll(".excel-preview-header .is-sku-column").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll(".excel-preview-header .is-sku-qty-column").length).toBeGreaterThan(0);
     expect(document.querySelectorAll(".excel-preview-header .is-price-column").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("冻结表头，第 1 行")).toHaveTextContent("订单号");
-    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("SKU 字段价格字段常规匹配字段");
+    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("SKU/数量 1价格字段常规匹配字段");
     expect(screen.queryByText(/已显示全部数据范围/)).not.toBeInTheDocument();
     expect(document.querySelector(".cyber-footer")).not.toBeInTheDocument();
     const skuSelect = screen.getByLabelText("SKU 1");
     await waitFor(() => expect((skuSelect as HTMLSelectElement).options.length).toBeGreaterThan(1));
-    fireEvent.click(screen.getByRole("button", { name: /选择SKU 1/ }));
+    fireEvent.click(screen.getByText("SKU 1", { selector: ".mapping-field > span" }));
     await waitFor(() => expect(skuSelect.closest(".mapping-field")).toHaveClass("is-active"));
     expect(screen.getByText("正在选择“SKU 1”")).toBeInTheDocument();
     expect(screen.getByText("点击目标列中的任意单元格")).toBeInTheDocument();
@@ -847,8 +897,55 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByText(/试算 1\/1 行/)).toBeInTheDocument();
     expect(confirm).toBeEnabled();
     expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
+    const callsBeforeManualValidation = vi.mocked(api.validatePriceMapping).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "重新试算" }));
+    await waitFor(() => expect(api.validatePriceMapping).toHaveBeenCalledTimes(callsBeforeManualValidation + 1));
+    const manualRequest = vi.mocked(api.validatePriceMapping).mock.calls.at(-1)![0];
+    expect(manualRequest.requestVersion).toBeGreaterThan(request.requestVersion);
+    expect(screen.getByRole("button", { name: "正在试算" })).toBeDisabled();
+    await act(async () => api.emit({ type: "error", message: "当前已有任务在运行" }));
+    expect(await screen.findByText("试算请求失败：当前已有任务在运行")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新试算" })).toBeEnabled();
     await act(async () => api.emit({ type: "price-validation", inputPath: request.inputPath, requestVersion: 0, evaluatedRows: 1, matchedRows: 0, coverage: 0, errors: [], warnings: ["过期结果"] }));
     expect(screen.queryByText("过期结果")).not.toBeInTheDocument();
+  });
+
+  it("uses one shade for each SKU and quantity pair and different shades between pairs", async () => {
+    vi.stubGlobal("Worker", FakeExcelPreviewWorker);
+    const api = createDesktopAPI();
+    vi.mocked(api.readExcelPreviewFile).mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), size: 3, modifiedAt: 1 });
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    dropFiles([new File(["xlsx"], "order.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
+    const analysis = createAnalysis("C:\\orders\\order.xlsx");
+    const pairs = [
+      { skuColumn: 8, qtyColumn: 9, skuHeader: "SKU 1", qtyHeader: "Qty 1" },
+      { skuColumn: 3, qtyColumn: 10, skuHeader: "SKU 2", qtyHeader: "Qty 2" },
+    ];
+    analysis.suggestedMapping!.skuQtyPairs = pairs;
+    analysis.orderSheetCandidates[0].skuQtyPairs = pairs;
+    analysis.requiresConfirmation = true;
+    analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: analysis });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "待确认1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "详情" }));
+    await screen.findByText("订单-数据");
+
+    const column = (label: string): HTMLElement => document.querySelector(`.excel-preview-header > [data-column-label="${label}"]`)!;
+    const shade = (label: string): string => column(label).style.getPropertyValue("--sku-pair-strength");
+    expect(column("H")).toHaveClass("is-sku-qty-column");
+    expect(column("I")).toHaveClass("is-sku-qty-column");
+    expect(column("C")).toHaveClass("is-sku-qty-column");
+    expect(column("J")).toHaveClass("is-sku-qty-column");
+    expect(shade("H")).toBe(shade("I"));
+    expect(shade("C")).toBe(shade("J"));
+    expect(shade("H")).not.toBe(shade("C"));
+    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("SKU/数量 1SKU/数量 2");
   });
 
   it("classifies generated results with issue rows as exceptions", async () => {

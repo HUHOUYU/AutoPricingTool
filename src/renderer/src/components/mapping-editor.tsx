@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { PriceAnalysisFile, PriceCheckMapping, PriceMappingValidation } from "../../../preload";
 import type { ExcelPreviewSheet, ExcelPreviewWorkbook } from "../lib/excel-preview";
 import { Button } from "./ui/button";
@@ -38,6 +38,7 @@ type MappingEditorProps = {
   onColumnChange: (target: MappingFieldTarget, column: number | null, header: string) => void;
   onSheetChange: (orderSheet: string, pricingSheet: string, previewSheet: string) => void;
   onPreviewSheetChange: (sheetName: string) => void;
+  onRevalidate: () => void;
   onConfirm: () => void;
 };
 
@@ -94,7 +95,7 @@ function FieldSelect({
 }): React.JSX.Element {
   const selected = options.find((option) => option.value === value);
   return (
-    <div className={`mapping-field${activeTarget === target ? " is-active" : ""}`}>
+    <div className={`mapping-field${activeTarget === target ? " is-active" : ""}`} onClick={() => onActiveTargetChange(target)}>
       <span>{label}<em>{activeTarget === target ? "等待选择" : ""}</em></span>
       <div className="mapping-field-control">
         <button type="button" aria-label={`选择${label}，当前${selected?.label ?? (optional ? "不使用" : "未选择")}`} onClick={() => onActiveTargetChange(target)}>
@@ -130,6 +131,7 @@ export function MappingEditor({
   onColumnChange,
   onSheetChange,
   onPreviewSheetChange,
+  onRevalidate,
   onConfirm,
 }: MappingEditorProps): React.JSX.Element {
   const orderSheet = sheetFor(workbook, mapping.orderSheet);
@@ -144,11 +146,12 @@ export function MappingEditor({
 
   return (
     <section className="mapping-editor" aria-label="字段映射编辑器">
+      <div className="mapping-editor-scroll">
       <div className="mapping-editor-heading">
         <div><h3>字段映射</h3><small>先选择字段，再点击左侧表格中的任意单元格</small></div>
-        <span className={`mapping-validation-state is-${validation.status}`}>
-          {validation.status === "validating" ? "正在重新试算" : validation.status === "stale" ? "映射待校验" : validation.status === "ready" ? "试算已更新" : "等待编辑"}
-        </span>
+        <button type="button" className={`mapping-validation-state is-${validation.status}`} title="字段变更后会自动试算，也可以点击立即试算" disabled={validation.status === "validating"} onClick={onRevalidate}>
+          <RefreshCw />{validation.status === "validating" ? "正在试算" : validation.status === "stale" ? "立即试算" : "重新试算"}
+        </button>
       </div>
 
       <div className="mapping-sheet-switches">
@@ -197,9 +200,12 @@ export function MappingEditor({
           <Button type="button" variant="outline" size="sm" onClick={() => update({ quantityTierColumns: [...mapping.quantityTierColumns, { quantity: 0, column: 0, header: "" }] })}><Plus />添加数量档位</Button>
         </div>
       </details>
+      </div>
 
-      {validation.result ? <div className={`mapping-validation-result${validationErrors.length ? " is-error" : validation.result.requestVersion > 0 && validation.result.warnings.length ? " is-warning" : " is-success"}`}><strong>试算 {validation.result.matchedRows}/{validation.result.evaluatedRows} 行 · {(validation.result.coverage * 100).toFixed(1)}%</strong>{validationMessages.map((message) => <span key={message}>{message}</span>)}</div> : null}
-      <Button type="button" disabled={!canConfirm} onClick={onConfirm}>确认并处理此文件</Button>
+      <div className="mapping-editor-footer">
+        {validation.result ? <div className={`mapping-validation-result${validationErrors.length ? " is-error" : validation.result.requestVersion > 0 && validation.result.warnings.length ? " is-warning" : " is-success"}`}><strong>试算 {validation.result.matchedRows}/{validation.result.evaluatedRows} 行 · {(validation.result.coverage * 100).toFixed(1)}%</strong>{validationMessages.map((message) => <span key={message}>{message}</span>)}</div> : null}
+        <Button type="button" disabled={!canConfirm} onClick={onConfirm}>确认并处理此文件</Button>
+      </div>
     </section>
   );
 }

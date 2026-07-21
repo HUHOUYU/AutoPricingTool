@@ -149,6 +149,13 @@ const DETAIL_DRAWER_DEFAULT_RATIO = 0.9;
 const DETAIL_DRAWER_MIN_WIDTH = 760;
 const DETAIL_DRAWER_EDGE_GAP = 72;
 const DETAIL_DRAWER_KEYBOARD_STEP = 24;
+const DETAIL_SIDEBAR_DEFAULT_WIDTH = 320;
+const DETAIL_SIDEBAR_MIN_WIDTH = 280;
+const DETAIL_SIDEBAR_MAX_WIDTH = 520;
+const DETAIL_SIDEBAR_KEYBOARD_STEP = 16;
+const DETAIL_PREVIEW_MIN_WIDTH = 360;
+const DETAIL_CONTENT_HORIZONTAL_PADDING = 28;
+const DETAIL_CONTENT_RESIZER_WIDTH = 12;
 
 function detailDrawerBounds(viewportWidth = typeof window === "undefined" ? 1440 : window.innerWidth): { min: number; max: number } {
   const max = Math.max(320, viewportWidth - DETAIL_DRAWER_EDGE_GAP);
@@ -163,6 +170,16 @@ function clampDetailDrawerWidth(width: number): number {
 function defaultDetailDrawerWidth(): number {
   const viewportWidth = typeof window === "undefined" ? 1440 : window.innerWidth;
   return clampDetailDrawerWidth(Math.round(viewportWidth * DETAIL_DRAWER_DEFAULT_RATIO));
+}
+
+function detailSidebarBounds(drawerWidth: number): { min: number; max: number } {
+  const availableMax = drawerWidth - DETAIL_CONTENT_HORIZONTAL_PADDING - DETAIL_CONTENT_RESIZER_WIDTH - DETAIL_PREVIEW_MIN_WIDTH;
+  return { min: DETAIL_SIDEBAR_MIN_WIDTH, max: Math.max(DETAIL_SIDEBAR_MIN_WIDTH, Math.min(DETAIL_SIDEBAR_MAX_WIDTH, availableMax)) };
+}
+
+function clampDetailSidebarWidth(width: number, drawerWidth: number): number {
+  const bounds = detailSidebarBounds(drawerWidth);
+  return Math.min(bounds.max, Math.max(bounds.min, width));
 }
 
 function getDesktopAPI(): DesktopAPI | null {
@@ -459,9 +476,12 @@ export function App(): React.JSX.Element {
   const [mappingValidations, setMappingValidations] = useState<Record<string, MappingValidationState>>({});
   const [matchedOrderRowsBySheet, setMatchedOrderRowsBySheet] = useState<Record<string, Record<string, number[]>>>({});
   const [detailDrawerWidth, setDetailDrawerWidth] = useState(defaultDetailDrawerWidth);
+  const [detailSidebarWidth, setDetailSidebarWidth] = useState(DETAIL_SIDEBAR_DEFAULT_WIDTH);
   const [detailDrawerViewportWidth, setDetailDrawerViewportWidth] = useState(() => window.innerWidth);
   const [analysisCompletedToken, setAnalysisCompletedToken] = useState(0);
   const detailDrawerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const detailSidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const detailDrawerWidthRef = useRef(detailDrawerWidth);
   const analysesRef = useRef<Record<string, PriceAnalysisFile>>({});
   const mappingsRef = useRef<Record<string, PriceCheckMapping>>({});
   const confirmedPathsRef = useRef<Set<string>>(new Set());
@@ -469,6 +489,7 @@ export function App(): React.JSX.Element {
   const mappingValidationVersionsRef = useRef<Record<string, number>>({});
   const mappingValidationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mappingValidationInFlightRef = useRef(false);
+  const activeMappingValidationRef = useRef<{ path: string; mapping: PriceCheckMapping; version: number } | null>(null);
   const pendingMappingValidationRef = useRef<{ path: string; mapping: PriceCheckMapping; version: number } | null>(null);
   const batchLayout = activePage !== "files" ? null : batchStarted ? "locked" : files.length > 0 ? "ready" : "empty";
   const previousBatchLayoutRef = useRef<typeof batchLayout>(null);
@@ -526,12 +547,14 @@ export function App(): React.JSX.Element {
       setDetailDrawerWidth((current) => clampDetailDrawerWidth(current));
     };
     const handlePointerMove = (event: PointerEvent): void => {
-      const resize = detailDrawerResizeRef.current;
-      if (!resize) return;
-      setDetailDrawerWidth(clampDetailDrawerWidth(resize.startWidth + resize.startX - event.clientX));
+      const drawerResize = detailDrawerResizeRef.current;
+      if (drawerResize) setDetailDrawerWidth(clampDetailDrawerWidth(drawerResize.startWidth + drawerResize.startX - event.clientX));
+      const sidebarResize = detailSidebarResizeRef.current;
+      if (sidebarResize) setDetailSidebarWidth(clampDetailSidebarWidth(sidebarResize.startWidth + sidebarResize.startX - event.clientX, detailDrawerWidthRef.current));
     };
     const handlePointerUp = (): void => {
       detailDrawerResizeRef.current = null;
+      detailSidebarResizeRef.current = null;
     };
     window.addEventListener("resize", handleWindowResize);
     window.addEventListener("pointermove", handlePointerMove);
@@ -544,6 +567,11 @@ export function App(): React.JSX.Element {
       window.removeEventListener("pointercancel", handlePointerUp);
     };
   }, []);
+
+  useEffect(() => {
+    detailDrawerWidthRef.current = detailDrawerWidth;
+    setDetailSidebarWidth((current) => clampDetailSidebarWidth(current, detailDrawerWidth));
+  }, [detailDrawerWidth]);
 
   useEffect(() => {
     if (!isLogDrawerOpen) return;
@@ -575,9 +603,11 @@ export function App(): React.JSX.Element {
     const api = getDesktopAPI();
     if (!api) return;
     mappingValidationInFlightRef.current = true;
+    activeMappingValidationRef.current = { path, mapping, version };
     setMappingValidations((current) => ({ ...current, [path]: { status: "validating", result: current[path]?.result ?? null } }));
     void api.validatePriceMapping({ inputPath: path, mapping, requestVersion: version, configPath: configPath || undefined }).catch((error: unknown) => {
       mappingValidationInFlightRef.current = false;
+      activeMappingValidationRef.current = null;
       setMappingValidations((current) => ({
         ...current,
         [path]: {
@@ -666,6 +696,7 @@ export function App(): React.JSX.Element {
       }
       if (event.type === "price-validation") {
         mappingValidationInFlightRef.current = false;
+        activeMappingValidationRef.current = null;
         const currentVersion = mappingValidationVersionsRef.current[event.inputPath] ?? 0;
         if (event.requestVersion === currentVersion) {
           setMappingValidations((current) => ({ ...current, [event.inputPath]: { status: "ready", result: event } }));
@@ -755,6 +786,31 @@ export function App(): React.JSX.Element {
         return;
       }
       if (event.type === "error") {
+        const activeValidation = activeMappingValidationRef.current;
+        if (activeValidation) {
+          mappingValidationInFlightRef.current = false;
+          activeMappingValidationRef.current = null;
+          setMappingValidations((current) => ({
+            ...current,
+            [activeValidation.path]: {
+              status: "ready",
+              result: {
+                inputPath: activeValidation.path,
+                requestVersion: activeValidation.version,
+                evaluatedRows: 0,
+                matchedRows: 0,
+                coverage: 0,
+                errors: ["试算请求失败：" + (event.userMessage ?? event.message)],
+                warnings: [],
+              },
+            },
+          }));
+          const pending = pendingMappingValidationRef.current;
+          pendingMappingValidationRef.current = null;
+          if (pending) setTimeout(() => sendMappingValidation(pending.path, pending.mapping, pending.version), 50);
+          appendLog(event.userMessage ?? event.message, "error");
+          return;
+        }
         setIsAnalyzing(false);
         setIsRunning(false);
         setIsPaused(false);
@@ -961,6 +1017,7 @@ export function App(): React.JSX.Element {
     mappingValidationVersionsRef.current = {};
     pendingMappingValidationRef.current = null;
     mappingValidationInFlightRef.current = false;
+    activeMappingValidationRef.current = null;
     if (mappingValidationTimerRef.current) clearTimeout(mappingValidationTimerRef.current);
     setAnalyses({});
     setMappings({});
@@ -1159,6 +1216,7 @@ export function App(): React.JSX.Element {
     mappingValidationVersionsRef.current = {};
     pendingMappingValidationRef.current = null;
     mappingValidationInFlightRef.current = false;
+    activeMappingValidationRef.current = null;
     if (mappingValidationTimerRef.current) clearTimeout(mappingValidationTimerRef.current);
     confirmedPathsRef.current = new Set();
     setInputDirectorySelected(false);
@@ -1227,6 +1285,17 @@ export function App(): React.JSX.Element {
     setMappingValidations((current) => ({ ...current, [path]: { status: "stale", result: current[path]?.result ?? null } }));
     if (mappingValidationTimerRef.current) clearTimeout(mappingValidationTimerRef.current);
     mappingValidationTimerRef.current = setTimeout(() => sendMappingValidation(path, mapping, version), 500);
+  };
+
+  const revalidateMapping = (path: string): void => {
+    const mapping = mappingsRef.current[path] ?? mappings[path];
+    if (!mapping) return;
+    const version = (mappingValidationVersionsRef.current[path] ?? 0) + 1;
+    mappingValidationVersionsRef.current[path] = version;
+    if (mappingValidationTimerRef.current) clearTimeout(mappingValidationTimerRef.current);
+    mappingValidationTimerRef.current = null;
+    setMappingValidations((current) => ({ ...current, [path]: { status: "stale", result: current[path]?.result ?? null } }));
+    sendMappingValidation(path, mapping, version);
   };
 
   const commitMapping = (path: string, mapping: PriceCheckMapping): void => {
@@ -1468,6 +1537,7 @@ export function App(): React.JSX.Element {
     return Array.from(rolesBySheet, ([name, roles]) => ({ name, roles: Array.from(roles), scores: scoresBySheet.get(name) }));
   }, [detailAnalysis]);
   const currentDetailDrawerBounds = detailDrawerBounds(detailDrawerViewportWidth);
+  const currentDetailSidebarBounds = detailSidebarBounds(detailDrawerWidth);
 
   useEffect(() => {
     const candidateNames = detailPreviewCandidates.map((candidate) => candidate.name);
@@ -1552,6 +1622,22 @@ export function App(): React.JSX.Element {
     if (nextWidth === null) return;
     event.preventDefault();
     setDetailDrawerWidth(clampDetailDrawerWidth(nextWidth));
+  };
+
+  const startDetailSidebarResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    detailSidebarResizeRef.current = { startX: event.clientX, startWidth: detailSidebarWidth };
+  };
+
+  const resizeDetailSidebarWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    let nextWidth: number | null = null;
+    if (event.key === "ArrowLeft") nextWidth = detailSidebarWidth + DETAIL_SIDEBAR_KEYBOARD_STEP;
+    if (event.key === "ArrowRight") nextWidth = detailSidebarWidth - DETAIL_SIDEBAR_KEYBOARD_STEP;
+    if (event.key === "Home") nextWidth = currentDetailSidebarBounds.min;
+    if (event.key === "End") nextWidth = currentDetailSidebarBounds.max;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    setDetailSidebarWidth(clampDetailSidebarWidth(nextWidth, detailDrawerWidth));
   };
 
   const startCurrentTask = async (): Promise<void> => {
@@ -1736,13 +1822,7 @@ export function App(): React.JSX.Element {
                 onKeyDown={resizeDetailDrawerWithKeyboard}
               ><i /></div>
               <header><div><FileSpreadsheet /><div><strong>{fileNameFromPath(detailPath)}</strong><small title={detailPath}>{detailPath}</small></div></div><div className="issue-header-actions"><Button type="button" variant="outline" className="issue-open-source" onClick={() => void getDesktopAPI()?.openPath(detailPath)}><ExternalLink />打开原始文件</Button><button type="button" aria-label="关闭文件详情" onClick={() => setDetailPath(null)}><X /></button></div></header>
-              <div className="issue-timeline" aria-label="处理时间线">
-                {["导入", "分析", "确认", "核价", "完成"].map((label, index) => {
-                  const reached = index === 0 || index === 1 && Boolean(detailAnalysis) || index === 2 && detailAnalysis?.automationDecision.status === "confirm" || index === 3 && Boolean(detailResult) || index === 4 && detailResult?.status === "completed" && (detailResult.exceptionRows ?? 0) === 0;
-                  return <span className={reached ? "is-reached" : ""} key={label}><i />{label}</span>;
-                })}
-              </div>
-              <div className="issue-drawer-content">
+              <div className="issue-drawer-content" style={{ gridTemplateColumns: `minmax(${DETAIL_PREVIEW_MIN_WIDTH}px, 1fr) ${DETAIL_CONTENT_RESIZER_WIDTH}px ${detailSidebarWidth}px` }}>
                 <ExcelPreview
                   api={getDesktopAPI()}
                   filePath={detailPath}
@@ -1757,9 +1837,21 @@ export function App(): React.JSX.Element {
                   onColumnSelect={selectMappingColumn}
                   onRowSelect={selectMappingRow}
                 />
+                <div
+                  className="issue-content-resizer"
+                  role="separator"
+                  aria-label="调整预览与字段映射宽度"
+                  aria-orientation="vertical"
+                  aria-valuemin={currentDetailSidebarBounds.min}
+                  aria-valuemax={currentDetailSidebarBounds.max}
+                  aria-valuenow={detailSidebarWidth}
+                  tabIndex={0}
+                  onPointerDown={startDetailSidebarResize}
+                  onKeyDown={resizeDetailSidebarWithKeyboard}
+                ><i /></div>
                 <div className="issue-detail-column">
                   <section><h3>自动化判定</h3>{detailAnalysis ? <><div className={"decision-card is-" + detailAnalysis.automationDecision.status}><strong>{detailAnalysis.automationDecision.status === "eligible" ? "可自动处理" : detailAnalysis.automationDecision.status === "confirm" ? "需要人工确认" : "分析异常"}</strong><span>试算 {detailAnalysis.automationDecision.matchedRows}/{detailAnalysis.automationDecision.evaluatedRows} 行 · {formatCoverage(detailAnalysis.automationDecision.coverage)}</span></div><ul className="decision-reasons">{detailAnalysis.automationDecision.reasons.map((reason) => <DecisionReason reason={reason} key={reason} />)}</ul></> : <p>文件尚未分析。</p>}</section>
-                  {detailAnalysis && detailMapping ? <MappingEditor analysis={detailAnalysis} mapping={detailMapping} workbook={detailPreviewWorkbook} activeSheetName={detailPreviewSheetName} activeTarget={activeMappingTarget} validation={detailValidation} onActiveTargetChange={selectMappingTarget} onMappingChange={(mapping) => commitMapping(detailPath, mapping)} onColumnChange={(target, column, header) => changeMappingColumn(target, column, header)} onSheetChange={(orderSheet, pricingSheet, previewSheet) => { updateMapping(detailPath, orderSheet, pricingSheet); setDetailPreviewSheetName(previewSheet); }} onPreviewSheetChange={setDetailPreviewSheetName} onConfirm={() => void confirmAndContinue(detailPath)} /> : null}
+                  {detailAnalysis && detailMapping ? <MappingEditor analysis={detailAnalysis} mapping={detailMapping} workbook={detailPreviewWorkbook} activeSheetName={detailPreviewSheetName} activeTarget={activeMappingTarget} validation={detailValidation} onActiveTargetChange={selectMappingTarget} onMappingChange={(mapping) => commitMapping(detailPath, mapping)} onColumnChange={(target, column, header) => changeMappingColumn(target, column, header)} onSheetChange={(orderSheet, pricingSheet, previewSheet) => { updateMapping(detailPath, orderSheet, pricingSheet); setDetailPreviewSheetName(previewSheet); }} onPreviewSheetChange={setDetailPreviewSheetName} onRevalidate={() => revalidateMapping(detailPath)} onConfirm={() => void confirmAndContinue(detailPath)} /> : null}
                   {detailResult ? <section><h3>处理结果</h3><div className="result-summary"><span>总行数<strong>{detailResult.totalRows ?? 0}</strong></span><span>已匹配<strong>{detailResult.matchedRows ?? 0}</strong></span><span>异常行<strong>{detailResult.exceptionRows ?? 0}</strong></span></div>{detailResult.message ? <p>{detailResult.message}</p> : null}{detailResult.outputPath ? <Button variant="outline" onClick={() => void getDesktopAPI()?.openPath(detailResult.outputPath ?? "")}>打开结果文件</Button> : null}</section> : null}
                   {detailPath && fileStatusByPath[detailPath] && tabForStatus(fileStatusByPath[detailPath]) === "error" ? <section><h3>异常处理</h3><p>调整源文件或配置后，可以重新分析当前文件。</p><Button type="button" variant="outline" onClick={() => void retryAnalysis(detailPath)}><RefreshCw />重新分析此文件</Button></section> : null}
                 </div>

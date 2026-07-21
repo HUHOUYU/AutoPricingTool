@@ -29,10 +29,16 @@ export type ExcelPreviewWorkbook = {
   sheets: ExcelPreviewSheet[];
 };
 
+export type ExcelPreviewSearchMatch = {
+  rowIndex: number;
+  columnIndex: number;
+};
+
 export type ExcelPreviewWorkerRequest = {
   requestId: number;
   buffer: ArrayBuffer;
   candidates: ExcelPreviewCandidate[];
+  loadAll?: boolean;
 };
 
 export type ExcelPreviewWorkerResponse =
@@ -55,6 +61,18 @@ function normalizeCandidates(candidates: ExcelPreviewCandidate[]): ExcelPreviewC
 function stringValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   return typeof value === "string" ? value : String(value);
+}
+
+export function findExcelPreviewMatches(rows: string[][], query: string): ExcelPreviewSearchMatch[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (!normalizedQuery) return [];
+  const matches: ExcelPreviewSearchMatch[] = [];
+  rows.forEach((row, rowIndex) => {
+    row.forEach((cell, columnIndex) => {
+      if (cell.toLocaleLowerCase().includes(normalizedQuery)) matches.push({ rowIndex, columnIndex });
+    });
+  });
+  return matches;
 }
 
 function parseRange(reference: string | undefined): XLSX.Range | null {
@@ -96,8 +114,8 @@ function parseSheet(
   const displayRange: XLSX.Range = {
     s: { ...parsedRange.s },
     e: {
-      r: Math.min(parsedRange.e.r, parsedRange.s.r + maxRows - 1),
-      c: Math.min(parsedRange.e.c, parsedRange.s.c + maxColumns - 1),
+      r: maxRows > 0 ? Math.min(parsedRange.e.r, parsedRange.s.r + maxRows - 1) : parsedRange.e.r,
+      c: maxColumns > 0 ? Math.min(parsedRange.e.c, parsedRange.s.c + maxColumns - 1) : parsedRange.e.c,
     },
   };
   const displayedRowCount = Math.max(0, displayRange.e.r - displayRange.s.r + 1);
@@ -142,7 +160,7 @@ export function parseExcelPreview(
     type: "array",
     dense: true,
     sheets: normalizedCandidates.map((candidate) => candidate.name),
-    sheetRows: maxRows,
+    sheetRows: maxRows > 0 ? maxRows : 0,
     cellFormula: false,
     cellHTML: false,
     cellStyles: false,

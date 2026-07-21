@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, FileSpreadsheet, LoaderCircle, Pin, PinOff, Table2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, FileSpreadsheet, ListRestart, LoaderCircle, Pin, PinOff, Search, Table2, X } from "lucide-react";
 import type { DesktopAPI, PriceCheckMapping } from "../../../preload";
 import type { MappingFieldTarget } from "./mapping-editor";
 import type {
   ExcelPreviewCandidate,
+  ExcelPreviewSearchMatch,
   ExcelPreviewSheet,
   ExcelPreviewWorkbook,
   ExcelPreviewWorkerRequest,
   ExcelPreviewWorkerResponse,
 } from "../lib/excel-preview";
+import { findExcelPreviewMatches } from "../lib/excel-preview";
 
 type ExcelPreviewProps = {
   api: DesktopAPI | null;
@@ -33,6 +35,9 @@ const previewRowNumberWidth = 52;
 const previewColumnWidth = 120;
 const previewColumnMinWidth = 64;
 const previewColumnMaxWidth = 480;
+const skuPairShadeStrengths = [14, 20, 26, 32, 38];
+
+type SkuPairStyle = CSSProperties & { "--sku-pair-strength": string };
 
 function excelColumnLabel(columnIndex: number): string {
   let value = columnIndex + 1;
@@ -71,9 +76,9 @@ function loadErrorMessage(error: unknown): string {
 function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetName: string, column: number): string {
   if (!mapping) return "";
   if (sheetName === mapping.orderSheet) {
-    if (mapping.skuQtyPairs.some((pair) => pair.skuColumn === column)) return " is-sku-column";
+    if (mapping.skuQtyPairs.some((pair) => pair.skuColumn === column || pair.qtyColumn === column)) return " is-sku-qty-column";
     if (mapping.orderPriceColumn === column) return " is-price-column";
-    if (mapping.skuQtyPairs.some((pair) => pair.qtyColumn === column) || [mapping.businessOrderNumberColumn, mapping.platformOrderNumberColumn, mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn, mapping.shippingMethodColumn].includes(column)) return " is-mapped-column";
+    if ([mapping.businessOrderNumberColumn, mapping.platformOrderNumberColumn, mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn, mapping.shippingMethodColumn].includes(column)) return " is-mapped-column";
   }
   if (sheetName === mapping.pricingSheet) {
     if (mapping.pricingSkuColumn === column) return " is-sku-column";
@@ -81,6 +86,13 @@ function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetN
     if ([mapping.pricingCountryColumn, mapping.pricingShippingMethodColumn].includes(column)) return " is-mapped-column";
   }
   return "";
+}
+
+function skuPairStyle(mapping: PriceCheckMapping | null | undefined, sheetName: string, column: number): SkuPairStyle | undefined {
+  if (!mapping || sheetName !== mapping.orderSheet) return undefined;
+  const pairIndex = mapping.skuQtyPairs.findIndex((pair) => pair.skuColumn === column || pair.qtyColumn === column);
+  if (pairIndex < 0) return undefined;
+  return { "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(pairIndex, skuPairShadeStrengths.length - 1)]}%` };
 }
 
 function targetColumn(mapping: PriceCheckMapping | null | undefined, target: MappingFieldTarget | null | undefined): number | null {
@@ -104,6 +116,7 @@ function PreviewState({ icon, title, detail, loading = false }: { icon: React.JS
 
 export function ExcelPreview({ api, filePath, candidates, activeSheetName, onActiveSheetChange, mapping, matchedOrderRows, activeTarget, selectionPrompt, onWorkbookChange, onColumnSelect, onRowSelect }: ExcelPreviewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const requestIdRef = useRef(0);
   const [status, setStatus] = useState<PreviewStatus>(candidates.length > 0 ? "loading" : "empty");
   const [workbook, setWorkbook] = useState<ExcelPreviewWorkbook | null>(null);
@@ -113,12 +126,26 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const [columnWidthsBySheet, setColumnWidthsBySheet] = useState<Record<string, number[]>>({});
   const [pinnedColumnsBySheet, setPinnedColumnsBySheet] = useState<Record<string, number[]>>({});
   const [resizingColumn, setResizingColumn] = useState<number | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeSearchMatchIndex, setActiveSearchMatchIndex] = useState(0);
+  const [loadAll, setLoadAll] = useState(false);
 
   useEffect(() => {
     setColumnWidthsBySheet({});
     setPinnedColumnsBySheet({});
     setResizingColumn(null);
+    setSearchOpen(false);
+    setSearchQuery("");
+    setLoadAll(false);
   }, [filePath]);
+
+  const previewCandidates = useMemo(() => {
+    if (!loadAll || !mapping) return candidates;
+    const selectedSheetNames = new Set([mapping.orderSheet, mapping.pricingSheet]);
+    const selectedCandidates = candidates.filter((candidate) => selectedSheetNames.has(candidate.name));
+    return selectedCandidates.length > 0 ? selectedCandidates : candidates;
+  }, [candidates, loadAll, mapping?.orderSheet, mapping?.pricingSheet]);
 
   useEffect(() => {
     setWorkbook(null);
@@ -160,7 +187,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
         setStatus("error");
       };
       const buffer = source.bytes.slice().buffer;
-      const request: ExcelPreviewWorkerRequest = { requestId, buffer, candidates };
+      const request: ExcelPreviewWorkerRequest = { requestId, buffer, candidates: previewCandidates, loadAll };
       worker.postMessage(request, [buffer]);
     }).catch((error: unknown) => {
       if (cancelled) return;
@@ -172,7 +199,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
       cancelled = true;
       worker?.terminate();
     };
-  }, [api, candidates, filePath]);
+  }, [api, filePath, loadAll, previewCandidates]);
 
   useEffect(() => {
     onWorkbookChange?.(workbook);
@@ -181,6 +208,13 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const activeSheet = useMemo<ExcelPreviewSheet | null>(() => (
     workbook?.sheets.find((sheet) => sheet.name === activeSheetName) ?? null
   ), [activeSheetName, workbook]);
+  const searchMatches = useMemo<ExcelPreviewSearchMatch[]>(
+    () => findExcelPreviewMatches(activeSheet?.rows ?? [], searchQuery),
+    [activeSheet, searchQuery],
+  );
+  const activeSearchMatch = searchMatches.length > 0
+    ? searchMatches[activeSearchMatchIndex % searchMatches.length]
+    : null;
   const shouldVirtualizeRows = (activeSheet?.rows.length ?? 0) > 100;
   const rowVirtualizer = useVirtualizer({
     count: shouldVirtualizeRows ? activeSheet?.rows.length ?? 0 : 0,
@@ -195,6 +229,26 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     scrollRef.current.scrollLeft = 0;
     rowVirtualizer.measure();
   }, [activeSheetName, rowVirtualizer]);
+
+  useEffect(() => {
+    setActiveSearchMatchIndex(0);
+  }, [activeSheetName, searchQuery]);
+
+  useEffect(() => {
+    const handleFindShortcut = (event: KeyboardEvent): void => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "f" && activeSheet) {
+        event.preventDefault();
+        setSearchOpen(true);
+        requestAnimationFrame(() => searchInputRef.current?.focus());
+      } else if (event.key === "Escape" && searchOpen) {
+        event.preventDefault();
+        setSearchOpen(false);
+        setSearchQuery("");
+      }
+    };
+    document.addEventListener("keydown", handleFindShortcut);
+    return () => document.removeEventListener("keydown", handleFindShortcut);
+  }, [activeSheet, searchOpen]);
 
   const columnCount = activeSheet?.displayedColumnCount ?? 0;
   const columnWidths = Array.from({ length: columnCount }, (_, index) => columnWidthsBySheet[activeSheetName]?.[index] ?? previewColumnWidth);
@@ -216,6 +270,35 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const frozenHeaderIndex = activeSheet && activeHeaderRow ? activeHeaderRow - activeSheet.startRow - 1 : -1;
   const frozenHeaderRow = activeSheet && frozenHeaderIndex >= 0 && frozenHeaderIndex < activeSheet.rows.length ? activeSheet.rows[frozenHeaderIndex] : null;
   const matchedOrderRowSet = useMemo(() => new Set(matchedOrderRows ?? []), [matchedOrderRows]);
+
+  useEffect(() => {
+    const scrollElement = scrollRef.current;
+    if (!scrollElement || !activeSearchMatch) return;
+    if (shouldVirtualizeRows) {
+      rowVirtualizer.scrollToIndex(activeSearchMatch.rowIndex, { align: "center" });
+    } else {
+      scrollElement.scrollTop = Math.max(0, activeSearchMatch.rowIndex * previewRowHeight - scrollElement.clientHeight / 2);
+    }
+    if (!pinnedColumnIndexes.includes(activeSearchMatch.columnIndex)) {
+      const orderedPosition = orderedColumnIndexes.indexOf(activeSearchMatch.columnIndex);
+      const targetLeft = previewRowNumberWidth + orderedColumnIndexes
+        .slice(0, orderedPosition)
+        .reduce((total, columnIndex) => total + columnWidths[columnIndex], 0);
+      const targetWidth = columnWidths[activeSearchMatch.columnIndex] ?? previewColumnWidth;
+      scrollElement.scrollLeft = Math.max(0, targetLeft - (scrollElement.clientWidth - targetWidth) / 2);
+    }
+    // 仅在搜索目标变化时定位，布局变化和滚动重绘不能抢占用户当前视图。
+  }, [activeSearchMatch]);
+
+  const moveSearchMatch = (direction: 1 | -1): void => {
+    if (searchMatches.length === 0) return;
+    setActiveSearchMatchIndex((current) => (current + direction + searchMatches.length) % searchMatches.length);
+  };
+
+  const closeSearch = (): void => {
+    setSearchOpen(false);
+    setSearchQuery("");
+  };
 
   const resizeColumn = (columnIndex: number, width: number): void => {
     const nextWidth = Math.min(previewColumnMaxWidth, Math.max(previewColumnMinWidth, Math.round(width)));
@@ -266,7 +349,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
         {fileSize !== null ? <em>{formatBytes(fileSize)}</em> : null}
       </header>
       <div className="excel-preview-tabs" role="tablist" aria-label="候选 Sheet">
-        {candidates.map((candidate) => (
+        {previewCandidates.map((candidate) => (
           <button
             type="button"
             role="tab"
@@ -278,6 +361,46 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
             <strong>{candidate.name}</strong><span>{roleLabel(candidate)}</span>
           </button>
         ))}
+        <button
+          type="button"
+          className="excel-preview-load-all"
+          aria-label="加载全部数据"
+          title="按文件路径重新读取当前订单 Sheet 和核价 Sheet 的全部数据"
+          disabled={!activeSheet || loadAll || status === "loading"}
+          onClick={() => setLoadAll(true)}
+        >
+          {status === "loading" && loadAll ? <LoaderCircle className="is-loading" /> : <ListRestart />}
+          <span>{status === "loading" && loadAll ? "加载中" : loadAll ? "已加载全部" : "加载全部"}</span>
+        </button>
+        <div className={`excel-preview-search${searchOpen ? " is-open" : ""}`}>
+          {!searchOpen ? (
+            <button type="button" className="excel-preview-search-toggle" aria-label="搜索表格" title="搜索表格（Ctrl+F）" disabled={!activeSheet} onClick={() => { setSearchOpen(true); requestAnimationFrame(() => searchInputRef.current?.focus()); }}>
+              <Search /><kbd>Ctrl F</kbd>
+            </button>
+          ) : (
+            <>
+              <Search aria-hidden="true" />
+              <input
+                ref={searchInputRef}
+                type="search"
+                aria-label="搜索表格数据"
+                placeholder="搜索当前 Sheet"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : event.key === "Enter" ? event.shiftKey ? -1 : 1 : null;
+                  if (direction === null) return;
+                  event.preventDefault();
+                  moveSearchMatch(direction);
+                }}
+              />
+              <output aria-live="polite">{searchQuery ? `${searchMatches.length ? activeSearchMatchIndex % searchMatches.length + 1 : 0}/${searchMatches.length}` : "0/0"}</output>
+              <button type="button" aria-label="上一个匹配" title="上一个匹配（↑ / Shift+Enter）" disabled={searchMatches.length === 0} onClick={() => moveSearchMatch(-1)}><ChevronUp /></button>
+              <button type="button" aria-label="下一个匹配" title="下一个匹配（↓ / Enter）" disabled={searchMatches.length === 0} onClick={() => moveSearchMatch(1)}><ChevronDown /></button>
+              <button type="button" aria-label="关闭搜索" onClick={closeSearch}><X /></button>
+            </>
+          )}
+        </div>
       </div>
       {activeTarget ? <div className="excel-preview-selection-prompt" role="status"><strong>{selectionPrompt}</strong><span>{activeTarget.endsWith("HeaderRow") ? "点击左侧行号" : "点击目标列中的任意单元格"}</span><kbd>Esc 取消</kbd></div> : null}
       <div className="excel-preview-body">
@@ -294,7 +417,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                 {orderedColumnIndexes.map((columnIndex) => (
                   <span
                     className={`${mappedColumnClass(mapping, activeSheet.name, activeSheet.startColumn + columnIndex + 1)}${activeColumn === activeSheet.startColumn + columnIndex + 1 ? " is-active-column" : ""}${hoveredColumn === activeSheet.startColumn + columnIndex + 1 ? " is-hover-column" : ""}${selectingColumn ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}`}
-                    style={pinnedColumnStyle(columnIndex)}
+                    style={{ ...pinnedColumnStyle(columnIndex), ...skuPairStyle(mapping, activeSheet.name, activeSheet.startColumn + columnIndex + 1) }}
                     data-column-label={excelColumnLabel(activeSheet.startColumn + columnIndex)}
                     onMouseEnter={() => selectingColumn && setHoveredColumn(activeSheet.startColumn + columnIndex + 1)}
                     onClick={() => selectingColumn && onColumnSelect?.(activeSheet.startColumn + columnIndex + 1, selectionHeaderRow ? activeSheet.rows[selectionHeaderRow - activeSheet.startRow - 1]?.[columnIndex] ?? "" : "")}
@@ -338,8 +461,8 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                   const cell = frozenHeaderRow[columnIndex] ?? "";
                   const absoluteColumn = activeSheet.startColumn + columnIndex + 1;
                   return <span
-                    className={`${mappedColumnClass(mapping, activeSheet.name, absoluteColumn)}${activeColumn === absoluteColumn ? " is-active-column" : ""} is-header-cell${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}`}
-                    style={pinnedColumnStyle(columnIndex)}
+                    className={`${mappedColumnClass(mapping, activeSheet.name, absoluteColumn)}${activeColumn === absoluteColumn ? " is-active-column" : ""} is-header-cell${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === frozenHeaderIndex && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
+                    style={{ ...pinnedColumnStyle(columnIndex), ...skuPairStyle(mapping, activeSheet.name, absoluteColumn) }}
                     title={cell}
                     onMouseEnter={() => selectingColumn && setHoveredColumn(absoluteColumn)}
                     onClick={() => selectingColumn && onColumnSelect?.(absoluteColumn, cell)}
@@ -366,8 +489,8 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                         const cell = row[columnIndex] ?? "";
                         const absoluteColumn = activeSheet.startColumn + columnIndex + 1;
                         return <span
-                          className={`${mappedColumnClass(mapping, activeSheet.name, absoluteColumn)}${activeColumn === absoluteColumn ? " is-active-column" : ""}${activeHeaderRow === absoluteRow ? " is-header-cell" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}`}
-                          style={pinnedColumnStyle(columnIndex)}
+                          className={`${mappedColumnClass(mapping, activeSheet.name, absoluteColumn)}${activeColumn === absoluteColumn ? " is-active-column" : ""}${activeHeaderRow === absoluteRow ? " is-header-cell" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
+                          style={{ ...pinnedColumnStyle(columnIndex), ...skuPairStyle(mapping, activeSheet.name, absoluteColumn) }}
                           title={cell}
                           onMouseEnter={() => selectingColumn && setHoveredColumn(absoluteColumn)}
                           onClick={() => selectingColumn && onColumnSelect?.(absoluteColumn, selectionHeaderRow ? activeSheet.rows[selectionHeaderRow - activeSheet.startRow - 1]?.[columnIndex] ?? "" : "")}
@@ -384,7 +507,9 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
       </div>
       {activeSheet ? (
         <footer className="excel-preview-legend" aria-label="字段颜色说明">
-          <span><i className="is-sku" />SKU 字段</span>
+          {mapping && activeSheet.name === mapping.orderSheet
+            ? mapping.skuQtyPairs.map((_, index) => <span key={index}><i className="is-sku-qty" style={{ "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(index, skuPairShadeStrengths.length - 1)]}%` } as SkuPairStyle} />SKU/数量 {index + 1}</span>)
+            : <span><i className="is-sku" />SKU 字段</span>}
           <span><i className="is-price" />价格字段</span>
           <span><i className="is-mapped" />常规匹配字段</span>
         </footer>

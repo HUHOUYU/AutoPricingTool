@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
-import { excelPreviewErrorMessage, parseExcelPreview } from "./excel-preview";
+import { excelPreviewErrorMessage, findExcelPreviewMatches, parseExcelPreview } from "./excel-preview";
 
 function createWorkbookBuffer(): ArrayBuffer {
   const workbook = XLSX.utils.book_new();
@@ -43,9 +43,38 @@ describe("parseExcelPreview", () => {
     expect(sheet.truncatedColumns).toBe(true);
   });
 
+  it("loads every row and column when both limits are disabled", () => {
+    const limitedSheet = parseExcelPreview(createWorkbookBuffer(), [{ name: "订单", roles: ["order"] }], 2, 2).sheets[0];
+    const sheet = parseExcelPreview(createWorkbookBuffer(), [{ name: "订单", roles: ["order"] }], 0, 0).sheets[0];
+
+    expect(sheet.displayedRowCount).toBeGreaterThan(limitedSheet.displayedRowCount);
+    expect(sheet.displayedColumnCount).toBeGreaterThan(limitedSheet.displayedColumnCount);
+    expect(sheet.displayedRowCount).toBe(sheet.rowCount);
+    expect(sheet.displayedColumnCount).toBe(sheet.columnCount);
+    expect(sheet.truncatedRows).toBe(false);
+    expect(sheet.truncatedColumns).toBe(false);
+  });
+
   it("maps encrypted and corrupt workbook errors to safe messages", () => {
     expect(excelPreviewErrorMessage(new Error("Unsupported ZIP Encryption"))).toContain("加密");
     expect(excelPreviewErrorMessage(new Error("Invalid ZIP data"))).toContain("损坏");
     expect(() => parseExcelPreview(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]).buffer, [{ name: "订单", roles: ["order"] }])).toThrow();
+  });
+});
+
+describe("findExcelPreviewMatches", () => {
+  it("finds partial matches without case sensitivity in row order", () => {
+    expect(findExcelPreviewMatches([
+      ["SKU", "Country"],
+      ["FL2600293-1", "ES"],
+      ["fl2600293-2", "FR"],
+    ], " FL2600293 ")).toEqual([
+      { rowIndex: 1, columnIndex: 0 },
+      { rowIndex: 2, columnIndex: 0 },
+    ]);
+  });
+
+  it("returns no matches for an empty query", () => {
+    expect(findExcelPreviewMatches([["SKU"]], "   ")).toEqual([]);
   });
 });
