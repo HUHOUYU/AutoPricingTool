@@ -29,6 +29,8 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) fields: IndexMap<String, FieldRule>,
     #[serde(default)]
+    pub(crate) pricing_fields: PricingFieldRules,
+    #[serde(default)]
     pub(crate) output: OutputRules,
 }
 
@@ -249,6 +251,14 @@ pub(crate) struct FieldRule {
     pub(crate) compiled_negative_patterns: Vec<Regex>,
 }
 
+#[derive(Debug, Deserialize, Clone, Default)]
+pub(crate) struct PricingFieldRules {
+    #[serde(default)]
+    pub(crate) order: IndexMap<String, FieldRule>,
+    #[serde(default)]
+    pub(crate) pricing: IndexMap<String, FieldRule>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct OutputRules {
     #[serde(default = "default_max_sku_groups")]
@@ -446,7 +456,15 @@ fn prepare_config(config: &mut Config) -> Result<()> {
         .filter(|value| !value.is_empty())
         .collect();
 
-    for (field_name, rule) in &mut config.fields {
+    prepare_field_rules(&mut config.fields, "fields")?;
+    prepare_field_rules(&mut config.pricing_fields.order, "pricing_fields.order")?;
+    prepare_field_rules(&mut config.pricing_fields.pricing, "pricing_fields.pricing")?;
+
+    Ok(())
+}
+
+fn prepare_field_rules(rules: &mut IndexMap<String, FieldRule>, path: &str) -> Result<()> {
+    for (field_name, rule) in rules {
         rule.normalized_header_aliases = rule
             .header_aliases
             .iter()
@@ -467,12 +485,12 @@ fn prepare_config(config: &mut Config) -> Result<()> {
             .collect();
         rule.compiled_value_patterns = compile_patterns(
             &rule.value_patterns,
-            &format!("fields.{field_name}.value_patterns"),
+            &format!("{path}.{field_name}.value_patterns"),
             false,
         )?;
         rule.compiled_negative_patterns = compile_patterns(
             &rule.negative_patterns,
-            &format!("fields.{field_name}.negative_patterns"),
+            &format!("{path}.{field_name}.negative_patterns"),
             false,
         )?;
     }
@@ -540,7 +558,9 @@ mod tests {
             .join("config")
             .join("extract_rules.json");
 
-        load_config(&path).expect("checked-in extraction config must be valid");
+        let config = load_config(&path).expect("checked-in extraction config must be valid");
+        assert!(config.pricing_fields.order.contains_key("sku"));
+        assert!(config.pricing_fields.pricing.contains_key("fixed_price"));
     }
 
     #[test]
@@ -559,5 +579,25 @@ mod tests {
 
         let error = prepare_config(&mut config).expect_err("invalid regex must fail config load");
         assert!(format!("{error:#}").contains("fields.order_number.value_patterns[0]"));
+    }
+
+    #[test]
+    fn rejects_invalid_pricing_field_regex_with_full_path() {
+        let mut config: Config = serde_json::from_str(
+            r#"{
+              "pricing_fields": {
+                "order": {
+                  "sku": {
+                    "header_aliases": ["SKU"],
+                    "value_patterns": ["["]
+                  }
+                }
+              }
+            }"#,
+        )
+        .expect("test config must be valid JSON");
+
+        let error = prepare_config(&mut config).expect_err("invalid regex must fail config load");
+        assert!(format!("{error:#}").contains("pricing_fields.order.sku.value_patterns[0]"));
     }
 }

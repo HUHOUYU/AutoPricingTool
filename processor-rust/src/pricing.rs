@@ -1,4 +1,4 @@
-use crate::config::{Config, load_config};
+use crate::config::{Config, FieldRule, load_config};
 use crate::excel_engine::{CellValue, SheetData};
 use crate::ipc::{config_path, emit};
 use crate::reader::read_workbook_for_processing;
@@ -11,6 +11,15 @@ use std::path::{Path, PathBuf};
 
 const ORDER_HEADER_SCAN_ROWS: usize = 30;
 const PRICE_HEADER_SCAN_ROWS: usize = 24;
+const PRICE_TIER_LOOKAHEAD_ROWS: usize = 2;
+const FIXED_PRICE_QUANTITY: i64 = 1;
+const HEADER_EXACT_SCORE: i32 = 300;
+const HEADER_CONTAINS_SCORE: i32 = 160;
+const HEADER_ALIAS_ORDER_STEP: i32 = 1;
+const VALUE_PATTERN_MAX_SCORE: i32 = 500;
+const NEGATIVE_PATTERN_MAX_PENALTY: i32 = 500;
+const NEGATIVE_HEADER_PENALTY: i32 = 450;
+const LOW_PRIORITY_HEADER_PENALTY: i32 = 220;
 
 const ORDER_ID_ALIASES: &[&str] = &[
     "订单号",
@@ -73,6 +82,7 @@ const SKU_ALIASES: &[&str] = &[
     "产品编码",
     "商品编码",
 ];
+const PRODUCT_NAME_ALIASES: &[&str] = &["productname", "产品名称", "商品名称", "产品名", "商品名"];
 const QTY_ALIASES: &[&str] = &[
     "数量",
     "qty",
@@ -106,6 +116,7 @@ const PRICE_ALIASES: &[&str] = &[
     "单价",
     "销售价",
 ];
+const FIXED_PRICE_ALIASES: &[&str] = &["productshippingvattax", "shippingvattax"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -321,6 +332,7 @@ struct PriceEntry {
 struct PriceIndex {
     entries: HashMap<String, Vec<PriceEntry>>,
     quantity_entries: HashMap<String, Vec<(String, PriceEntry)>>,
+    fixed_price_entries: HashMap<String, Vec<(String, PriceEntry)>>,
     quantity_keys: HashSet<String>,
     sku_country_keys: HashSet<String>,
 }
@@ -772,10 +784,10 @@ fn analyze_path_with_templates(
     let mut order_candidates = Vec::new();
     let mut pricing_candidates = Vec::new();
     for sheet in &workbook.sheets {
-        if let Some(candidate) = infer_order_candidate(sheet) {
+        if let Some(candidate) = infer_order_candidate_with_config(sheet, config) {
             order_candidates.push(candidate);
         }
-        if let Some(candidate) = infer_pricing_candidate(sheet) {
+        if let Some(candidate) = infer_pricing_candidate_with_config(sheet, config) {
             pricing_candidates.push(candidate);
         }
     }
@@ -1270,16 +1282,54 @@ fn sheet_cell_text(sheet: &SheetData, row: usize, column: usize) -> String {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn infer_order_candidate(sheet: &SheetData) -> Option<OrderSheetCandidate> {
+    infer_order_candidate_with_config(sheet, &Config::default())
+}
+
+fn infer_order_candidate_with_config(
+    sheet: &SheetData,
+    config: &Config,
+) -> Option<OrderSheetCandidate> {
     let mut best = None;
     let scan_limit = sheet.rows.len().min(ORDER_HEADER_SCAN_ROWS);
     for header_idx in 0..scan_limit {
         let header = &sheet.rows[header_idx];
-        let sku_columns = matching_columns(header, SKU_ALIASES);
-        let qty_columns = matching_columns(header, QTY_ALIASES);
-        let order_col = best_column(header, ORDER_ID_ALIASES);
-        let platform_col = best_column(header, PLATFORM_ORDER_ALIASES);
-        let raw_pairs = pair_sku_qty_columns(header, &sku_columns, &qty_columns);
+        let sku_columns = configured_matching_columns(
+            sheet,
+            header_idx,
+            order_field_rule(config, "sku"),
+            SKU_ALIASES,
+        );
+        let qty_columns = configured_matching_columns(
+            sheet,
+            header_idx,
+            order_field_rule(config, "quantity"),
+            QTY_ALIASES,
+        );
+        let order_col = configured_best_column(
+            sheet,
+            header_idx,
+            order_field_rule(config, "order_number"),
+            ORDER_ID_ALIASES,
+        );
+        let platform_col = configured_best_column(
+            sheet,
+            header_idx,
+            order_field_rule(config, "platform_order_number"),
+            PLATFORM_ORDER_ALIASES,
+        );
+        let mut raw_pairs = pair_sku_qty_columns(header, &sku_columns, &qty_columns);
+        let using_product_name = raw_pairs.is_empty();
+        if using_product_name {
+            let product_name_columns = configured_matching_columns(
+                sheet,
+                header_idx,
+                order_field_rule(config, "product_name"),
+                PRODUCT_NAME_ALIASES,
+            );
+            raw_pairs = pair_sku_qty_columns(header, &product_name_columns, &qty_columns);
+        }
         let pairs = deduplicate_equivalent_sku_qty_pairs(
             sheet,
             header_idx + 1,
@@ -1290,9 +1340,21 @@ fn infer_order_candidate(sheet: &SheetData) -> Option<OrderSheetCandidate> {
         if order_col.is_none() && platform_col.is_none() && pairs.is_empty() {
             continue;
         }
-        let (country_code, country_en, country_cn) = infer_order_country_columns(sheet, header_idx);
-        let shipping = best_shipping_column(header);
-        let price = best_column(header, PRICE_ALIASES);
+        let (country_code, country_en, country_cn) =
+            infer_order_country_columns(sheet, header_idx, config);
+        let shipping = best_shipping_column(
+            sheet,
+            header_idx,
+            order_field_rule(config, "shipping_method"),
+            order_field_rule(config, "price"),
+            None,
+        );
+        let price = configured_best_column(
+            sheet,
+            header_idx,
+            order_field_rule(config, "price"),
+            PRICE_ALIASES,
+        );
         let (valid_rows, country_rows) = score_order_rows(
             sheet,
             header_idx + 1,
@@ -1320,6 +1382,9 @@ fn infer_order_candidate(sheet: &SheetData) -> Option<OrderSheetCandidate> {
         }
         if country_code.is_none() || country_en.is_none() || country_cn.is_none() {
             notes.push("国家三要素未全部识别，运行时会尝试补全并记录冲突".to_string());
+        }
+        if using_product_name && !pairs.is_empty() {
+            notes.push("未识别到 SKU，使用产品名称作为临时匹配键".to_string());
         }
         let field_score = (pairs.len() as f64 * 24.0)
             + if order_col.is_some() { 24.0 } else { 0.0 }
@@ -1358,34 +1423,99 @@ fn infer_order_candidate(sheet: &SheetData) -> Option<OrderSheetCandidate> {
     best
 }
 
+#[cfg(test)]
 fn infer_pricing_candidate(sheet: &SheetData) -> Option<PricingSheetCandidate> {
+    infer_pricing_candidate_with_config(sheet, &Config::default())
+}
+
+fn infer_pricing_candidate_with_config(
+    sheet: &SheetData,
+    config: &Config,
+) -> Option<PricingSheetCandidate> {
     let mut best = None;
     let scan_limit = sheet.rows.len().min(PRICE_HEADER_SCAN_ROWS);
     for header_idx in 0..scan_limit {
         let header = &sheet.rows[header_idx];
-        let sku_columns = matching_columns(header, SKU_ALIASES);
-        let qty_columns = matching_columns(header, QTY_ALIASES);
-        let order_like = (best_column(header, ORDER_ID_ALIASES).is_some()
-            || best_column(header, PLATFORM_ORDER_ALIASES).is_some())
+        let sku_columns = configured_matching_columns(
+            sheet,
+            header_idx,
+            order_field_rule(config, "sku"),
+            SKU_ALIASES,
+        );
+        let qty_columns = configured_matching_columns(
+            sheet,
+            header_idx,
+            order_field_rule(config, "quantity"),
+            QTY_ALIASES,
+        );
+        let order_like = (configured_best_column(
+            sheet,
+            header_idx,
+            order_field_rule(config, "order_number"),
+            ORDER_ID_ALIASES,
+        )
+        .is_some()
+            || configured_best_column(
+                sheet,
+                header_idx,
+                order_field_rule(config, "platform_order_number"),
+                PLATFORM_ORDER_ALIASES,
+            )
+            .is_some())
             && !pair_sku_qty_columns(header, &sku_columns, &qty_columns).is_empty();
         if order_like {
             continue;
         }
-        let sku_column = best_pricing_sku_column(sheet, header_idx);
-        let country_column = best_pricing_country_column(sheet, header_idx);
-        let shipping_column = best_shipping_column(header);
-        let direct_tiers = tier_columns(header, sku_column, country_column, shipping_column);
-        let next_tiers = sheet
-            .rows
-            .get(header_idx + 1)
-            .map(|row| tier_columns(row, sku_column, country_column, shipping_column))
-            .unwrap_or_default();
-        let (quantity_header_row, tiers) =
-            if direct_tiers.len() >= next_tiers.len() && !direct_tiers.is_empty() {
-                (None, direct_tiers)
-            } else {
-                (Some(header_idx + 2), next_tiers)
-            };
+        let sku_column =
+            best_pricing_sku_column(sheet, header_idx, pricing_field_rule(config, "sku"));
+        let country_column =
+            best_pricing_country_column(sheet, header_idx, pricing_field_rule(config, "country"));
+        let shipping_column = best_shipping_column(
+            sheet,
+            header_idx,
+            pricing_field_rule(config, "shipping_method"),
+            pricing_field_rule(config, "fixed_price"),
+            pricing_field_rule(config, "fixed_price"),
+        );
+        let tier_row = (header_idx..=header_idx.saturating_add(PRICE_TIER_LOOKAHEAD_ROWS))
+            .filter(|row_idx| {
+                *row_idx < sheet.rows.len()
+                    && (*row_idx == header_idx || row_idx.saturating_add(1) < sheet.rows.len())
+            })
+            .filter_map(|row_idx| {
+                let tiers = tier_columns(
+                    &sheet.rows[row_idx],
+                    sku_column,
+                    country_column,
+                    shipping_column,
+                );
+                (!tiers.is_empty()).then_some((row_idx, tiers))
+            })
+            .max_by_key(|(row_idx, tiers)| (tiers.len(), std::cmp::Reverse(*row_idx)));
+        let fixed_price_column = best_fixed_price_column(
+            sheet,
+            header_idx,
+            pricing_field_rule(config, "fixed_price"),
+            [sku_column, country_column, shipping_column]
+                .into_iter()
+                .flatten()
+                .collect::<HashSet<_>>(),
+        );
+        let (quantity_header_row, tiers, fixed_price) = if let Some((row_idx, tiers)) = tier_row {
+            ((row_idx != header_idx).then_some(row_idx + 1), tiers, false)
+        } else if let Some(column) = fixed_price_column {
+            (
+                None,
+                vec![PriceTierColumn {
+                    quantity: FIXED_PRICE_QUANTITY,
+                    column: column + 1,
+                    header: header[column].text(),
+                }],
+                true,
+            )
+        } else {
+            (None, Vec::new(), false)
+        };
         if sku_column.is_none() || country_column.is_none() || tiers.is_empty() {
             continue;
         }
@@ -1404,7 +1534,14 @@ fn infer_pricing_candidate(sheet: &SheetData) -> Option<PricingSheetCandidate> {
         let ladder_level = numeric_header_ladder_level(header, &excluded);
         let mut notes = Vec::new();
         if quantity_header_row.is_some() {
-            notes.push("使用双行表头识别数量档位".to_string());
+            notes.push(if quantity_header_row == Some(header_idx + 2) {
+                "使用双行表头识别数量档位".to_string()
+            } else {
+                "跳过空白行识别数量档位".to_string()
+            });
+        }
+        if fixed_price {
+            notes.push("使用固定单价列作为数量 1 档位".to_string());
         }
         if tiers.iter().any(|tier| tier.quantity == 0) {
             notes.push("数量档位包含 0，按有效档位处理".to_string());
@@ -1446,23 +1583,35 @@ fn infer_pricing_candidate(sheet: &SheetData) -> Option<PricingSheetCandidate> {
 fn infer_order_country_columns(
     sheet: &SheetData,
     header_idx: usize,
+    config: &Config,
 ) -> (Option<usize>, Option<usize>, Option<usize>) {
-    let header = &sheet.rows[header_idx];
-    let candidates = header
-        .iter()
-        .enumerate()
-        .filter_map(|(column, cell)| {
-            let value = cell.text();
-            (header_score(&value, COUNTRY_CODE_ALIASES) > 0
-                || header_score(&value, COUNTRY_EN_ALIASES) > 0
-                || header_score(&value, COUNTRY_CN_ALIASES) > 0)
-                .then_some(column)
-        })
-        .collect::<Vec<_>>();
-    let mut code_column = best_column(header, COUNTRY_CODE_ALIASES);
-    let mut english_column = best_column(header, COUNTRY_EN_ALIASES);
-    let mut chinese_column = best_column(header, COUNTRY_CN_ALIASES);
+    let code_rule = order_field_rule(config, "country_code");
+    let english_rule = order_field_rule(config, "country_english");
+    let chinese_rule = order_field_rule(config, "country_chinese");
+    let mut candidates =
+        configured_matching_columns(sheet, header_idx, code_rule, COUNTRY_CODE_ALIASES);
+    candidates.extend(configured_matching_columns(
+        sheet,
+        header_idx,
+        english_rule,
+        COUNTRY_EN_ALIASES,
+    ));
+    candidates.extend(configured_matching_columns(
+        sheet,
+        header_idx,
+        chinese_rule,
+        COUNTRY_CN_ALIASES,
+    ));
+    candidates.sort_unstable();
+    candidates.dedup();
+    let mut code_column =
+        configured_best_column(sheet, header_idx, code_rule, COUNTRY_CODE_ALIASES);
+    let mut english_column =
+        configured_best_column(sheet, header_idx, english_rule, COUNTRY_EN_ALIASES);
+    let mut chinese_column =
+        configured_best_column(sheet, header_idx, chinese_rule, COUNTRY_CN_ALIASES);
 
+    let mut classified = Vec::new();
     for column in candidates {
         let samples = sheet
             .rows
@@ -1486,26 +1635,50 @@ fn infer_order_country_columns(
                 && value.len() > 2
                 && country_lookup(&split_country_shipping(value).0).is_some()
         });
-        if is_code {
-            code_column = Some(column);
-        }
-        if is_chinese {
-            chinese_column = Some(column);
-        }
-        if is_english {
-            english_column = Some(column);
-        }
+        classified.push((column, is_code, is_english, is_chinese));
+    }
+    if code_column.is_none_or(|current| {
+        !classified
+            .iter()
+            .any(|(column, is_code, _, _)| *column == current && *is_code)
+    }) {
+        code_column = classified
+            .iter()
+            .find_map(|(column, is_code, _, _)| is_code.then_some(*column));
+    }
+    if english_column.is_none_or(|current| {
+        !classified
+            .iter()
+            .any(|(column, _, is_english, _)| *column == current && *is_english)
+    }) {
+        english_column = classified
+            .iter()
+            .find_map(|(column, _, is_english, _)| is_english.then_some(*column));
+    }
+    if chinese_column.is_none_or(|current| {
+        !classified
+            .iter()
+            .any(|(column, _, _, is_chinese)| *column == current && *is_chinese)
+    }) {
+        chinese_column = classified
+            .iter()
+            .find_map(|(column, _, _, is_chinese)| is_chinese.then_some(*column));
     }
     (code_column, english_column, chinese_column)
 }
 
-fn best_pricing_country_column(sheet: &SheetData, header_idx: usize) -> Option<usize> {
+fn best_pricing_country_column(
+    sheet: &SheetData,
+    header_idx: usize,
+    rule: Option<&FieldRule>,
+) -> Option<usize> {
     let header = &sheet.rows[header_idx];
     header
         .iter()
         .enumerate()
         .filter_map(|(column, cell)| {
-            if header_score(&cell.text(), PRICING_COUNTRY_ALIASES) == 0 {
+            let header_score = configured_header_score(&cell.text(), rule, PRICING_COUNTRY_ALIASES);
+            if header_score == 0 {
                 return None;
             }
             let mut non_empty = 0usize;
@@ -1523,19 +1696,57 @@ fn best_pricing_country_column(sheet: &SheetData, header_idx: usize) -> Option<u
                     recognized += 1;
                 }
             }
-            (non_empty > 0).then_some((recognized * 10 + non_empty, column))
+            let configured_score = field_sample_adjustment(sheet, header_idx, column, rule, 500);
+            (non_empty > 0).then_some((
+                recognized as i64 * 10_000
+                    + configured_score as i64 * 100
+                    + header_score as i64 * 10
+                    + non_empty as i64,
+                column,
+            ))
         })
         .max_by_key(|(score, column)| (*score, std::cmp::Reverse(*column)))
         .map(|(_, column)| column)
 }
 
-fn best_pricing_sku_column(sheet: &SheetData, header_idx: usize) -> Option<usize> {
+fn best_fixed_price_column(
+    sheet: &SheetData,
+    header_idx: usize,
+    rule: Option<&FieldRule>,
+    excluded: HashSet<usize>,
+) -> Option<usize> {
+    let header = &sheet.rows[header_idx];
+    header
+        .iter()
+        .enumerate()
+        .filter(|(column, _)| !excluded.contains(column))
+        .filter_map(|(column, cell)| {
+            let value = cell.text();
+            let header_score = configured_header_score(&value, rule, FIXED_PRICE_ALIASES)
+                .max(configured_header_score(&value, rule, PRICE_ALIASES));
+            if header_score <= 0 {
+                return None;
+            }
+            let score =
+                header_score + field_sample_adjustment(sheet, header_idx, column, rule, 500);
+            (score > 0).then_some((score, column))
+        })
+        .max_by_key(|(score, column)| (*score, std::cmp::Reverse(*column)))
+        .map(|(_, column)| column)
+}
+
+fn best_pricing_sku_column(
+    sheet: &SheetData,
+    header_idx: usize,
+    rule: Option<&FieldRule>,
+) -> Option<usize> {
     let header = &sheet.rows[header_idx];
     header
         .iter()
         .enumerate()
         .filter_map(|(column, cell)| {
-            if header_score(&cell.text(), SKU_ALIASES) == 0 {
+            let header_score = configured_header_score(&cell.text(), rule, SKU_ALIASES);
+            if header_score == 0 {
                 return None;
             }
             let mut non_empty = 0usize;
@@ -1552,7 +1763,14 @@ fn best_pricing_sku_column(sheet: &SheetData, header_idx: usize) -> Option<usize
                     sku_like += 1;
                 }
             }
-            (non_empty > 0).then_some((sku_like * 10 + non_empty, column))
+            let configured_score = field_sample_adjustment(sheet, header_idx, column, rule, 500);
+            (non_empty > 0).then_some((
+                sku_like as i64 * 10_000
+                    + configured_score as i64 * 100
+                    + header_score as i64 * 10
+                    + non_empty as i64,
+                column,
+            ))
         })
         .max_by_key(|(score, column)| (*score, std::cmp::Reverse(*column)))
         .map(|(_, column)| column)
@@ -1617,45 +1835,89 @@ fn score_price_rows(
             valid += 1;
             usable += tiers
                 .iter()
-                .filter(|tier| row.get(tier.column).and_then(parse_price).is_some())
+                .filter(|tier| {
+                    row.get(tier.column.saturating_sub(1))
+                        .and_then(parse_price)
+                        .is_some()
+                })
                 .count();
         }
     }
     (valid, usable)
 }
 
-fn matching_columns(row: &[CellValue], aliases: &[&str]) -> Vec<usize> {
-    row.iter()
-        .enumerate()
-        .filter_map(|(index, cell)| (header_score(&cell.text(), aliases) > 0).then_some(index))
-        .collect()
+fn order_field_rule<'a>(config: &'a Config, name: &str) -> Option<&'a FieldRule> {
+    config.pricing_fields.order.get(name)
 }
 
-fn best_column(row: &[CellValue], aliases: &[&str]) -> Option<usize> {
-    row.iter()
+fn pricing_field_rule<'a>(config: &'a Config, name: &str) -> Option<&'a FieldRule> {
+    config.pricing_fields.pricing.get(name)
+}
+
+fn configured_matching_columns(
+    sheet: &SheetData,
+    header_idx: usize,
+    rule: Option<&FieldRule>,
+    fallback_aliases: &[&str],
+) -> Vec<usize> {
+    let mut candidates = sheet.rows[header_idx]
+        .iter()
         .enumerate()
-        .filter_map(|(index, cell)| {
-            let score = header_score(&cell.text(), aliases);
-            (score > 0).then_some((score, index))
+        .filter_map(|(column, cell)| {
+            let header_score = configured_header_score(&cell.text(), rule, fallback_aliases);
+            if header_score <= 0 {
+                return None;
+            }
+            let score = header_score
+                + field_sample_adjustment(sheet, header_idx, column, rule, ORDER_HEADER_SCAN_ROWS);
+            (score > 0).then_some((score, column))
         })
-        .max_by_key(|(score, index)| (*score, std::cmp::Reverse(*index)))
-        .map(|(_, index)| index)
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(score, column)| (std::cmp::Reverse(*score), *column));
+    candidates.into_iter().map(|(_, column)| column).collect()
 }
 
-fn best_shipping_column(row: &[CellValue]) -> Option<usize> {
-    row.iter()
+fn configured_best_column(
+    sheet: &SheetData,
+    header_idx: usize,
+    rule: Option<&FieldRule>,
+    fallback_aliases: &[&str],
+) -> Option<usize> {
+    configured_matching_columns(sheet, header_idx, rule, fallback_aliases)
+        .into_iter()
+        .next()
+}
+
+fn best_shipping_column(
+    sheet: &SheetData,
+    header_idx: usize,
+    shipping_rule: Option<&FieldRule>,
+    price_rule: Option<&FieldRule>,
+    fixed_price_rule: Option<&FieldRule>,
+) -> Option<usize> {
+    sheet.rows[header_idx]
+        .iter()
         .enumerate()
         .filter_map(|(index, cell)| {
             let normalized = normalize_header(&cell.text());
             if normalized.contains("COUNTRY")
                 || normalized.contains("国家")
+                || configured_header_score(&normalized, price_rule, PRICE_ALIASES) > 0
+                || configured_header_score(&normalized, fixed_price_rule, FIXED_PRICE_ALIASES) > 0
                 || (normalized.starts_with("SHIPPING")
                     && normalized != "SHIPPING"
                     && !normalized.contains("METHOD"))
             {
                 return None;
             }
-            let score = header_score(&normalized, SHIPPING_ALIASES);
+            let score = configured_header_score(&normalized, shipping_rule, SHIPPING_ALIASES)
+                + field_sample_adjustment(
+                    sheet,
+                    header_idx,
+                    index,
+                    shipping_rule,
+                    ORDER_HEADER_SCAN_ROWS,
+                );
             (score > 0).then_some((score, index))
         })
         .max_by_key(|(score, index)| (*score, std::cmp::Reverse(*index)))
@@ -1667,17 +1929,111 @@ fn header_score(value: &str, aliases: &[&str]) -> i32 {
     if normalized.is_empty() {
         return 0;
     }
-    aliases.iter().fold(0, |best, alias| {
-        let candidate = normalize_header(alias);
-        let score = if normalized == candidate {
-            4
-        } else if normalized.contains(&candidate) || candidate.contains(&normalized) {
-            2
-        } else {
-            0
-        };
-        best.max(score)
-    })
+    aliases
+        .iter()
+        .enumerate()
+        .map(|(index, alias)| alias_match_score(&normalized, alias, index, aliases.len()))
+        .max()
+        .unwrap_or(0)
+}
+
+fn configured_header_score(
+    value: &str,
+    rule: Option<&FieldRule>,
+    fallback_aliases: &[&str],
+) -> i32 {
+    let normalized = normalize_header(value);
+    if normalized.is_empty() {
+        return 0;
+    }
+    let mut score = if let Some(rule) = rule.filter(|rule| !rule.header_aliases.is_empty()) {
+        rule.header_aliases
+            .iter()
+            .enumerate()
+            .map(|(index, alias)| {
+                alias_match_score(&normalized, alias, index, rule.header_aliases.len())
+            })
+            .max()
+            .unwrap_or(0)
+    } else {
+        header_score(value, fallback_aliases)
+    };
+    if let Some(rule) = rule {
+        if rule
+            .negative_headers
+            .iter()
+            .any(|header| normalize_header(header) == normalized)
+        {
+            score -= NEGATIVE_HEADER_PENALTY;
+        }
+        if rule
+            .low_priority_headers
+            .iter()
+            .any(|header| normalize_header(header) == normalized)
+        {
+            score -= LOW_PRIORITY_HEADER_PENALTY;
+        }
+    }
+    score.max(0)
+}
+
+fn alias_match_score(normalized: &str, alias: &str, index: usize, alias_count: usize) -> i32 {
+    let candidate = normalize_header(alias);
+    if candidate.is_empty() {
+        return 0;
+    }
+    let order_bonus = alias_count.saturating_sub(index + 1) as i32 * HEADER_ALIAS_ORDER_STEP;
+    if normalized == candidate {
+        HEADER_EXACT_SCORE + order_bonus
+    } else if normalized.contains(&candidate) || candidate.contains(normalized) {
+        HEADER_CONTAINS_SCORE + order_bonus
+    } else {
+        0
+    }
+}
+
+fn field_sample_adjustment(
+    sheet: &SheetData,
+    header_idx: usize,
+    column: usize,
+    rule: Option<&FieldRule>,
+    sample_limit: usize,
+) -> i32 {
+    let Some(rule) = rule else {
+        return 0;
+    };
+    if rule.compiled_value_patterns.is_empty() && rule.compiled_negative_patterns.is_empty() {
+        return 0;
+    }
+    let values = sheet
+        .rows
+        .iter()
+        .skip(header_idx + 1)
+        .take(sample_limit)
+        .filter_map(|row| row.get(column).map(CellValue::text))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return 0;
+    }
+    let positive_hits = values
+        .iter()
+        .filter(|value| {
+            rule.compiled_value_patterns
+                .iter()
+                .any(|pattern| pattern.is_match(value))
+        })
+        .count();
+    let negative_hits = values
+        .iter()
+        .filter(|value| {
+            rule.compiled_negative_patterns
+                .iter()
+                .any(|pattern| pattern.is_match(value))
+        })
+        .count();
+    VALUE_PATTERN_MAX_SCORE * positive_hits as i32 / values.len() as i32
+        - NEGATIVE_PATTERN_MAX_PENALTY * negative_hits as i32 / values.len() as i32
 }
 
 fn normalize_header(value: &str) -> String {
@@ -2211,6 +2567,9 @@ fn build_price_index(sheet: &SheetData, mapping: &PriceCheckMapping) -> PriceInd
                 .sku_country_keys
                 .insert(prefix_key(&country.code, &base, &shipping));
         }
+        let supports_fixed_price_fallback = mapping.quantity_tier_columns.len() == 1
+            && mapping.quantity_tier_columns[0].quantity == FIXED_PRICE_QUANTITY
+            && parse_tier(&mapping.quantity_tier_columns[0].header).is_none();
         for tier in &mapping.quantity_tier_columns {
             let entry = PriceEntry {
                 price: row.get(tier.column.saturating_sub(1)).and_then(parse_price),
@@ -2229,6 +2588,13 @@ fn build_price_index(sheet: &SheetData, mapping: &PriceCheckMapping) -> PriceInd
                 .entry(quantity_key(&country.code, &sku, tier.quantity))
                 .or_default()
                 .push((shipping.clone(), entry.clone()));
+            if supports_fixed_price_fallback {
+                index
+                    .fixed_price_entries
+                    .entry(country_quantity_key(&country.code, tier.quantity))
+                    .or_default()
+                    .push((sku.clone(), entry.clone()));
+            }
             index.entries.entry(key).or_default().push(entry);
         }
     }
@@ -2493,6 +2859,33 @@ impl PriceIndex {
                 }
             }
         }
+        let unique_fixed_price_entries = ambiguous
+            .is_empty()
+            .then(|| {
+                self.fixed_price_entries
+                    .get(&country_quantity_key(country, quantity))
+            })
+            .flatten()
+            .filter(|entries| entries.len() == 1);
+        if let Some(entries) = unique_fixed_price_entries {
+            let (matched_sku, entry) = &entries[0];
+            if let Some(price) = entry.price {
+                return Lookup {
+                    status: "matched",
+                    price: Some(price),
+                    matched_sku: matched_sku.clone(),
+                    source_sheet: entry.sheet_name.clone(),
+                    reason: "固定单价表按国家唯一货号匹配".to_string(),
+                };
+            }
+            return Lookup {
+                status: "价格不可用",
+                price: None,
+                matched_sku: matched_sku.clone(),
+                source_sheet: entry.sheet_name.clone(),
+                reason: format!("核价单元格不可用: {}", entry.raw_price),
+            };
+        }
         if !ambiguous.is_empty() {
             return Lookup {
                 status: if shipping_ambiguous {
@@ -2555,6 +2948,10 @@ fn full_key(country: &str, sku: &str, shipping: &str, quantity: i64) -> String {
     )
 }
 
+fn country_quantity_key(country: &str, quantity: i64) -> String {
+    format!("{}\u{1f}{}", country, quantity)
+}
+
 fn quantity_key(country: &str, sku: &str, quantity: i64) -> String {
     format!("{}\u{1f}{}\u{1f}{}", country, sku, quantity)
 }
@@ -2603,6 +3000,50 @@ fn ratio(numerator: usize, denominator: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use regex::Regex;
+
+    #[test]
+    fn configured_alias_order_breaks_header_ties() {
+        let preferred_first = FieldRule {
+            header_aliases: vec!["Stock code".to_string(), "SKU".to_string()],
+            ..FieldRule::default()
+        };
+        let sku_first = FieldRule {
+            header_aliases: vec!["SKU".to_string(), "Stock code".to_string()],
+            ..FieldRule::default()
+        };
+
+        assert!(
+            configured_header_score("Stock code", Some(&preferred_first), &[])
+                > configured_header_score("Stock code", Some(&sku_first), &[])
+        );
+    }
+
+    #[test]
+    fn configured_value_pattern_disambiguates_duplicate_headers() {
+        let rule = FieldRule {
+            header_aliases: vec!["SKU".to_string()],
+            value_patterns: vec!["(?i)^[a-z]{2}\\d{6}$".to_string()],
+            compiled_value_patterns: vec![Regex::new("(?i)^[a-z]{2}\\d{6}$").unwrap()],
+            ..FieldRule::default()
+        };
+        let sheet = SheetData {
+            name: "order".to_string(),
+            rows: vec![
+                vec![CellValue::string("SKU"), CellValue::string("SKU")],
+                vec![CellValue::string("Red shoe"), CellValue::string("AB260001")],
+                vec![
+                    CellValue::string("Blue shoe"),
+                    CellValue::string("AB260002"),
+                ],
+            ],
+        };
+
+        assert_eq!(
+            configured_best_column(&sheet, 0, Some(&rule), SKU_ALIASES),
+            Some(1)
+        );
+    }
 
     #[test]
     fn country_three_fields_are_one_identity() {
@@ -2892,6 +3333,154 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 5]
         );
+    }
+
+    #[test]
+    fn pricing_candidate_skips_blank_row_before_quantity_tiers() {
+        let sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("Item No."),
+                    CellValue::string("Country"),
+                    CellValue::string("Dropshipping price"),
+                    CellValue::string(""),
+                ],
+                vec![CellValue::Empty; 4],
+                vec![
+                    CellValue::string(""),
+                    CellValue::string(""),
+                    CellValue::string("0"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ABC123"),
+                    CellValue::string("US"),
+                    CellValue::string("0"),
+                    CellValue::string("8.5"),
+                ],
+            ],
+        };
+
+        let pricing = infer_pricing_candidate(&sheet).expect("pricing candidate");
+        assert_eq!(pricing.quantity_header_row, Some(3));
+        assert_eq!(
+            pricing
+                .tier_columns
+                .iter()
+                .map(|tier| tier.quantity)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn pricing_candidate_supports_fixed_unit_price_column() {
+        let sheet = SheetData {
+            name: "price".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("Item No."),
+                    CellValue::string("Country"),
+                    CellValue::string("Product shipping VAT tax"),
+                    CellValue::string("Shipping Country"),
+                ],
+                vec![
+                    CellValue::string("QY2600223"),
+                    CellValue::string("US"),
+                    CellValue::string("112"),
+                    CellValue::string("4PX"),
+                ],
+            ],
+        };
+
+        let pricing = infer_pricing_candidate(&sheet).expect("pricing candidate");
+        assert_eq!(pricing.quantity_header_row, None);
+        assert_eq!(pricing.tier_columns.len(), 1);
+        assert_eq!(pricing.tier_columns[0].quantity, 1);
+        assert_eq!(pricing.tier_columns[0].column, 3);
+    }
+
+    #[test]
+    fn wide_shopline_order_sheet_keeps_distant_sku_quantity_pair() {
+        let mut header = vec![CellValue::Empty; 126];
+        header[0] = CellValue::string("Order number");
+        header[9] = CellValue::string("Product's SKU (sales number)");
+        header[29] = CellValue::string("Quantity");
+        header[92] = CellValue::string("Country/Region");
+        let mut row = vec![CellValue::Empty; 126];
+        row[0] = CellValue::string("GC-SL-15132");
+        row[9] = CellValue::string("QY2600223");
+        row[29] = CellValue::string("1");
+        row[92] = CellValue::string("US");
+        let sheet = SheetData {
+            name: "Sheet1".to_string(),
+            rows: vec![header, row],
+        };
+
+        let order = infer_order_candidate(&sheet).expect("order candidate");
+        assert_eq!(order.sku_qty_pairs[0].sku_column, 10);
+        assert_eq!(order.sku_qty_pairs[0].qty_column, 30);
+        assert_eq!(order.country_code_column, Some(93));
+    }
+
+    #[test]
+    fn order_candidate_uses_product_name_when_sku_is_missing() {
+        let mut header = vec![CellValue::Empty; 100];
+        header[0] = CellValue::string("Order number");
+        header[8] = CellValue::string("Product name");
+        header[29] = CellValue::string("Quantity");
+        header[92] = CellValue::string("Country/Region");
+        let mut row = vec![CellValue::Empty; 100];
+        row[0] = CellValue::string("GC-SL-15132");
+        row[8] = CellValue::string("Cordless snow blower");
+        row[29] = CellValue::string("1");
+        row[92] = CellValue::string("US");
+        let sheet = SheetData {
+            name: "Sheet1 (2)".to_string(),
+            rows: vec![header, row],
+        };
+
+        let order = infer_order_candidate(&sheet).expect("order candidate");
+        assert_eq!(order.sku_qty_pairs[0].sku_column, 9);
+        assert_eq!(order.sku_qty_pairs[0].qty_column, 30);
+        assert!(order.notes.iter().any(|note| note.contains("产品名称")));
+    }
+
+    #[test]
+    fn fixed_price_index_falls_back_to_unique_country_sku() {
+        let sheet = SheetData {
+            name: "price".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("Item No."),
+                    CellValue::string("Country"),
+                    CellValue::string("Product shipping VAT tax"),
+                ],
+                vec![
+                    CellValue::string("QY2600223"),
+                    CellValue::string("US"),
+                    CellValue::string("112"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 3,
+                header: "Product shipping VAT tax".to_string(),
+            }],
+            ..PriceCheckMapping::default()
+        };
+
+        let index = build_price_index(&sheet, &mapping);
+        let lookup = index.lookup("US", "CORDLESSSNOWBLOWER", "", 1);
+        assert_eq!(lookup.status, "matched");
+        assert_eq!(lookup.price, Some(112.0));
+        assert_eq!(lookup.matched_sku, "QY2600223");
     }
 
     #[test]
