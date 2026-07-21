@@ -1182,6 +1182,21 @@ app.whenReady().then(async () => {
     return result.filePaths[0];
   });
 
+  ipcMain.handle("dialog:select-excel-file", async (event) => {
+    requireTrustedIpc(event);
+    const config = await readRuntimeConfig();
+    const result = await dialog.showOpenDialog({
+      defaultPath: config.recent_input_dir,
+      filters: [{ name: "Excel 文件", extensions: ["xlsx", "xls", "xlsm", "xlsb"] }],
+      properties: ["openFile"],
+    });
+    if (result.canceled || !result.filePaths[0]) {
+      return null;
+    }
+    await writeRuntimeConfig({ recent_input_dir: dirname(result.filePaths[0]) });
+    return result.filePaths[0];
+  });
+
   ipcMain.handle("dialog:select-config", async (event) => {
     requireTrustedIpc(event);
     const config = await readRuntimeConfig();

@@ -207,6 +207,7 @@ const desktopAPI = {
   exportRuntimeLog: (): Promise<string | null> => ipcRenderer.invoke("app:export-runtime-log"),
   openPath: (filePath: string): Promise<string> => ipcRenderer.invoke("app:open-path", filePath),
   selectDirectory: (purpose?: "input" | "output", persist = true): Promise<string | null> => ipcRenderer.invoke("dialog:select-directory", purpose, persist),
+  selectExcelFile: (): Promise<string | null> => ipcRenderer.invoke("dialog:select-excel-file"),
   selectConfig: (): Promise<string | null> => ipcRenderer.invoke("dialog:select-config"),
   listExcelFiles: (directory: string): Promise<DirectoryScanResult> => ipcRenderer.invoke("app:list-excel-files", directory),
   readExcelPreviewFile: (filePath: string): Promise<ExcelPreviewFileData> => ipcRenderer.invoke("app:read-excel-preview-file", filePath),
