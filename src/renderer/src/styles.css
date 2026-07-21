@@ -4704,6 +4704,21 @@ html.dark [data-sonner-toast].cyber-toast {
   transform: translateY(-50%) !important;
 }
 
+/* 默认禁止复制界面文案，仅开放业务表格与配置内容。 */
+.app-shell,
+.cyber-app {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.app-shell table,
+.cyber-app table,
+.config-center-page input,
+.config-center-page textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cyber-app,
   .cyber-sidebar,
