@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, CheckCircle2, FilePlus2, Files, FolderOpen, Gauge, ListChecks, Settings2 } from "lucide-react";
+import { AlertTriangle, ArrowRight, ChartNoAxesCombined, CheckCircle2, FilePlus2, Files, FolderOpen, Gauge, Inbox, ListChecks, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { HistoryTrendChart } from "@/components/history-trend-chart";
 import type { DesktopAPI, TaskHistorySummary } from "../../../preload";
@@ -46,31 +46,35 @@ export function DashboardPage({ api, dark, currentFileCount, outputDir, onNewPro
     return () => { cancelled = true; };
   }, [api]);
 
+  const hasTodayData = summary.today.files > 0 || summary.today.tasks > 0;
+  const hasTrendData = summary.trend.some((item) => item.files > 0);
   const metrics = [
-    { label: "今日处理量", value: summary.today.files, suffix: "个文件", icon: Files },
-    { label: "今日任务", value: summary.today.tasks, suffix: "个批次", icon: ListChecks },
-    { label: "平均匹配率", value: `${Math.round(summary.today.matchRate * 100)}%`, suffix: "今日数据", icon: Gauge },
-    { label: "异常数据", value: summary.today.exceptions, suffix: "行待处理", icon: AlertTriangle },
+    { label: "今日处理量", value: summary.today.files || "—", suffix: summary.today.files ? "个文件" : "尚无文件", icon: Files },
+    { label: "今日任务", value: summary.today.tasks || "—", suffix: summary.today.tasks ? "个批次" : "尚无批次", icon: ListChecks },
+    { label: "平均匹配率", value: hasTodayData ? `${Math.round(summary.today.matchRate * 100)}%` : "—", suffix: hasTodayData ? "今日数据" : "处理后计算", icon: Gauge },
+    { label: "异常数据", value: hasTodayData ? summary.today.exceptions : "—", suffix: hasTodayData ? "行待处理" : "暂无待处理行", icon: AlertTriangle },
   ];
 
   return (
     <div className="dashboard-page">
       <header className="dashboard-hero">
-        <div><span>业务总览</span><h1>工作台</h1><p>查看核价进展、配置健康状态与最近任务。</p></div>
+        <h1>工作台</h1>
         <Button onClick={onNewProcessing}><FilePlus2 />新建处理</Button>
       </header>
 
       <section className="dashboard-metrics" aria-label="今日业务指标">
-        {metrics.map(({ label, value, suffix, icon: Icon }) => <article key={label}><div><Icon /></div><span>{label}</span><strong>{value}</strong><small>{suffix}</small></article>)}
+        {metrics.map(({ label, value, suffix, icon: Icon }) => <article key={label}><div><span className="dashboard-metric-icon"><Icon /></span><span>{label}</span></div><strong>{value}</strong><small>{suffix}</small></article>)}
       </section>
 
       <section className="dashboard-grid">
         <article className="dashboard-card dashboard-trend">
-          <header><div><span>处理趋势</span><h2>最近 7 天</h2></div><small>按导入文件数统计</small></header>
-          <HistoryTrendChart trend={summary.trend} dark={dark} />
+          <header><h2>处理趋势</h2><small>按导入文件数统计</small></header>
+          {hasTrendData
+            ? <HistoryTrendChart trend={summary.trend} dark={dark} />
+            : <div className="dashboard-empty dashboard-trend-empty"><ChartNoAxesCombined /><strong>暂无处理数据</strong><span>完成首次核价后开始统计趋势</span></div>}
         </article>
         <article className="dashboard-card dashboard-health">
-          <header><div><span>运行准备</span><h2>配置健康状态</h2></div></header>
+          <header><h2>配置健康状态</h2></header>
           <div className={configHealth.healthy ? "is-healthy" : "is-warning"}>{configHealth.healthy ? <CheckCircle2 /> : <AlertTriangle />}<div><strong>{configHealth.label}</strong><span>{configHealth.healthy ? "规则文件已加载并通过校验" : "进入配置检查查看具体问题"}</span></div></div>
           <Button variant="outline" onClick={onOpenConfig}><Settings2 />配置检查<ArrowRight /></Button>
         </article>
@@ -78,15 +82,14 @@ export function DashboardPage({ api, dark, currentFileCount, outputDir, onNewPro
 
       <section className="dashboard-grid dashboard-lower">
         <article className="dashboard-card dashboard-recent">
-          <header><div><span>任务记录</span><h2>最近任务</h2></div><Button variant="ghost" onClick={onOpenFiles}>查看文件处理<ArrowRight /></Button></header>
+          <header><h2>最近任务</h2><Button variant="ghost" onClick={onOpenFiles}>{currentFileCount ? `${currentFileCount} 个文件待处理` : "查看文件处理"}<ArrowRight /></Button></header>
           <div className="dashboard-task-list">
-            {summary.recent.length === 0 ? <div className="dashboard-empty">暂无任务记录，完成一次核价后会显示在这里。</div> : summary.recent.map((task) => <div key={task.id}><span className={`is-${task.status}`}>{statusLabels[task.status]}</span><div><strong>{task.totalFiles} 个文件</strong><small>{new Date(task.startedAt).toLocaleString("zh-CN")}</small></div><em>{task.totalRows ? `${Math.round(task.matchedRows / task.totalRows * 100)}%` : "—"}</em></div>)}
+            {summary.recent.length === 0 ? <div className="dashboard-empty"><Inbox /><strong>还没有任务记录</strong><span>完成一次核价后会显示在这里</span></div> : summary.recent.map((task) => <div key={task.id}><span className={`is-${task.status}`}>{statusLabels[task.status]}</span><div><strong>{task.totalFiles} 个文件</strong><small>{new Date(task.startedAt).toLocaleString("zh-CN")}</small></div><em>{task.totalRows ? `${Math.round(task.matchedRows / task.totalRows * 100)}%` : "—"}</em></div>)}
           </div>
         </article>
         <article className="dashboard-card dashboard-shortcuts">
-          <header><div><span>快捷入口</span><h2>继续工作</h2></div></header>
-          <button type="button" onClick={onNewProcessing}><FilePlus2 /><span><strong>新建处理</strong><small>导入新的 Excel 批次</small></span><ArrowRight /></button>
-          <button type="button" onClick={onOpenFiles} disabled={currentFileCount === 0}><ListChecks /><span><strong>继续当前批次</strong><small>{currentFileCount ? `${currentFileCount} 个文件待处理` : "当前没有文件"}</small></span><ArrowRight /></button>
+          <header><h2>配置与输出</h2></header>
+          <button type="button" onClick={onOpenConfig}><Settings2 /><span><strong>查看规则配置</strong><small>当前使用的核价规则</small></span><ArrowRight /></button>
           <button type="button" onClick={() => outputDir && void api?.openPath(outputDir)} disabled={!outputDir}><FolderOpen /><span><strong>打开输出目录</strong><small>{outputDir || "尚未选择目录"}</small></span><ArrowRight /></button>
         </article>
       </section>

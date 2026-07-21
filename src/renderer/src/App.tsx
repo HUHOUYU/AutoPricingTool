@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { type Column, type ColumnDef, type ColumnPinningState, type ColumnSizingState, type SortingState, type VisibilityState, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useGSAP } from "@gsap/react";
+import { gsap } from "gsap";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import {
   BarChart3,
@@ -45,7 +47,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import brandExcelUrl from "@/assets/brand-excel.png";
-import { useDropzone } from "react-dropzone";
+import { useDropzone, type DropEvent } from "react-dropzone";
 import { toast, Toaster } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,6 +70,8 @@ import type {
   ProcessorEvent,
   RuntimeConfig,
 } from "../../preload";
+
+gsap.registerPlugin(useGSAP);
 
 type FileResult = {
   path: string;
@@ -169,8 +173,23 @@ function parentDirectory(path: string): string {
   return path.replace(/[\\/][^\\/]*$/, "");
 }
 
+function isExcelPath(path: string): boolean {
+  return /\.(xlsx|xlsm|xlsb|xls)$/i.test(path);
+}
+
 function isExcelFile(file: File): boolean {
-  return /\.(xlsx|xlsm|xlsb|xls)$/i.test(file.name);
+  return isExcelPath(file.name);
+}
+
+function getNativeFilesFromEvent(event: DropEvent): Promise<File[]> {
+  if ("dataTransfer" in event && event.dataTransfer?.files) {
+    return Promise.resolve(Array.from(event.dataTransfer.files));
+  }
+  if ("target" in event && event.target && "files" in event.target) {
+    const files = (event.target as HTMLInputElement).files;
+    return Promise.resolve(files ? Array.from(files) : []);
+  }
+  return Promise.resolve([]);
 }
 
 function droppedFolderName(file: File): string | null {
@@ -402,6 +421,7 @@ function SidebarTooltip({ label, enabled, children }: { label: string; enabled: 
 
 export function App(): React.JSX.Element {
   const shellRef = useRef<HTMLElement>(null);
+  const workspaceRef = useRef<HTMLElement>(null);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const logDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const [files, setFiles] = useState<string[]>([]);
@@ -418,6 +438,7 @@ export function App(): React.JSX.Element {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [batchStarted, setBatchStarted] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
@@ -449,6 +470,51 @@ export function App(): React.JSX.Element {
   const mappingValidationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mappingValidationInFlightRef = useRef(false);
   const pendingMappingValidationRef = useRef<{ path: string; mapping: PriceCheckMapping; version: number } | null>(null);
+  const batchLayout = activePage !== "files" ? null : batchStarted ? "locked" : files.length > 0 ? "ready" : "empty";
+  const previousBatchLayoutRef = useRef<typeof batchLayout>(null);
+
+  useGSAP(() => {
+    const workspace = workspaceRef.current;
+    const previousLayout = previousBatchLayoutRef.current;
+    previousBatchLayoutRef.current = batchLayout;
+    if (!workspace || !batchLayout) return;
+
+    if (batchLayout === "locked") {
+      gsap.set(workspace, { clearProps: "gridTemplateRows" });
+      return;
+    }
+
+    const finalRows = batchLayout === "empty" ? "calc(100% - 116px) 108px" : "56px calc(100% - 64px)";
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches || navigator.userAgent.includes("jsdom");
+    if (!previousLayout || previousLayout === batchLayout || reducedMotion) {
+      gsap.set(workspace, { clearProps: "gridTemplateRows" });
+      return;
+    }
+
+    const workspaceHeight = workspace.clientHeight;
+    const emptyRows = `${Math.max(0, workspaceHeight - 116)}px 108px`;
+    const readyRows = `56px ${Math.max(0, workspaceHeight - 64)}px`;
+    const lockedRows = `0px ${workspaceHeight}px`;
+    const timeline = gsap.timeline({
+      onComplete: () => gsap.set(workspace, { clearProps: "gridTemplateRows" }),
+    });
+
+    timeline.fromTo(workspace, {
+      gridTemplateRows: previousLayout === "empty" ? emptyRows : previousLayout === "ready" ? readyRows : lockedRows,
+    }, {
+      gridTemplateRows: finalRows,
+      duration: 1,
+      ease: "power3.inOut",
+    }, 0);
+
+    if (batchLayout === "ready") {
+      timeline.fromTo(".cyber-file-table tbody", { autoAlpha: 0, y: 10 }, { autoAlpha: 1, y: 0, duration: 0.42, ease: "power2.out" }, 0.5);
+      timeline.fromTo(".cyber-pagination", { autoAlpha: 0, y: 10 }, { autoAlpha: 1, y: 0, duration: 0.4, ease: "power2.out" }, 0.58);
+    } else {
+      timeline.fromTo(".cyber-upload-panel", { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.5, ease: "power2.out" }, 0.08);
+      timeline.fromTo(".cyber-dropzone", { autoAlpha: 0, y: -8 }, { autoAlpha: 1, y: 0, duration: 0.52, ease: "power2.out" }, 0.18);
+    }
+  }, { scope: workspaceRef, dependencies: [batchLayout], revertOnUpdate: true });
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -618,7 +684,9 @@ export function App(): React.JSX.Element {
       }
       if (event.type === "price-progress") {
         setActivePath(event.path);
-        setProgress({ current: event.current, total: event.total, phase: event.phase, path: event.path });
+        setProgress((current) => event.phase === "rows"
+          ? { ...current, phase: event.phase, path: event.path }
+          : { current: event.current, total: event.total, phase: event.phase, path: event.path });
         return;
       }
       if (event.type === "price-file-result") {
@@ -652,11 +720,15 @@ export function App(): React.JSX.Element {
         setActivePath("");
         if (event.mode === "analysis") {
           setIsAnalyzing(false);
+          setIsPaused(false);
           appendLog(event.stopped ? "分析已停止" : "分析完成，请检查待确认文件", event.stopped ? "warning" : "success");
           if (!event.stopped) setAnalysisCompletedToken((current) => current + 1);
         } else {
           setIsRunning(false);
           setIsPaused(false);
+          setProgress((current) => event.stopped
+            ? { ...current, path: "" }
+            : { ...current, current: current.total, phase: "run", path: "" });
           appendLog(event.stopped ? "核价已停止" : "核价完成", event.stopped ? "warning" : "success");
           if (!event.stopped) {
             const completedCount = event.files.filter((item) => Number(item.exceptionRows ?? 0) === 0).length;
@@ -699,6 +771,10 @@ export function App(): React.JSX.Element {
   }, [handleProcessorEvent]);
 
   const registerPaths = useCallback((paths: string[], mode: ImportMode): ImportSummary => {
+    if (batchStarted) {
+      toast.info("当前批次已开始，请重置后导入新文件");
+      return { imported: 0, duplicates: 0 };
+    }
     const existingKeys = new Set(files.map((path) => path.toLocaleLowerCase()));
     const uniqueIncoming = Array.from(new Map(paths.map((path) => [path.toLocaleLowerCase(), path])).values());
     const newPaths = uniqueIncoming.filter((path) => !existingKeys.has(path.toLocaleLowerCase()));
@@ -740,7 +816,7 @@ export function App(): React.JSX.Element {
     appendLog(`已通过${modeLabel}模式加入 ${newPaths.length} 个 Excel 文件`);
     toast.success(`已导入 ${newPaths.length} 个 Excel 文件${duplicateCount ? `，跳过 ${duplicateCount} 个重复文件` : ""}`);
     return { imported: newPaths.length, duplicates: duplicateCount };
-  }, [appendLog, files, setActiveTab]);
+  }, [appendLog, batchStarted, files, setActiveTab]);
 
   const addFiles = useCallback((incoming: File[]): void => {
     const api = getDesktopAPI();
@@ -750,7 +826,13 @@ export function App(): React.JSX.Element {
       toast.warning("单文件模式一次只能导入 1 个 Excel 文件");
       return;
     }
-    const paths = incoming.filter(isExcelFile).map((file) => {
+    const supportedFiles = incoming.filter(isExcelFile);
+    if (supportedFiles.length === 0) {
+      appendLog("没有发现支持的 Excel 文件（xlsx、xlsm、xlsb、xls）", "warning");
+      toast.warning("没有发现支持的 Excel 文件");
+      return;
+    }
+    const paths = supportedFiles.map((file) => {
       try {
         return api.getPathForFile(file);
       } catch {
@@ -758,12 +840,25 @@ export function App(): React.JSX.Element {
       }
     }).filter(Boolean);
     if (paths.length === 0) {
-      appendLog("没有发现支持的 Excel 文件（xlsx、xlsm、xlsb、xls）", "warning");
-      toast.warning("没有发现支持的 Excel 文件");
+      appendLog("无法读取所选文件的本地路径，请双击选择文件重试", "warning");
+      toast.warning("无法读取文件路径，请双击选择文件重试");
       return;
     }
     registerPaths(paths, "file");
   }, [appendLog, registerPaths]);
+
+  const chooseInputFile = useCallback(async (): Promise<void> => {
+    const api = getDesktopAPI();
+    if (!api || batchStarted) return;
+    const selected = await api.selectExcelFile();
+    if (!selected) return;
+    if (!isExcelPath(selected)) {
+      appendLog("所选文件不是支持的 Excel 格式", "warning");
+      toast.warning("仅支持 Excel 文件（xlsx、xlsm、xlsb、xls）");
+      return;
+    }
+    registerPaths([selected], "file");
+  }, [appendLog, batchStarted, registerPaths]);
 
   const scanInputDirectory = useCallback(async (directoryPath: string): Promise<void> => {
     const api = getDesktopAPI();
@@ -795,7 +890,7 @@ export function App(): React.JSX.Element {
         return;
       } catch (error) {
         appendLog("无法读取拖入的文件夹：" + String(error), "warning");
-        toast.warning("无法读取拖入的文件夹，请点击选择文件夹");
+        toast.warning("无法读取拖入的文件夹，请双击选择文件夹");
         return;
       }
     }
@@ -822,13 +917,15 @@ export function App(): React.JSX.Element {
     if (skipped > 0) toast.info(`文件夹导入完成，已跳过 ${skipped} 个非 Excel 文件`);
   }, [appendLog, registerPaths, scanInputDirectory]);
 
-  const { getRootProps, getInputProps, isDragActive, open: openFilePicker } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: importSourceMode === "file" ? {
       "application/vnd.ms-excel": [".xls"],
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx", ".xlsm", ".xlsb"],
     } : undefined,
     maxFiles: importSourceMode === "file" ? 1 : 0,
     multiple: importSourceMode === "folder",
+    disabled: batchStarted,
+    getFilesFromEvent: importSourceMode === "file" ? getNativeFilesFromEvent : undefined,
     noClick: true,
     noKeyboard: true,
     onDrop: (acceptedFiles, rejections) => {
@@ -855,6 +952,7 @@ export function App(): React.JSX.Element {
   const analyzeFiles = async (targetFiles: string[] = actionFiles): Promise<void> => {
     const api = getDesktopAPI();
     if (!api || targetFiles.length === 0 || isAnalyzing || isRunning) return;
+    setBatchStarted(true);
     setIsAnalyzing(true);
     setActiveTab("pending");
     setActivePath("");
@@ -910,6 +1008,7 @@ export function App(): React.JSX.Element {
       return;
     }
     const effectiveOutputDir = outputDir || await api.getDefaultPriceOutputDir();
+    setBatchStarted(true);
     setIsAnalyzing(false);
     setIsRunning(true);
     setIsPaused(false);
@@ -1042,6 +1141,7 @@ export function App(): React.JSX.Element {
     setIsAnalyzing(false);
     setIsRunning(false);
     setIsPaused(false);
+    setBatchStarted(false);
     setActivePath("");
     setFiles([]);
     setImportedAt({});
@@ -1330,7 +1430,20 @@ export function App(): React.JSX.Element {
   const totalRows = useMemo(() => Object.values(results).reduce((sum, item) => sum + (item.totalRows ?? 0), 0), [results]);
   const matchedRate = totalRows > 0 ? ((totalMatched / totalRows) * 100).toFixed(1) + "%" : "—";
   const selectedAll = visibleFiles.length > 0 && visibleFiles.every((path) => selectedSet.has(path));
+  const isTaskActive = isAnalyzing || isRunning;
+  const hasResettableTaskState = files.length > 0 || logs.length > 0 || batchStarted;
   const phaseLabel = progress.phase === "analyze" ? "分析" : progress.phase === "rows" ? "写入" : progress.phase === "run" ? "核价" : "等待操作";
+  const batchPhaseLabel = isPaused
+    ? "任务已暂停"
+    : isAnalyzing
+      ? "正在分析文件"
+      : isRunning
+        ? "正在核价"
+        : Object.keys(results).length > 0
+          ? "批次处理完成"
+          : Object.keys(analyses).length > 0
+            ? "分析已完成"
+            : "批次已停止";
   const detailAnalysis = detailPath ? analyses[detailPath] : undefined;
   const detailResult = detailPath ? results[detailPath] : undefined;
   const detailMapping = detailPath ? mappings[detailPath] ?? detailAnalysis?.suggestedMapping ?? null : null;
@@ -1481,10 +1594,10 @@ export function App(): React.JSX.Element {
 
   const renderTaskActions = (className: string, showReset = false): React.JSX.Element => (
     <div className={className} aria-label="快捷操作">
-      <SidebarTooltip label="开始处理" enabled={sidebarCollapsed}><button type="button" aria-label="开始处理" className="cyber-action is-start" onClick={() => void startCurrentTask()} data-unavailable={isAnalyzing || isRunning}><Play /><strong>开始处理</strong></button></SidebarTooltip>
-      <SidebarTooltip label={isPaused ? "继续任务" : "暂停任务"} enabled={sidebarCollapsed}><button type="button" aria-label={isPaused ? "继续任务" : "暂停任务"} className="cyber-action is-pause" onClick={() => void togglePauseTask()} data-unavailable={!isAnalyzing && !isRunning}>{isPaused ? <Play /> : <Pause />}<strong>{isPaused ? "继续任务" : "暂停任务"}</strong></button></SidebarTooltip>
-      <SidebarTooltip label="停止任务" enabled={sidebarCollapsed}><button type="button" aria-label="停止任务" className="cyber-action is-stop" onClick={() => void stopCurrentTask()} data-unavailable={!isAnalyzing && !isRunning}><CircleStop /><strong>停止任务</strong></button></SidebarTooltip>
-      {showReset ? <button type="button" aria-label="重置任务" className="cyber-action is-reset" onClick={() => void resetTask()}><RefreshCw /><strong>重置</strong></button> : null}
+      {!batchStarted ? <SidebarTooltip label="开始处理" enabled={sidebarCollapsed}><button type="button" aria-label="开始处理" className="cyber-action is-start" onClick={() => void startCurrentTask()} disabled={actionFiles.length === 0 || isTaskActive}><Play /><strong>开始处理</strong></button></SidebarTooltip> : null}
+      {isTaskActive ? <SidebarTooltip label={isPaused ? "继续任务" : "暂停任务"} enabled={sidebarCollapsed}><button type="button" aria-label={isPaused ? "继续任务" : "暂停任务"} className="cyber-action is-pause" onClick={() => void togglePauseTask()} disabled={!isTaskActive}>{isPaused ? <Play /> : <Pause />}<strong>{isPaused ? "继续任务" : "暂停任务"}</strong></button></SidebarTooltip> : null}
+      {isTaskActive ? <SidebarTooltip label="停止任务" enabled={sidebarCollapsed}><button type="button" aria-label="停止任务" className="cyber-action is-stop" onClick={() => void stopCurrentTask()} disabled={!isTaskActive}><CircleStop /><strong>停止任务</strong></button></SidebarTooltip> : null}
+      {showReset ? <button type="button" aria-label="重置任务" className="cyber-action is-reset" onClick={() => void resetTask()} disabled={!hasResettableTaskState}><RefreshCw /><strong>重置</strong></button> : null}
     </div>
   );
 
@@ -1499,7 +1612,23 @@ export function App(): React.JSX.Element {
     <TooltipProvider delayDuration={220} skipDelayDuration={80}>
     <MotionConfig reducedMotion="user">
       <main className={"cyber-app" + (sidebarCollapsed ? " is-sidebar-collapsed" : "")} ref={shellRef}>
-        <Toaster richColors position="top-right" closeButton theme={theme} />
+        <Toaster
+          className="cyber-toaster"
+          position="top-right"
+          closeButton
+          theme={theme}
+          duration={1_000}
+          gap={8}
+          offset={16}
+          toastOptions={{
+            classNames: {
+              toast: "cyber-toast",
+              title: "cyber-toast-title",
+              icon: "cyber-toast-icon",
+              closeButton: "cyber-toast-close",
+            },
+          }}
+        />
 
         <div className="cyber-window-drag" aria-hidden="true" />
         <div className="cyber-window-controls" aria-label="窗口控制">
@@ -1534,7 +1663,7 @@ export function App(): React.JSX.Element {
             })}
           </nav>
 
-          {sidebarCollapsed && activePage === "files" ? renderTaskActions("cyber-rail-actions", true) : null}
+          {sidebarCollapsed && activePage === "files" && files.length > 0 ? renderTaskActions("cyber-rail-actions", true) : null}
 
           <div className="cyber-sidebar-tools">
             <SidebarTooltip label="配置中心" enabled={sidebarCollapsed}><button type="button" aria-label="配置中心" onClick={() => setActivePage("config")}><Settings /></button></SidebarTooltip>
@@ -1637,67 +1766,95 @@ export function App(): React.JSX.Element {
           </> : null}
         </AnimatePresence>
 
-        <section className={`cyber-workspace is-${activePage}` + (!["workbench", "files", "config", "templates"].includes(activePage) ? " is-coming-soon" : "")}>
+        <section ref={workspaceRef} className={`cyber-workspace is-${activePage}${activePage === "files" ? batchStarted ? " has-locked-batch" : files.length > 0 ? " has-ready-batch" : " has-empty-batch" : ""}` + (!["workbench", "files", "config", "templates"].includes(activePage) ? " is-coming-soon" : "")}>
           {activePage === "workbench" ? (
             <DashboardPage
               api={getDesktopAPI()}
               dark={theme === "dark"}
               currentFileCount={files.length}
               outputDir={outputDir}
-              onNewProcessing={() => { setActivePage("files"); openFilePicker(); }}
+              onNewProcessing={() => { setActivePage("files"); if (!batchStarted) void chooseInputFile(); }}
               onOpenFiles={() => setActivePage("files")}
               onOpenConfig={() => setActivePage("config")}
             />
           ) : activePage === "files" ? <>
-          <section className="cyber-upload-panel" aria-labelledby="upload-title">
-            <header>
-              <div><span className="panel-icon"><FileBox /></span><h2 id="upload-title">文件处理</h2></div>
-              <div className="cyber-pipeline" aria-label="自动处理流程">
-                <span className={files.length ? "is-done" : ""}><b>1</b>导入<em>{files.length}</em></span>
-                <span className={Object.keys(analyses).length ? "is-done" : isAnalyzing ? "is-active" : ""}><b>2</b>分析<em>{Object.keys(analyses).length}</em></span>
-                <span className={tabCounts.confirm ? "is-warning" : ""}><b>3</b>确认<em>{tabCounts.confirm}</em></span>
-                <span className={isRunning ? "is-active" : Object.keys(results).length ? "is-done" : ""}><b>4</b>核价<em>{Object.keys(results).length}</em></span>
-                <span className={tabCounts.success ? "is-done" : ""}><b>5</b>完成<em>{tabCounts.success}</em></span>
-              </div>
-              <div className="panel-note"><Badge variant="outline">{files.length} 个文件</Badge></div>
-            </header>
-            {!sidebarCollapsed ? renderTaskActions("cyber-workbench-actions cyber-workbench-actions-row", true) : null}
-            <div {...getRootProps({
-              className: "cyber-dropzone" + (isDragActive ? " is-dragging" : ""),
-              onClick: () => importSourceMode === "file" ? openFilePicker() : void chooseInputDirectory(),
-              onKeyDown: (event) => {
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                if (importSourceMode === "file") openFilePicker();
-                else void chooseInputDirectory();
-              },
-            })}>
-              <input {...getInputProps()} />
-              <div className="cyber-wave" aria-hidden="true" />
-              <div className="cyber-upload-visual" aria-hidden="true">{importSourceMode === "file" ? <FileUp /> : <FolderOpen />}</div>
-              <strong>{importSourceMode === "file" ? "拖拽单个 Excel 文件到此处" : "拖拽文件夹到此处"}</strong>
-              <span>{importSourceMode === "file" ? "或点击选择单个本地文件" : "或点击选择本地文件夹"}</span>
-              <small>{importSourceMode === "file" ? "支持格式：.xlsx、.xls、.xlsm、.xlsb" : "将自动扫描文件夹中的 Excel 文件"}</small>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={importSourceMode === "folder"}
-                aria-label={`导入模式：${importSourceMode === "file" ? "单文件" : "文件夹"}`}
-                className={`cyber-import-switch is-${importSourceMode}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setImportSourceMode((current) => current === "file" ? "folder" : "file");
-                }}
-              >
-                <span>单文件</span><i aria-hidden="true" /><span>文件夹</span>
-              </button>
-            </div>
-          </section>
+          <AnimatePresence initial={false}>
+            {!batchStarted ? <motion.section
+              className={`cyber-upload-panel${files.length > 0 ? " is-compact" : " is-expanded"}`}
+              aria-labelledby="upload-title"
+              key="batch-upload"
+              initial={false}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.24 }}
+            >
+              {files.length === 0 ? <>
+                <header>
+                  <div><span className="panel-icon"><FileBox /></span><h2 id="upload-title">文件处理</h2></div>
+                </header>
+                <div {...getRootProps({
+                  className: "cyber-dropzone" + (isDragActive ? " is-dragging" : ""),
+                  onDoubleClick: () => importSourceMode === "file" ? void chooseInputFile() : void chooseInputDirectory(),
+                  onKeyDown: (event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    if (importSourceMode === "file") void chooseInputFile();
+                    else void chooseInputDirectory();
+                  },
+                })}>
+                  <input {...getInputProps()} />
+                  <div className="cyber-wave" aria-hidden="true" />
+                  <div className="cyber-upload-visual" aria-hidden="true">{importSourceMode === "file" ? <FileUp /> : <FolderOpen />}</div>
+                  <strong>{importSourceMode === "file" ? "拖拽单个 Excel 文件到此处" : "拖拽文件夹到此处"}</strong>
+                  <span>{importSourceMode === "file" ? "或双击选择单个本地文件" : "或双击选择本地文件夹"}</span>
+                  <small>{importSourceMode === "file" ? "支持格式：.xlsx、.xls、.xlsm、.xlsb" : "将自动扫描文件夹中的 Excel 文件"}</small>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={importSourceMode === "folder"}
+                    aria-label={`导入模式：${importSourceMode === "file" ? "单文件" : "文件夹"}`}
+                    className={`cyber-import-switch is-${importSourceMode}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setImportSourceMode((current) => current === "file" ? "folder" : "file");
+                    }}
+                  >
+                    <span>单文件</span><i aria-hidden="true" /><span>文件夹</span>
+                  </button>
+                </div>
+              </> : <div {...getRootProps({ className: `cyber-upload-banner${isDragActive ? " is-dragging" : ""}` })}>
+                <input {...getInputProps()} />
+                <div className="cyber-upload-summary">
+                  <span className="panel-icon"><FileCheck2 /></span>
+                  <div><strong id="upload-title">已导入 {files.length} 个文件</strong><small>可继续拖入{importSourceMode === "file" ? "单个 Excel 文件" : "一个文件夹"}</small></div>
+                </div>
+                <div className="cyber-pipeline" aria-label="自动处理流程">
+                  <span className="is-done"><b>1</b>导入<em>{files.length}</em></span>
+                  <span><b>2</b>分析</span>
+                  <span><b>3</b>确认</span>
+                  <span><b>4</b>核价</span>
+                  <span><b>5</b>完成</span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={importSourceMode === "folder"}
+                  aria-label={`导入模式：${importSourceMode === "file" ? "单文件" : "文件夹"}`}
+                  className={`cyber-import-switch is-${importSourceMode}`}
+                  onClick={() => setImportSourceMode((current) => current === "file" ? "folder" : "file")}
+                >
+                  <span>单文件</span><i aria-hidden="true" /><span>文件夹</span>
+                </button>
+                <button type="button" className="cyber-continue-import" onClick={() => importSourceMode === "file" ? void chooseInputFile() : void chooseInputDirectory()}><FilePlus2 />继续添加</button>
+                {!sidebarCollapsed ? renderTaskActions("cyber-workbench-actions cyber-banner-actions", true) : null}
+              </div>}
+            </motion.section> : null}
+          </AnimatePresence>
 
           <section className="cyber-table-panel">
             <header className="cyber-table-toolbar">
               <h2>文件列表 <span>（{visibleFiles.length}）</span></h2>
-              <div className="cyber-table-actions">
+              {files.length > 0 ? <div className="cyber-table-actions">
                 <div className="cyber-tabs" aria-label="文件状态统计">
                   {fileTabs.map((tab) => <button type="button" className={activeTab === tab.key ? "is-active" : ""} key={tab.key} onClick={() => setActiveTab(tab.key)}>{tab.label}<b>{tabCounts[tab.key]}</b></button>)}
                 </div>
@@ -1705,8 +1862,17 @@ export function App(): React.JSX.Element {
                   <summary aria-label="列管理"><Settings2 /></summary>
                   <div>{fileTable.getAllLeafColumns().filter((column) => column.getCanHide()).map((column) => <label key={column.id}><Checkbox checked={column.getIsVisible()} onCheckedChange={(checked) => column.toggleVisibility(Boolean(checked))} />{String(column.columnDef.header)}</label>)}</div>
                 </details>
-              </div>
+              </div> : null}
             </header>
+
+            <AnimatePresence initial={false}>
+              {batchStarted ? <motion.div className={`cyber-batch-progress${isTaskActive ? " is-running" : " is-settled"}`} aria-label="批次处理进度" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 58 }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.24 }}>
+                <div className="cyber-batch-progress-copy"><span className="cyber-batch-phase"><i />{batchPhaseLabel}</span><strong>{progressPercent}%</strong></div>
+                <Progress value={progressPercent} role="progressbar" aria-label={`${batchPhaseLabel} ${progressPercent}%`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent} />
+                <small className="cyber-batch-file">{progress.current}/{progress.total || files.length} 个文件{activePath ? ` · ${fileNameFromPath(activePath)}` : ""}</small>
+                {!sidebarCollapsed ? renderTaskActions("cyber-workbench-actions cyber-progress-actions", true) : null}
+              </motion.div> : null}
+            </AnimatePresence>
 
             <div className={`cyber-table-scroll${hasTableRows ? "" : " is-empty"}`} ref={tableScrollRef}>
               <table className={`cyber-file-table is-${activeTab}`} style={{ "--cyber-table-width": `${fileTable.getTotalSize()}px` } as CSSProperties}>
@@ -1792,7 +1958,23 @@ export function App(): React.JSX.Element {
   return (
     <MotionConfig reducedMotion="user">
     <main className="app-shell" ref={shellRef}>
-      <Toaster richColors position="top-right" closeButton theme={theme} />
+      <Toaster
+        className="cyber-toaster"
+        position="top-right"
+        closeButton
+        theme={theme}
+        duration={1_000}
+        gap={8}
+        offset={16}
+        toastOptions={{
+          classNames: {
+            toast: "cyber-toast",
+            title: "cyber-toast-title",
+            icon: "cyber-toast-icon",
+            closeButton: "cyber-toast-close",
+          },
+        }}
+      />
       <aside className="left-rail">
         <section className="operation-panel" aria-labelledby="operation-title">
           <div className="section-heading">

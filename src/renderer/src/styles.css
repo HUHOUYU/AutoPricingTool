@@ -1685,7 +1685,16 @@ html:not(.dark) .cyber-file-table th { background: #edf4fb; }
 .cyber-file-table tbody tr:not(.cyber-detail):hover { background: rgb(23 103 255 / 7%); }
 .cyber-file-table tbody tr.is-selected { background: rgb(23 103 255 / 10%); }
 .cyber-file-table .checkbox-column { width: 38px !important; min-width: 38px; max-width: 38px; padding: 0; text-align: center; }
-.cyber-file-table .checkbox-column > button { width: 16px; min-width: 16px; height: 16px; margin: 0 auto; padding: 0; }
+.cyber-file-table th.checkbox-column > [role="checkbox"],
+.cyber-file-table td.checkbox-column > [role="checkbox"] {
+  display: grid;
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  margin: 0 auto;
+  padding: 0;
+  place-items: center;
+}
 .cyber-file-table .index-column { width: 64px !important; min-width: 64px; max-width: 64px; text-align: center; white-space: nowrap; }
 .cyber-file-table th.index-column button { justify-content: center; }
 .cyber-file-table .action-column { text-align: right; }
@@ -3272,7 +3281,8 @@ html:not(.dark) .cyber-log-drawer {
   box-shadow: -7px 0 12px -12px rgb(67 51 40 / 52%);
   white-space: nowrap;
 }
-.cyber-file-table th.action-column { z-index: 5; background: var(--cyber-panel-soft); }
+.cyber-file-table th.action-column { z-index: 5; background: var(--cyber-panel-soft); text-align: center; }
+.cyber-file-table th.action-column > button:not(.table-column-pin) { justify-content: center; padding-right: 0; }
 .cyber-file-table tbody tr:not(.cyber-detail):hover .action-column { background: color-mix(in srgb, var(--cyber-primary) 5%, var(--cyber-panel)); }
 .cyber-file-table .action-column button { margin-left: 5px; }
 
@@ -4103,6 +4113,362 @@ html:not(.dark) .cyber-pagination button {
   transform: translateX(-6px);
 }
 
+/* File processing: empty, ready-to-run, and locked batch states */
+.cyber-app {
+  --cyber-status-info: #5b9dff;
+  --cyber-status-pending: #8b95a7;
+  --cyber-status-confirm: #f7b731;
+  --cyber-status-error: #ff6b81;
+  --cyber-status-success: #2ed573;
+}
+
+html:not(.dark) .cyber-app {
+  --cyber-status-info: #2f6bff;
+  --cyber-status-pending: #77736b;
+  --cyber-status-confirm: #c47a17;
+  --cyber-status-error: #c95547;
+  --cyber-status-success: #148a58;
+  --cyber-cyan: var(--cyber-status-info);
+}
+
+.cyber-workspace.is-files {
+  gap: 8px;
+}
+
+.cyber-workspace.is-files.has-empty-batch {
+  grid-template-rows: calc(100% - 116px) 108px;
+}
+
+.cyber-workspace.is-files.has-empty-batch .cyber-file-table tbody,
+.cyber-workspace.is-files.has-empty-batch .cyber-empty-overlay {
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.cyber-workspace.is-files.has-empty-batch .cyber-pagination {
+  min-height: 0;
+  max-height: 0;
+  flex-basis: 0;
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+  border-top-color: transparent;
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.cyber-workspace.is-files.has-ready-batch {
+  grid-template-rows: 56px calc(100% - 64px);
+}
+
+.cyber-workspace.is-files.has-locked-batch {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.cyber-upload-panel.is-compact {
+  min-height: 56px;
+  border-radius: 14px;
+}
+
+.cyber-upload-banner {
+  display: grid;
+  min-width: 0;
+  height: 100%;
+  grid-template-columns: minmax(176px, auto) minmax(260px, 1fr) 150px auto auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px dashed transparent;
+  border-radius: inherit;
+  padding: 6px 10px 6px 14px;
+  background: color-mix(in srgb, var(--cyber-primary) 4%, var(--cyber-panel));
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.cyber-upload-banner.is-dragging {
+  border-color: var(--cyber-primary);
+  background: color-mix(in srgb, var(--cyber-primary) 10%, var(--cyber-panel));
+}
+
+.cyber-upload-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.cyber-upload-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.cyber-upload-summary strong,
+.cyber-upload-summary small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cyber-upload-summary strong { color: var(--cyber-text); font-size: 13px; }
+.cyber-upload-summary small { color: var(--cyber-muted); font-size: 11px; }
+.cyber-upload-banner .panel-icon { color: var(--cyber-status-success); background: color-mix(in srgb, var(--cyber-status-success) 12%, transparent); }
+.cyber-upload-banner .cyber-pipeline { height: 34px; }
+.cyber-upload-banner .cyber-pipeline span { font-size: 10px; }
+.cyber-upload-banner .cyber-pipeline b { width: 17px; height: 17px; }
+.cyber-upload-banner .cyber-import-switch { width: 150px; height: 34px; margin: 0; font-size: 11px; }
+
+.cyber-continue-import {
+  display: inline-flex;
+  height: 34px;
+  cursor: pointer;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--cyber-border);
+  border-radius: 9px;
+  padding: 0 11px;
+  color: var(--cyber-primary);
+  background: var(--cyber-panel);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.cyber-continue-import:hover { border-color: var(--cyber-primary); background: color-mix(in srgb, var(--cyber-primary) 7%, var(--cyber-panel)); }
+.cyber-continue-import svg { width: 15px; height: 15px; }
+.cyber-banner-actions { gap: 6px; }
+.cyber-banner-actions .cyber-action { width: auto; min-width: 78px; height: 34px; flex-basis: auto; }
+
+.cyber-batch-progress {
+  display: grid;
+  min-width: 0;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(190px, auto) minmax(72px, 10%) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--cyber-border-soft);
+  padding: 0 12px 0 16px;
+  background: color-mix(in srgb, var(--cyber-status-info) 5%, var(--cyber-panel));
+}
+
+.cyber-batch-progress.is-settled { background: color-mix(in srgb, var(--cyber-status-success) 5%, var(--cyber-panel)); }
+.cyber-batch-progress-copy { display: grid; min-width: 0; grid-template-columns: auto auto; align-items: center; gap: 2px 10px; }
+.cyber-batch-progress-copy > strong { color: var(--cyber-status-info); font-family: var(--font-code); font-size: 15px; }
+.cyber-batch-progress.is-settled .cyber-batch-progress-copy > strong { color: var(--cyber-status-success); }
+.cyber-batch-file { min-width: 0; overflow: hidden; color: var(--cyber-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.cyber-batch-phase { display: inline-flex; align-items: center; gap: 7px; color: var(--cyber-text); font-size: 12px; font-weight: 650; white-space: nowrap; }
+.cyber-batch-phase i { width: 7px; height: 7px; border-radius: 50%; background: var(--cyber-status-info); box-shadow: 0 0 0 4px color-mix(in srgb, var(--cyber-status-info) 14%, transparent); }
+.cyber-batch-progress.is-running .cyber-batch-phase i { animation: cyber-status-pulse 1.4s ease-in-out infinite; }
+.cyber-batch-progress.is-settled .cyber-batch-phase i { background: var(--cyber-status-success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--cyber-status-success) 14%, transparent); }
+.cyber-batch-progress [role="progressbar"] { height: 6px; background: color-mix(in srgb, var(--cyber-status-info) 16%, transparent); }
+.cyber-batch-progress [role="progressbar"] > div { background: var(--cyber-status-info); }
+.cyber-batch-progress.is-settled [role="progressbar"] > div { background: var(--cyber-status-success); }
+.cyber-progress-actions { justify-content: flex-end; gap: 6px; }
+.cyber-progress-actions .cyber-action { width: 96px; min-width: 96px; height: 34px; flex-basis: 96px; }
+
+@keyframes cyber-status-pulse {
+  50% { opacity: .48; transform: scale(.82); }
+}
+
+.cyber-action.is-start,
+html:not(.dark) .cyber-action.is-start {
+  border-color: #d58970;
+  color: #ffffff;
+  background: var(--cyber-primary);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--cyber-primary) 24%, transparent);
+}
+
+.cyber-action.is-pause,
+html:not(.dark) .cyber-action.is-pause {
+  border-color: color-mix(in srgb, var(--cyber-status-info) 42%, transparent);
+  color: var(--cyber-status-info);
+  background: color-mix(in srgb, var(--cyber-status-info) 8%, var(--cyber-panel));
+}
+
+.cyber-action.is-stop,
+html:not(.dark) .cyber-action.is-stop {
+  border-color: color-mix(in srgb, var(--cyber-status-error) 42%, transparent);
+  color: var(--cyber-status-error);
+  background: color-mix(in srgb, var(--cyber-status-error) 8%, var(--cyber-panel));
+}
+
+.cyber-action.is-reset,
+html:not(.dark) .cyber-action.is-reset {
+  border-color: var(--cyber-border);
+  color: var(--cyber-muted);
+  background: var(--cyber-panel);
+  box-shadow: none;
+}
+
+.cyber-action:disabled,
+html:not(.dark) .cyber-action:disabled {
+  cursor: not-allowed;
+  border-color: var(--cyber-border-soft);
+  color: var(--cyber-status-pending);
+  background: color-mix(in srgb, var(--cyber-status-pending) 7%, var(--cyber-panel));
+  box-shadow: none;
+  filter: none;
+  opacity: .62;
+  transform: none;
+}
+
+.cyber-tabs button:nth-child(1).is-active { border-bottom-color: var(--cyber-status-pending); color: var(--cyber-status-pending); }
+.cyber-tabs button:nth-child(2).is-active { border-bottom-color: var(--cyber-status-confirm); color: var(--cyber-status-confirm); }
+.cyber-tabs button:nth-child(3).is-active { border-bottom-color: var(--cyber-status-error); color: var(--cyber-status-error); }
+.cyber-tabs button:nth-child(4).is-active { border-bottom-color: var(--cyber-status-success); color: var(--cyber-status-success); }
+.cyber-tabs button:nth-child(1).is-active b { background: var(--cyber-status-pending); }
+.cyber-tabs button:nth-child(2).is-active b { background: var(--cyber-status-confirm); }
+.cyber-tabs button:nth-child(3).is-active b { background: var(--cyber-status-error); }
+.cyber-tabs button:nth-child(4).is-active b { background: var(--cyber-status-success); }
+
+@media (max-width: 1380px) {
+  .cyber-upload-banner { grid-template-columns: minmax(176px, 1fr) 150px auto auto; }
+  .cyber-upload-banner .cyber-pipeline { display: none; }
+}
+
+@media (max-width: 1040px) {
+  .cyber-upload-banner { grid-template-columns: minmax(150px, 1fr) 132px auto auto; gap: 6px; padding-left: 9px; }
+  .cyber-upload-banner .cyber-import-switch { width: 132px; }
+  .cyber-continue-import { padding: 0 8px; }
+  .cyber-banner-actions .cyber-action { min-width: 38px; width: 38px; padding: 0; }
+  .cyber-banner-actions .cyber-action strong { display: none; }
+  .cyber-batch-progress { grid-template-columns: minmax(160px, auto) minmax(64px, 10%) minmax(0, 1fr) auto; gap: 8px; }
+  .cyber-progress-actions .cyber-action { min-width: 38px; width: 38px; padding: 0; }
+  .cyber-progress-actions .cyber-action strong { display: none; }
+}
+
+/* 工作台仅调整信息层级，沿用现有主题色。 */
+.dashboard-hero { align-items: center; }
+.dashboard-hero h1 { margin: 0; }
+
+.dashboard-metrics article {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-metrics article > div {
+  display: flex;
+  width: auto;
+  height: auto;
+  align-items: center;
+  gap: 9px;
+  border-radius: 0;
+  color: var(--cyber-muted);
+  background: transparent;
+}
+
+.dashboard-metric-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--cyber-primary);
+  background: color-mix(in srgb, var(--cyber-primary) 12%, transparent);
+}
+
+.dashboard-metric-icon svg { width: 16px; height: 16px; }
+
+.dashboard-metrics article > div span {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 30px;
+}
+
+.dashboard-metrics article > strong {
+  margin-top: auto;
+}
+
+.dashboard-card > header { margin-bottom: 12px; }
+.dashboard-card h2 { margin: 0; }
+.dashboard-shortcuts { grid-template-rows: auto repeat(2, minmax(0, 1fr)); }
+
+.dashboard-empty {
+  display: flex;
+  min-height: 112px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--cyber-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.dashboard-empty > svg {
+  width: 30px;
+  height: 30px;
+  margin-bottom: 4px;
+  color: var(--cyber-dim);
+}
+
+.dashboard-empty > strong {
+  color: var(--cyber-text);
+  font-size: 13px;
+}
+
+.dashboard-empty > span { color: var(--cyber-dim); }
+
+.dashboard-trend-empty {
+  min-height: 0;
+  border: 1px dashed var(--cyber-border-soft);
+  border-radius: 12px;
+  background: var(--cyber-panel-soft);
+}
+
+[data-sonner-toaster].cyber-toaster {
+  --width: 340px;
+  font-family: var(--font-ui);
+}
+
+[data-sonner-toast].cyber-toast {
+  min-height: 50px;
+  border: 1px solid var(--border) !important;
+  border-radius: 14px !important;
+  padding: 10px 38px 10px 13px !important;
+  color: var(--card-foreground) !important;
+  background: color-mix(in srgb, var(--card) 96%, var(--primary) 4%) !important;
+  box-shadow: 0 10px 28px rgb(47 46 42 / 12%) !important;
+}
+
+html.dark [data-sonner-toast].cyber-toast {
+  box-shadow: 0 12px 30px rgb(0 0 0 / 28%) !important;
+}
+
+.cyber-toast-title {
+  color: var(--card-foreground) !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1.45 !important;
+}
+
+.cyber-toast-icon {
+  width: 18px !important;
+  height: 18px !important;
+  margin-right: 2px !important;
+}
+
+.cyber-toast[data-type="success"] .cyber-toast-icon { color: #148a58 !important; }
+.cyber-toast[data-type="info"] .cyber-toast-icon { color: var(--primary) !important; }
+.cyber-toast[data-type="warning"] .cyber-toast-icon { color: #c47a17 !important; }
+.cyber-toast[data-type="error"] .cyber-toast-icon { color: var(--destructive) !important; }
+
+.cyber-toast-close {
+  top: 50% !important;
+  right: 9px !important;
+  left: auto !important;
+  width: 22px !important;
+  height: 22px !important;
+  border: 1px solid var(--border) !important;
+  color: var(--muted-foreground) !important;
+  background: var(--card) !important;
+  transform: translateY(-50%) !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cyber-app,
   .cyber-sidebar,
@@ -4111,7 +4477,14 @@ html:not(.dark) .cyber-pagination button {
   .cyber-nav button,
   .cyber-sidebar-tools,
   .cyber-brand > div,
-  .cyber-nav span {
+  .cyber-nav span,
+  .cyber-workspace.is-files,
+  .cyber-upload-banner,
+  .cyber-batch-phase i,
+  .cyber-file-table tbody,
+  .cyber-empty-overlay,
+  .cyber-pagination {
     transition: none;
+    animation: none;
   }
 }

@@ -97,6 +97,7 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
     exportRuntimeLog: vi.fn(async () => null),
     openPath: vi.fn(async () => ""),
     selectDirectory: vi.fn(async (purpose) => purpose === "input" ? "C:\\input-selected" : "C:\\output-selected"),
+    selectExcelFile: vi.fn(async () => null),
     selectConfig: vi.fn(async () => "C:\\config-selected.json"),
     listExcelFiles: vi.fn(async () => ({ files: [], skippedTemporary: 0, skippedUnsupported: 0, skippedOutput: 0 })),
     readExcelPreviewFile: vi.fn(async () => ({ bytes: new Uint8Array(), size: 0, modifiedAt: 0 })),
@@ -121,7 +122,8 @@ function installAPI(api: DesktopAPI): void {
 }
 
 function dropFiles(files: File[]): void {
-  fireEvent.drop(document.querySelector(".cyber-dropzone")!, { dataTransfer: { files, types: ["Files"] } });
+  const target = document.querySelector(".cyber-upload-banner") ?? document.querySelector(".cyber-dropzone");
+  fireEvent.drop(target!, { dataTransfer: { files, types: ["Files"] } });
 }
 
 function openFileProcessing(): void {
@@ -256,13 +258,16 @@ describe("AutoPricingTool cyber workstation", () => {
 
     const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
     expect(fileInput).not.toBeNull();
-    expect(screen.getByLabelText("自动处理流程").parentElement?.tagName).toBe("HEADER");
+    expect(screen.queryByLabelText("自动处理流程")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("快捷操作")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("文件状态统计")).not.toBeInTheDocument();
     expect(screen.queryByText("原始 Excel 不会被覆盖")).not.toBeInTheDocument();
     const importSwitch = screen.getByRole("switch", { name: "导入模式：单文件" });
     expect(importSwitch).toHaveAttribute("aria-checked", "false");
-    const inputClick = vi.spyOn(fileInput!, "click");
     fireEvent.click(document.querySelector(".cyber-dropzone")!);
-    expect(inputClick).toHaveBeenCalledTimes(1);
+    expect(api.selectExcelFile).not.toHaveBeenCalled();
+    fireEvent.doubleClick(document.querySelector(".cyber-dropzone")!);
+    await waitFor(() => expect(api.selectExcelFile).toHaveBeenCalledTimes(1));
 
     dropFiles([
       new File(["xlsx"], "one.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
@@ -286,22 +291,114 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByText("a.xlsx")).toBeInTheDocument();
     expect(screen.queryByText("notes.txt")).not.toBeInTheDocument();
 
-    fireEvent.click(document.querySelector(".cyber-dropzone")!);
+    fireEvent.click(screen.getByRole("button", { name: "继续添加" }));
     await waitFor(() => expect(api.selectDirectory).toHaveBeenCalledWith("input"));
   });
 
-  it("responds to unavailable task actions", async () => {
+  it("imports a workbook selected through the native file dialog", async () => {
+    const api = createDesktopAPI();
+    vi.mocked(api.selectExcelFile).mockResolvedValue("C:\\orders\\2ZAH order 02-JUN.xlsx");
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+
+    fireEvent.doubleClick(document.querySelector(".cyber-dropzone")!);
+    expect(await screen.findByText("2ZAH order 02-JUN.xlsx")).toBeInTheDocument();
+    expect(screen.getByText("已导入 1 个文件")).toBeInTheDocument();
+  });
+
+  it("reports a missing disk path separately from an unsupported extension", async () => {
+    const api = createDesktopAPI();
+    vi.mocked(api.getPathForFile).mockReturnValue("");
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+
+    dropFiles([new File(["xlsx"], "2ZAH order 02-JUN.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("无法读取文件路径，请双击选择文件重试")).toBeInTheDocument();
+  });
+
+  it("keeps the native disk-backed File when a drop also exposes a file-system handle", async () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    const nativeFile = new File(["xlsx"], "2ZAH order 02-JUN.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+
+    fireEvent.drop(document.querySelector(".cyber-dropzone")!, {
+      dataTransfer: {
+        files: [nativeFile],
+        items: [{ kind: "file", getAsFileSystemHandle: vi.fn(async () => ({ getFile: async () => new File(["copy"], nativeFile.name) })) }],
+        types: ["Files"],
+      },
+    });
+
+    expect(await screen.findByText(nativeFile.name)).toBeInTheDocument();
+    expect(api.getPathForFile).toHaveBeenCalledWith(nativeFile);
+  });
+
+  it("hides unavailable task actions in the empty state", () => {
     const api = createDesktopAPI();
     installAPI(api);
     render(<App />);
     openFileProcessing();
 
+    expect(screen.queryByRole("button", { name: "开始处理" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "暂停任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "停止任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重置任务" })).not.toBeInTheDocument();
+  });
+
+  it("collapses the upload area, appends files, and locks importing after processing starts", async () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    const { container } = render(<App />);
+    openFileProcessing();
+
+    expect(container.querySelector(".cyber-workspace")).toHaveClass("has-empty-batch");
+    expect(container.querySelector(".cyber-upload-panel")).toHaveClass("is-expanded");
+    dropFiles([new File(["xlsx"], "first.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("已导入 1 个文件")).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelector(".cyber-upload-panel.is-compact")).toBeInTheDocument());
+    expect(container.querySelector(".cyber-workspace")).toHaveClass("has-ready-batch");
+    expect(screen.getByRole("button", { name: "开始处理" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "重置任务" })).toBeEnabled();
+    expect(screen.getByLabelText("文件状态统计").querySelectorAll("button")).toHaveLength(4);
+
+    dropFiles([new File(["xlsx"], "second.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("已导入 2 个文件")).toBeInTheDocument();
+    dropFiles([new File(["xlsx"], "second.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("已跳过 1 个重复文件")).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
-    fireEvent.click(screen.getByRole("button", { name: "暂停任务" }));
-    fireEvent.click(screen.getByRole("button", { name: "停止任务" }));
-    expect(await screen.findByText("请先导入 Excel 文件")).toBeInTheDocument();
-    expect(await screen.findByText("当前没有运行中的任务")).toBeInTheDocument();
-    expect(await screen.findByText("当前没有可停止的任务")).toBeInTheDocument();
+    expect(await screen.findByLabelText("批次处理进度")).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelector(".cyber-upload-panel")).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "继续添加" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "暂停任务" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "停止任务" })).toBeEnabled();
+    await act(async () => api.emit({ type: "price-progress", phase: "analyze", current: 1, total: 2, path: "C:\\orders\\first.xlsx" }));
+    expect(screen.getByRole("progressbar", { name: "正在分析文件 50%" })).toHaveAttribute("aria-valuenow", "50");
+    expect(container.querySelector(".cyber-batch-file")).toHaveTextContent("1/2 个文件 · first.xlsx");
+  });
+
+  it("keeps a completed batch locked until reset", async () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    dropFiles([new File(["xlsx"], "completed.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("completed.xlsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
+    await act(async () => api.emit({ type: "price-done", mode: "analysis", stopped: true, files: [] }));
+
+    expect(screen.getByLabelText("批次处理进度")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "继续添加" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "暂停任务" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重置任务" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "重置任务" }));
+    await waitFor(() => expect(screen.getByText("拖拽单个 Excel 文件到此处")).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByLabelText("批次处理进度")).not.toBeInTheDocument());
+    expect(screen.queryByLabelText("文件状态统计")).not.toBeInTheDocument();
   });
 
   it("centers the empty state independently from the table columns", () => {
@@ -412,7 +509,7 @@ describe("AutoPricingTool cyber workstation", () => {
     render(<App />);
     openFileProcessing();
     fireEvent.click(screen.getByRole("switch", { name: "导入模式：单文件" }));
-    fireEvent.click(document.querySelector(".cyber-dropzone")!);
+    fireEvent.doubleClick(document.querySelector(".cyber-dropzone")!);
 
     expect(await screen.findByRole("heading", { name: "文件列表 （5000）" })).toBeInTheDocument();
     expect(screen.getByText("file-1.xlsx")).toBeInTheDocument();
@@ -443,10 +540,13 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(document.querySelector(".cyber-rail-actions")).not.toBeInTheDocument();
     expect(document.querySelector(".cyber-workbench-actions")).not.toBeInTheDocument();
     openFileProcessing();
-    expect(document.querySelector(".cyber-workbench-actions")?.querySelectorAll("button")).toHaveLength(4);
+    expect(document.querySelector(".cyber-workbench-actions")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "扫描配置中的输入目录" })).not.toBeInTheDocument();
+    dropFiles([new File(["xlsx"], "sidebar.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("sidebar.xlsx")).toBeInTheDocument();
+    expect(document.querySelector(".cyber-workbench-actions")?.querySelectorAll("button")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "折叠侧栏" }));
-    expect(document.querySelector(".cyber-rail-actions")?.querySelectorAll("button")).toHaveLength(4);
+    expect(document.querySelector(".cyber-rail-actions")?.querySelectorAll("button")).toHaveLength(2);
     expect(document.querySelector(".cyber-workbench-actions")).not.toBeInTheDocument();
   });
 
@@ -484,6 +584,15 @@ describe("AutoPricingTool cyber workstation", () => {
       api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
     });
     await waitFor(() => expect(api.runPriceCheck).toHaveBeenCalledWith(expect.objectContaining({ files: ["C:\\orders\\order.xlsx"], outputDir: "C:\\output" })));
+    await act(async () => {
+      api.emit({ type: "price-progress", phase: "run", current: 1, total: 1, path: "C:\\orders\\order.xlsx" });
+      api.emit({ type: "price-progress", phase: "rows", current: 1, total: 14, path: "C:\\orders\\order.xlsx" });
+      api.emit({ type: "price-file-result", path: "C:\\orders\\order.xlsx", status: "completed", totalRows: 14, matchedRows: 14, exceptionRows: 0 });
+      api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ totalRows: 14, matchedRows: 14, exceptionRows: 0 }] });
+    });
+    expect(screen.getByRole("progressbar", { name: "批次处理完成 100%" })).toHaveAttribute("aria-valuenow", "100");
+    expect(screen.getByText(/1\/1 个文件/)).toBeInTheDocument();
+    expect(screen.queryByText(/1\/14 个文件/)).not.toBeInTheDocument();
   });
 
   it("uses the application sibling result folder when no output directory is selected", async () => {
@@ -516,11 +625,11 @@ describe("AutoPricingTool cyber workstation", () => {
     render(<App />);
     openFileProcessing();
     fireEvent.click(screen.getByRole("switch", { name: "导入模式：单文件" }));
-    fireEvent.click(document.querySelector(".cyber-dropzone")!);
+    fireEvent.doubleClick(document.querySelector(".cyber-dropzone")!);
     await waitFor(() => expect(api.listExcelFiles).toHaveBeenCalledWith("C:\\input-selected"));
     expect(await screen.findByText("a.xlsx")).toBeInTheDocument();
     expect(screen.getByText("b.xls")).toBeInTheDocument();
-    expect(screen.getByText("2 个文件")).toBeInTheDocument();
+    expect(screen.getByText("已导入 2 个文件")).toBeInTheDocument();
   });
 
   it("keeps risky files for confirmation and continues only the confirmed file", async () => {
@@ -535,7 +644,7 @@ describe("AutoPricingTool cyber workstation", () => {
     render(<App />);
     openFileProcessing();
     fireEvent.click(screen.getByRole("switch", { name: "导入模式：单文件" }));
-    fireEvent.click(document.querySelector(".cyber-dropzone")!);
+    fireEvent.doubleClick(document.querySelector(".cyber-dropzone")!);
     expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
     expect(screen.getByText("other.xlsx")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
@@ -813,11 +922,45 @@ describe("AutoPricingTool cyber workstation", () => {
     });
     installAPI(api);
     render(<App />);
+    expect(screen.getByRole("heading", { name: "工作台" })).toBeInTheDocument();
+    expect(screen.queryByText("查看核价进展、配置健康状态与最近任务")).not.toBeInTheDocument();
+    for (const heading of ["处理趋势", "配置健康状态", "最近任务", "配置与输出"]) {
+      expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
+    }
+    expect(screen.queryByText("业务总览")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "继续工作" })).not.toBeInTheDocument();
     expect(await screen.findByText("12")).toBeInTheDocument();
     expect(screen.getByText("97%")).toBeInTheDocument();
     expect(await screen.findByText("配置可用")).toBeInTheDocument();
     expect(screen.getByText("规则文件已加载并通过校验")).toBeInTheDocument();
     expect(screen.queryByText("C:\\config.json")).not.toBeInTheDocument();
+  });
+
+  it("renders dashboard empty metrics", () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    render(<App />);
+
+    expect(screen.getAllByText("—")).toHaveLength(4);
+  });
+
+  it("renders the framed trend state when returned date buckets contain no files", async () => {
+    const api = createDesktopAPI();
+    vi.mocked(api.getTaskHistorySummary).mockResolvedValue({
+      today: { files: 5, tasks: 1, matchRate: 0.9, exceptions: 0 },
+      trend: [
+        { date: "2026-07-20", files: 0, matchedRows: 0, totalRows: 0, exceptions: 0 },
+        { date: "2026-07-21", files: 0, matchedRows: 0, totalRows: 0, exceptions: 0 },
+      ],
+      recent: [],
+    });
+    installAPI(api);
+    const { container } = render(<App />);
+
+    expect(await screen.findByText("5")).toBeInTheDocument();
+    expect(screen.getByText("暂无处理数据")).toBeInTheDocument();
+    expect(container.querySelector(".dashboard-trend-empty")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "最近七天处理趋势" })).not.toBeInTheDocument();
   });
 
   it("maps required template headers by clicking preview cells", async () => {
