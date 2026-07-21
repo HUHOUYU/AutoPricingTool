@@ -64,6 +64,8 @@ const PRICING_COUNTRY_ALIASES: &[&str] = &[
 ];
 const SKU_ALIASES: &[&str] = &[
     "sku",
+    "itemno",
+    "itemnumber",
     "productsku",
     "商品sku",
     "货号",
@@ -2342,12 +2344,12 @@ mod tests {
     }
 
     #[test]
-    fn pricing_candidate_supports_two_row_and_non_contiguous_tiers() {
+    fn pricing_candidate_supports_item_number_and_non_contiguous_tiers() {
         let sheet = SheetData {
             name: "Price".to_string(),
             rows: vec![
                 vec![
-                    CellValue::string("SKU"),
+                    CellValue::string("Item  No. "),
                     CellValue::string("Country"),
                     CellValue::string("Standard"),
                     CellValue::string("Standard"),
