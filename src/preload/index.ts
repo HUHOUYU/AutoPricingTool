@@ -23,6 +23,7 @@ export type ExcelPreviewFileData = {
 export type ConfigValidationIssue = { path: string; message: string };
 export type ConfigValidationResult = { valid: boolean; issues: ConfigValidationIssue[] };
 export type ConfigDocument = { path: string; content: string; modifiedAt: number; isDefault: boolean };
+export type ProcessingCapacity = { detectedThreads: number; maxWorkers: number };
 export type TaskHistoryRecord = {
   id: string;
   startedAt: string;
@@ -191,6 +192,7 @@ const desktopAPI = {
   closeWindow: (): Promise<void> => ipcRenderer.invoke("window:close"),
   getRuntimeConfig: (): Promise<RuntimeConfig> => ipcRenderer.invoke("app:get-runtime-config"),
   getDefaultPriceOutputDir: (): Promise<string> => ipcRenderer.invoke("app:get-default-price-output-dir"),
+  getProcessingCapacity: (): Promise<ProcessingCapacity> => ipcRenderer.invoke("app:get-processing-capacity"),
   setRuntimeConfig: (config: RuntimeConfig): Promise<RuntimeConfig> => ipcRenderer.invoke("app:set-runtime-config", config),
   getConfigDocument: (path?: string): Promise<ConfigDocument> => ipcRenderer.invoke("config:get-document", path),
   validateConfigDocument: (content: string): Promise<ConfigValidationResult> => ipcRenderer.invoke("config:validate-document", content),

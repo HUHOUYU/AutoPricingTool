@@ -2145,6 +2145,8 @@ html:not(.dark) .cyber-column-manager > div {
 .config-form-scroll fieldset { display: grid; gap: 11px; margin: 0 0 13px; border: 1px solid var(--cyber-border-soft); border-radius: 12px; padding: 12px; }
 .config-form-scroll legend { padding: 0 5px; color: var(--cyber-primary); font-size: 12px; font-weight: 700; }
 .config-form-scroll label { display: grid; gap: 5px; color: var(--cyber-muted); font-size: 11px; }
+.config-form-scroll .config-number-field > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.config-form-scroll .config-number-field > span small { color: var(--cyber-dim); font-size: 10px; font-weight: 500; }
 .config-form-scroll .config-field { display: grid; gap: 5px; color: var(--cyber-muted); font-size: 11px; }
 .config-path-field { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 6px; }
 .config-path-field > button { height: 34px; border-radius: 9px; padding: 0 8px; font-size: 11px; }

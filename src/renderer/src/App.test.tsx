@@ -82,6 +82,7 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
     closeWindow: vi.fn(async () => undefined),
     getRuntimeConfig: vi.fn(async () => ({ recent_output_dir: "C:\\output", recent_config_path: "C:\\config.json" })),
     getDefaultPriceOutputDir: vi.fn(async () => "C:\\Program\\核价结果"),
+    getProcessingCapacity: vi.fn(async () => ({ detectedThreads: 8, maxWorkers: 7 })),
     setRuntimeConfig: vi.fn(async (config) => config),
     getConfigDocument: vi.fn(async () => ({ path: "C:\\config.json", content: "{}\n", modifiedAt: 1, isDefault: false })),
     validateConfigDocument: vi.fn(async () => ({ valid: true, issues: [] })),
@@ -1032,6 +1033,10 @@ describe("AutoPricingTool cyber workstation", () => {
     render(<App />);
     fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[0]);
     const workers = await screen.findByRole("spinbutton", { name: "处理线程数" });
+    expect(await screen.findByText("最大线程数：8")).toBeInTheDocument();
+    expect(workers).toHaveAttribute("max", "7");
+    fireEvent.change(workers, { target: { value: "99" } });
+    expect((screen.getByRole("textbox", { name: "JSON 源码" }) as HTMLTextAreaElement).value).toContain('"processing_workers": 7');
     fireEvent.change(workers, { target: { value: "4" } });
     fireEvent.click(screen.getByRole("checkbox", { name: "模板匹配优先" }));
     const source = screen.getByRole("textbox", { name: "JSON 源码" }) as HTMLTextAreaElement;

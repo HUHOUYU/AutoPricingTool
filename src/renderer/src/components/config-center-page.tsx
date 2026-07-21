@@ -3,7 +3,7 @@ import { AlertTriangle, Braces, CheckCircle2, FileJson2, FolderOpen, RefreshCw, 
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import type { ConfigDocument, ConfigValidationResult, DesktopAPI } from "../../../preload";
+import type { ConfigDocument, ConfigValidationResult, DesktopAPI, ProcessingCapacity } from "../../../preload";
 
 type JsonObject = Record<string, unknown>;
 
@@ -29,6 +29,7 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [sourceScrollTop, setSourceScrollTop] = useState(0);
+  const [processingCapacity, setProcessingCapacity] = useState<ProcessingCapacity | null>(null);
 
   const applyDocument = useCallback((next: ConfigDocument): void => {
     setDocument(next);
@@ -51,6 +52,10 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
   }, [api, applyDocument]);
 
   useEffect(() => { void loadDocument(); }, [loadDocument]);
+  useEffect(() => {
+    if (!api) return;
+    void api.getProcessingCapacity().then(setProcessingCapacity).catch(() => setProcessingCapacity(null));
+  }, [api]);
 
   const updateSource = (nextSource: string): void => {
     setSource(nextSource);
@@ -194,7 +199,10 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
             </fieldset>
             <fieldset>
               <legend>性能限制</legend>
-              <label>处理线程数<input type="number" min="0" value={Number(performance.processing_workers ?? 0)} onChange={(event) => updateField("performance", "processing_workers", Number(event.currentTarget.value))} /></label>
+              <label className="config-number-field"><span>处理线程数<small>最大线程数：{processingCapacity?.detectedThreads ?? "—"}</small></span><input aria-label="处理线程数" type="number" min="0" max={processingCapacity?.maxWorkers} value={Number(performance.processing_workers ?? 0)} onChange={(event) => {
+                const requestedWorkers = Math.max(0, Number(event.currentTarget.value));
+                updateField("performance", "processing_workers", processingCapacity ? Math.min(requestedWorkers, processingCapacity.maxWorkers) : requestedWorkers);
+              }} /></label>
               <label>最大处理行数<input type="number" min="1" value={Number(performance.processing_max_rows ?? 200000)} onChange={(event) => updateField("performance", "processing_max_rows", Number(event.currentTarget.value))} /></label>
               <label>工作簿上限（MB）<input type="number" min="1" value={Number(performance.processing_workbook_max_mb ?? 512)} onChange={(event) => updateField("performance", "processing_workbook_max_mb", Number(event.currentTarget.value))} /></label>
             </fieldset>

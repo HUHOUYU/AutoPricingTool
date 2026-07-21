@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { access, appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { userInfo } from "node:os";
+import { availableParallelism, userInfo } from "node:os";
 import { assertTrustedIpcSender, isTrustedRendererUrl } from "./security";
 import { readExcelPreviewFile } from "./excel-preview-file";
 
@@ -106,6 +106,9 @@ const productionContentSecurityPolicy = [
 const outputArtifactDirs = ["汇总", "正式命名", "待确认", "异常"];
 const supportedExcelExtensions = new Set([".xlsx", ".xlsm", ".xlsb", ".xls"]);
 const MAX_INPUT_FILES = 5_000;
+const defaultWindowBackgroundColor = "#EEF3F8";
+const detectedProcessingThreads = availableParallelism();
+const maxConfiguredProcessingWorkers = Math.max(0, detectedProcessingThreads - 1);
 let processor: ChildProcessWithoutNullStreams | null = null;
 let processorActivity: "scan" | "start" | "merge" | "price-analyze" | "price-validate" | "price-run" | null = null;
 let activeTask: TaskHistoryRecord | null = null;
@@ -350,8 +353,12 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
         issues.push({ path: `performance.${key}`, message: "必须是大于 0 的整数" });
       }
     }
-    if (performance.processing_workers !== undefined && (!Number.isInteger(performance.processing_workers) || Number(performance.processing_workers) < 0)) {
-      issues.push({ path: "performance.processing_workers", message: "必须是大于或等于 0 的整数" });
+    if (performance.processing_workers !== undefined) {
+      if (!Number.isInteger(performance.processing_workers) || Number(performance.processing_workers) < 0) {
+        issues.push({ path: "performance.processing_workers", message: "必须是大于或等于 0 的整数" });
+      } else if (Number(performance.processing_workers) > maxConfiguredProcessingWorkers) {
+        issues.push({ path: "performance.processing_workers", message: `不能超过 ${maxConfiguredProcessingWorkers}（当前机器最大线程数减 1）` });
+      }
     }
   }
 
@@ -777,7 +784,8 @@ function createWindow(): void {
     minWidth: 1100,
     minHeight: 700,
     title: "Excel 订单批量核价工具",
-    backgroundColor: "#0F1115",
+    backgroundColor: defaultWindowBackgroundColor,
+    show: false,
     frame: false,
     icon: appIconPath,
     webPreferences: {
@@ -787,6 +795,7 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  mainWindow.once("ready-to-show", () => mainWindow.show());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (!isTrustedRendererUrl(url, trustedRendererLocation)) {
@@ -956,6 +965,10 @@ app.whenReady().then(async () => {
   ipcMain.handle("app:get-default-price-output-dir", (event) => {
     requireTrustedIpc(event);
     return join(dirname(app.getPath("exe")), "核价结果");
+  });
+  ipcMain.handle("app:get-processing-capacity", (event) => {
+    requireTrustedIpc(event);
+    return { detectedThreads: detectedProcessingThreads, maxWorkers: maxConfiguredProcessingWorkers };
   });
   ipcMain.handle("window:minimize", (event) => {
     requireTrustedIpc(event);
@@ -1181,7 +1194,6 @@ app.whenReady().then(async () => {
     }
     return result.filePaths[0];
   });
-
   ipcMain.handle("dialog:select-excel-file", async (event) => {
     requireTrustedIpc(event);
     const config = await readRuntimeConfig();
