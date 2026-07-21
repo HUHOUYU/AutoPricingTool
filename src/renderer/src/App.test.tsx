@@ -1045,4 +1045,17 @@ describe("AutoPricingTool cyber workstation", () => {
       content: expect.stringContaining('"extension_field"'),
     })));
   });
+
+  it("formats valid JSON source without changing its data", async () => {
+    const api = createDesktopAPI();
+    vi.mocked(api.getConfigDocument).mockResolvedValue({ path: "C:\\config.json", content: "{}\n", modifiedAt: 10, isDefault: false });
+    installAPI(api);
+    render(<App />);
+    fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[0]);
+    const source = await screen.findByRole("textbox", { name: "JSON 源码" }) as HTMLTextAreaElement;
+    fireEvent.change(source, { target: { value: '{"runtime":{},"extension_field":{"keep":true}}' } });
+    fireEvent.click(screen.getByRole("button", { name: "格式化" }));
+    expect(source.value).toBe('{\n  "runtime": {},\n  "extension_field": {\n    "keep": true\n  }\n}\n');
+    expect(screen.getByText("7 行")).toBeInTheDocument();
+  });
 });

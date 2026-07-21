@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, FileJson2, FolderOpen, RefreshCw, RotateCcw, Save, SaveAll } from "lucide-react";
+import { AlertTriangle, Braces, CheckCircle2, FileJson2, FolderOpen, RefreshCw, RotateCcw, Save, SaveAll } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -28,6 +28,7 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
   const [dirty, setDirty] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [sourceScrollTop, setSourceScrollTop] = useState(0);
 
   const applyDocument = useCallback((next: ConfigDocument): void => {
     setDocument(next);
@@ -137,10 +138,30 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
     }
   };
 
+  const formatSource = (): void => {
+    try {
+      const value = JSON.parse(source) as unknown;
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("配置文档根节点必须是 JSON 对象");
+      }
+      const nextParsed = value as JsonObject;
+      const nextSource = `${JSON.stringify(nextParsed, null, 2)}\n`;
+      setParsed(nextParsed);
+      setSource(nextSource);
+      setDirty(nextSource !== document?.content);
+      setValidation({ valid: true, issues: [] });
+      toast.success("JSON 已格式化");
+    } catch (error) {
+      toast.error(error instanceof Error ? `无法格式化：${error.message}` : "JSON 格式无效");
+    }
+  };
+
   const runtime = useMemo(() => asObject(parsed.runtime), [parsed]);
   const performance = useMemo(() => asObject(parsed.performance), [parsed]);
   const automation = useMemo(() => asObject(parsed.automation), [parsed]);
   const pricing = useMemo(() => asObject(parsed.pricing), [parsed]);
+  const sourceLineCount = source.split(/\r?\n/).length;
+  const sourceLineNumbers = useMemo(() => Array.from({ length: sourceLineCount }, (_, index) => index + 1).join("\n"), [sourceLineCount]);
 
   return (
     <div className="config-center-page">
@@ -196,8 +217,14 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
         </section>
 
         <section className="config-source-panel">
-          <header><div><h2>JSON 源码</h2><p>未识别字段会原样保留</p></div><span>{source.split(/\r?\n/).length} 行</span></header>
-          <textarea aria-label="JSON 源码" spellCheck={false} value={source} onChange={(event) => updateSource(event.currentTarget.value)} />
+          <header><div><h2>JSON 源码</h2><p>未识别字段会原样保留</p></div><div className="config-source-tools"><span>JSON</span><small>{sourceLineCount} 行</small><Button type="button" variant="outline" aria-label="格式化" title="格式化 JSON" onClick={formatSource} disabled={!source.trim()}><Braces /></Button></div></header>
+          <div className="config-source-editor">
+            <div className="config-source-code">
+              <div className="config-source-gutter" aria-hidden="true"><pre style={{ transform: `translateY(-${sourceScrollTop}px)` }}>{sourceLineNumbers}</pre></div>
+              <textarea aria-label="JSON 源码" spellCheck={false} value={source} onScroll={(event) => setSourceScrollTop(event.currentTarget.scrollTop)} onChange={(event) => updateSource(event.currentTarget.value)} />
+            </div>
+            <footer><span><i />JSON</span><span>UTF-8</span><span>空格: 2</span></footer>
+          </div>
           {validation.issues.length > 0 ? <div className="config-issues">{validation.issues.map((issue, index) => <button type="button" key={`${issue.path}-${index}`}><code>{issue.path}</code><span>{issue.message}</span></button>)}</div> : null}
         </section>
       </div>
