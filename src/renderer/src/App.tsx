@@ -1616,6 +1616,8 @@ export function App(): React.JSX.Element {
           className="cyber-toaster"
           position="top-right"
           closeButton
+          expand
+          visibleToasts={5}
           theme={theme}
           duration={1_000}
           gap={8}
@@ -1962,6 +1964,8 @@ export function App(): React.JSX.Element {
         className="cyber-toaster"
         position="top-right"
         closeButton
+        expand
+        visibleToasts={5}
         theme={theme}
         duration={1_000}
         gap={8}
