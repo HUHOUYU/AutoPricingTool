@@ -4569,6 +4569,45 @@ html.dark [data-sonner-toast].cyber-toast {
   margin-top: auto;
 }
 
+.dashboard-metrics article.is-info { --dashboard-metric-tone: var(--cyber-status-info); }
+.dashboard-metrics article.is-confirm { --dashboard-metric-tone: var(--cyber-status-confirm); }
+.dashboard-metrics article.is-success { --dashboard-metric-tone: var(--cyber-status-success); }
+.dashboard-metrics article.is-error { --dashboard-metric-tone: var(--cyber-status-error); }
+.dashboard-metrics article[class*="is-"] > strong { color: var(--dashboard-metric-tone); }
+.dashboard-metrics article[class*="is-"] .dashboard-metric-icon {
+  color: var(--dashboard-metric-tone);
+  background: color-mix(in srgb, var(--dashboard-metric-tone) 12%, transparent);
+}
+
+.config-center-actions > button.is-info { --config-action-tone: var(--cyber-status-info); }
+.config-center-actions > button.is-primary { --config-action-tone: var(--cyber-primary); }
+.config-center-actions > button.is-warning { --config-action-tone: var(--cyber-status-confirm); }
+.config-center-actions > button.is-success { --config-action-tone: var(--cyber-status-success); }
+html.dark .config-center-actions > button[class*="is-"]:not(:disabled),
+.config-center-actions > button[class*="is-"]:not(:disabled) {
+  border-color: color-mix(in srgb, var(--config-action-tone) 42%, var(--cyber-border));
+  color: var(--config-action-tone);
+  background: color-mix(in srgb, var(--config-action-tone) 8%, var(--cyber-panel));
+  box-shadow: none;
+}
+html.dark .config-center-actions > button[class*="is-"]:hover:not(:disabled),
+.config-center-actions > button[class*="is-"]:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--config-action-tone) 64%, var(--cyber-border));
+  color: var(--config-action-tone);
+  background: color-mix(in srgb, var(--config-action-tone) 14%, var(--cyber-panel));
+}
+html.dark .config-center-actions > button.is-success:not(:disabled),
+.config-center-actions > button.is-success:not(:disabled) {
+  color: #ffffff;
+  background: var(--cyber-status-success);
+}
+.config-center-actions > button[class*="is-"]:disabled {
+  border-color: var(--cyber-border-soft);
+  color: var(--cyber-dim);
+  background: color-mix(in srgb, var(--cyber-panel-soft) 72%, var(--cyber-bg));
+  box-shadow: none;
+}
+
 .dashboard-card > header { margin-bottom: 12px; }
 .dashboard-card h2 { margin: 0; }
 .dashboard-shortcuts { grid-template-rows: auto repeat(2, minmax(0, 1fr)); }

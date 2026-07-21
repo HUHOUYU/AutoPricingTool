@@ -49,10 +49,10 @@ export function DashboardPage({ api, dark, currentFileCount, outputDir, onNewPro
   const hasTodayData = summary.today.files > 0 || summary.today.tasks > 0;
   const hasTrendData = summary.trend.some((item) => item.files > 0);
   const metrics = [
-    { label: "今日处理量", value: summary.today.files || "—", suffix: summary.today.files ? "个文件" : "尚无文件", icon: Files },
-    { label: "今日任务", value: summary.today.tasks || "—", suffix: summary.today.tasks ? "个批次" : "尚无批次", icon: ListChecks },
-    { label: "平均匹配率", value: hasTodayData ? `${Math.round(summary.today.matchRate * 100)}%` : "—", suffix: hasTodayData ? "今日数据" : "处理后计算", icon: Gauge },
-    { label: "异常数据", value: hasTodayData ? summary.today.exceptions : "—", suffix: hasTodayData ? "行待处理" : "暂无待处理行", icon: AlertTriangle },
+    { label: "今日处理量", value: summary.today.files || "—", suffix: summary.today.files ? "个文件" : "尚无文件", icon: Files, tone: "info" },
+    { label: "今日任务", value: summary.today.tasks || "—", suffix: summary.today.tasks ? "个批次" : "尚无批次", icon: ListChecks, tone: "confirm" },
+    { label: "平均匹配率", value: hasTodayData ? `${Math.round(summary.today.matchRate * 100)}%` : "—", suffix: hasTodayData ? "今日数据" : "处理后计算", icon: Gauge, tone: "success" },
+    { label: "异常数据", value: hasTodayData ? summary.today.exceptions : "—", suffix: hasTodayData ? "行待处理" : "暂无待处理行", icon: AlertTriangle, tone: "error" },
   ];
 
   return (
@@ -63,7 +63,7 @@ export function DashboardPage({ api, dark, currentFileCount, outputDir, onNewPro
       </header>
 
       <section className="dashboard-metrics" aria-label="今日业务指标">
-        {metrics.map(({ label, value, suffix, icon: Icon }) => <article key={label}><div><span className="dashboard-metric-icon"><Icon /></span><span>{label}</span></div><strong>{value}</strong><small>{suffix}</small></article>)}
+        {metrics.map(({ label, value, suffix, icon: Icon, tone }) => <article className={`is-${tone}`} key={label}><div><span className="dashboard-metric-icon"><Icon /></span><span>{label}</span></div><strong>{value}</strong><small>{suffix}</small></article>)}
       </section>
 
       <section className="dashboard-grid">
