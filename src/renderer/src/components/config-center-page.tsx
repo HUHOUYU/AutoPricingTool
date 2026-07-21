@@ -138,7 +138,7 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
   return (
     <div className="config-center-page">
       <header className="config-center-header">
-        <div><span>唯一配置入口</span><h1>配置中心</h1><p title={document?.path}>{document?.path ?? "正在读取配置文件…"}{dirty ? " · 未保存" : ""}</p></div>
+        <div><span>唯一配置入口</span><h1>配置中心</h1></div>
         <div className="config-center-actions">
           <Button variant="outline" onClick={() => void selectDocument()} disabled={loading}><FolderOpen />选择</Button>
           <Button variant="outline" onClick={() => void loadDocument(document?.path)} disabled={loading}><RefreshCw />重新加载</Button>
@@ -159,6 +159,7 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
           <div className="config-form-scroll">
             <fieldset>
               <legend>运行路径</legend>
+              <label>配置文件{dirty ? " · 未保存" : ""}<input aria-label="当前配置文件" title={document?.path} value={document?.path ?? "正在读取配置文件…"} readOnly /></label>
               <div className="config-field"><span>输入目录</span><div className="config-path-field"><input aria-label="输入目录" value={String(runtime.recent_input_dir ?? "")} onChange={(event) => updateField("runtime", "recent_input_dir", event.currentTarget.value)} /><Button type="button" variant="outline" aria-label="选择输入目录" onClick={() => void selectRuntimeDirectory("recent_input_dir", "input")}><FolderOpen />选择</Button></div></div>
               <div className="config-field"><span>输出目录</span><div className="config-path-field"><input aria-label="输出目录" value={String(runtime.recent_output_dir ?? "")} onChange={(event) => updateField("runtime", "recent_output_dir", event.currentTarget.value)} /><Button type="button" variant="outline" aria-label="选择输出目录" onClick={() => void selectRuntimeDirectory("recent_output_dir", "output")}><FolderOpen />选择</Button></div></div>
               <label className="config-check"><input type="checkbox" checked={Boolean(runtime.archive_standard_files)} onChange={(event) => updateField("runtime", "archive_standard_files", event.currentTarget.checked)} />归档标准文件</label>
