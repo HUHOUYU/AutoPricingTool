@@ -101,6 +101,7 @@ export type PriceAnalysisFile = {
   pricingSheetCandidates: PriceAnalysisCandidate[];
   suggestedMapping?: PriceCheckMapping | null;
   coverage: number;
+  matchedOrderRows?: number[];
   requiresConfirmation: boolean;
   automationDecision: {
     status: "eligible" | "confirm" | "error";
@@ -120,6 +121,7 @@ export type PriceMappingValidation = {
   evaluatedRows: number;
   matchedRows: number;
   coverage: number;
+  matchedOrderRows?: number[];
   errors: string[];
   warnings: string[];
 };

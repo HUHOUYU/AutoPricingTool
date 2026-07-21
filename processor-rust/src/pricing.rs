@@ -190,6 +190,7 @@ pub(crate) struct PriceAnalysisFile {
     pub(crate) pricing_sheet_candidates: Vec<PricingSheetCandidate>,
     pub(crate) suggested_mapping: Option<PriceCheckMapping>,
     pub(crate) coverage: f64,
+    pub(crate) matched_order_rows: Vec<usize>,
     pub(crate) requires_confirmation: bool,
     pub(crate) automation_decision: AutomationDecision,
     pub(crate) issues: Vec<String>,
@@ -315,6 +316,21 @@ struct Lookup {
     matched_sku: String,
     source_sheet: String,
     reason: String,
+}
+
+#[derive(Debug)]
+struct MappingValidationResult {
+    evaluated_rows: usize,
+    matched_rows: usize,
+    coverage: f64,
+    matched_order_rows: Vec<usize>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CandidateAmbiguity {
+    Sheet,
+    Column,
 }
 
 pub(crate) fn run_price_check_analyze(command: &Value, state: &RuntimeState) -> Result<()> {
@@ -474,15 +490,16 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
     let config = load_config(&config_path(command))?;
     let result = validate_price_mapping(Path::new(input_path), &mapping, &config);
     match result {
-        Ok((evaluated_rows, matched_rows, coverage, warnings)) => emit(json!({
+        Ok(validation) => emit(json!({
             "type": "price-validation",
             "inputPath": input_path,
             "requestVersion": request_version,
-            "evaluatedRows": evaluated_rows,
-            "matchedRows": matched_rows,
-            "coverage": coverage,
+            "evaluatedRows": validation.evaluated_rows,
+            "matchedRows": validation.matched_rows,
+            "coverage": validation.coverage,
+            "matchedOrderRows": validation.matched_order_rows,
             "errors": [],
-            "warnings": warnings,
+            "warnings": validation.warnings,
         })),
         Err(errors) => emit(json!({
             "type": "price-validation",
@@ -491,6 +508,7 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
             "evaluatedRows": 0,
             "matchedRows": 0,
             "coverage": 0.0,
+            "matchedOrderRows": [],
             "errors": errors,
             "warnings": [],
         })),
@@ -502,7 +520,7 @@ fn validate_price_mapping(
     path: &Path,
     mapping: &PriceCheckMapping,
     config: &Config,
-) -> std::result::Result<(usize, usize, f64, Vec<String>), Vec<String>> {
+) -> std::result::Result<MappingValidationResult, Vec<String>> {
     let workbook = read_workbook_for_processing(path, config)
         .map_err(|error| vec![format!("读取文件失败: {error:#}")])?;
     let mut errors = Vec::new();
@@ -627,20 +645,7 @@ fn validate_price_mapping(
     let index = build_price_index(pricing_sheet, mapping);
     let lines = read_order_lines(order_sheet, mapping).0;
     let evaluated_rows = lines.len();
-    let matched_rows = lines
-        .iter()
-        .filter(|line| {
-            index
-                .lookup(
-                    &line.country.code,
-                    &line.matched_sku,
-                    &line.shipping_method,
-                    line.quantity.round() as i64,
-                )
-                .status
-                == "matched"
-        })
-        .count();
+    let (matched_rows, matched_order_rows) = evaluate_matches(&index, &lines);
     let coverage = ratio(matched_rows, evaluated_rows);
     let mut warnings = Vec::new();
     if evaluated_rows == 0 {
@@ -656,7 +661,40 @@ fn validate_price_mapping(
             config.automation.coverage_threshold * 100.0
         ));
     }
-    Ok((evaluated_rows, matched_rows, coverage, warnings))
+    Ok(MappingValidationResult {
+        evaluated_rows,
+        matched_rows,
+        coverage,
+        matched_order_rows,
+        warnings,
+    })
+}
+
+fn evaluate_matches(index: &PriceIndex, lines: &[OrderLine]) -> (usize, Vec<usize>) {
+    let mut matched_rows = 0;
+    let mut order_row_matches = HashMap::new();
+    for line in lines {
+        let lookup = index.lookup(
+            &line.country.code,
+            &line.matched_sku,
+            &line.shipping_method,
+            line.quantity.round() as i64,
+        );
+        let matched = lookup.status == "matched";
+        order_row_matches
+            .entry(line.source_row)
+            .and_modify(|all_matched| *all_matched &= matched)
+            .or_insert(matched);
+        if matched {
+            matched_rows += 1;
+        }
+    }
+    let mut matched_order_rows = order_row_matches
+        .into_iter()
+        .filter_map(|(source_row, all_matched)| all_matched.then_some(source_row))
+        .collect::<Vec<_>>();
+    matched_order_rows.sort_unstable();
+    (matched_rows, matched_order_rows)
 }
 
 fn command_files(command: &Value) -> Result<Vec<PathBuf>> {
@@ -726,9 +764,10 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
     let mut coverage = 0.0;
     let mut evaluated_rows = 0;
     let mut matched_rows = 0;
+    let mut matched_order_rows = Vec::new();
     let mut runner_up_coverage = None;
     let mut score_gap = None;
-    let mut ambiguous = false;
+    let mut ambiguity_reason = None;
     if !order_candidates.is_empty() && !pricing_candidates.is_empty() {
         let mut combinations = Vec::new();
         for order in order_candidates.iter().take(6) {
@@ -746,20 +785,7 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
                         let index = build_price_index(pricing_sheet, &mapping);
                         let lines = read_order_lines(order_sheet, &mapping).0;
                         let total = lines.len();
-                        let matched = lines
-                            .iter()
-                            .filter(|line| {
-                                index
-                                    .lookup(
-                                        &line.country.code,
-                                        &line.matched_sku,
-                                        &line.shipping_method,
-                                        line.quantity.round() as i64,
-                                    )
-                                    .status
-                                    == "matched"
-                            })
-                            .count();
+                        let (matched, matched_rows) = evaluate_matches(&index, &lines);
                         let pair_coverage = ratio(matched, total);
                         combinations.push((
                             pair_coverage,
@@ -767,6 +793,7 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
                             total,
                             matched,
                             mapping,
+                            matched_rows,
                         ));
                     }
                 }
@@ -784,21 +811,33 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
         {
             combinations.retain(|item| item.4.order_sheet != item.4.pricing_sheet);
         }
-        if let Some((best_coverage, best_score, total, matched, best_mapping)) =
+        if let Some((best_coverage, best_score, total, matched, best_mapping, best_matched_rows)) =
             combinations.first().cloned()
         {
             coverage = best_coverage;
             evaluated_rows = total;
             matched_rows = matched;
-            suggested_mapping = Some(best_mapping);
+            matched_order_rows = best_matched_rows;
             if let Some(runner_up) = combinations.get(1) {
                 runner_up_coverage = Some(runner_up.0);
                 score_gap = Some((best_score - runner_up.1).max(0.0));
-                ambiguous = best_coverage - runner_up.0 < config.automation.candidate_coverage_gap
-                    && best_score - runner_up.1 < config.automation.candidate_score_gap;
+                if let Some(kind) = classify_candidate_ambiguity(
+                    &best_mapping,
+                    &runner_up.4,
+                    best_coverage - runner_up.0,
+                    best_score - runner_up.1,
+                    config,
+                ) {
+                    ambiguity_reason = Some(candidate_ambiguity_reason(
+                        kind,
+                        &best_mapping,
+                        &runner_up.4,
+                    ));
+                }
             }
-            if ambiguous {
-                issues.push("存在多个覆盖率接近的 Sheet/字段组合，需要确认".to_string());
+            suggested_mapping = Some(best_mapping);
+            if let Some(reason) = ambiguity_reason.as_ref() {
+                issues.push(format!("{reason}，需要确认"));
             }
         }
     }
@@ -813,7 +852,7 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
         coverage,
         runner_up_coverage,
         score_gap,
-        ambiguous,
+        ambiguity_reason.as_deref(),
     );
     let requires_confirmation = automation_decision.status != "eligible";
     if suggested_mapping
@@ -839,6 +878,7 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
         pricing_sheet_candidates: pricing_candidates,
         suggested_mapping,
         coverage,
+        matched_order_rows,
         requires_confirmation,
         automation_decision,
         issues,
@@ -856,7 +896,7 @@ fn decide_automation(
     coverage: f64,
     runner_up_coverage: Option<f64>,
     score_gap: Option<f64>,
-    ambiguous: bool,
+    ambiguity_reason: Option<&str>,
 ) -> AutomationDecision {
     let mut reasons = Vec::new();
     if mapping.is_none() {
@@ -882,8 +922,8 @@ fn decide_automation(
             config.automation.coverage_threshold * 100.0
         ));
     }
-    if ambiguous {
-        reasons.push("最优候选与次优候选差距不足".to_string());
+    if let Some(reason) = ambiguity_reason {
+        reasons.push(reason.to_string());
     }
     if !config.automation.auto_run {
         reasons.push("配置已关闭自动核价".to_string());
@@ -904,6 +944,84 @@ fn decide_automation(
         runner_up_coverage,
         score_gap,
     }
+}
+
+fn classify_candidate_ambiguity(
+    best: &PriceCheckMapping,
+    runner_up: &PriceCheckMapping,
+    coverage_gap: f64,
+    score_gap: f64,
+    config: &Config,
+) -> Option<CandidateAmbiguity> {
+    if coverage_gap >= config.automation.candidate_coverage_gap
+        || score_gap >= config.automation.candidate_score_gap
+    {
+        return None;
+    }
+    let same_sheet_pair =
+        best.order_sheet == runner_up.order_sheet && best.pricing_sheet == runner_up.pricing_sheet;
+    Some(if same_sheet_pair {
+        CandidateAmbiguity::Column
+    } else {
+        CandidateAmbiguity::Sheet
+    })
+}
+
+fn candidate_ambiguity_reason(
+    kind: CandidateAmbiguity,
+    best: &PriceCheckMapping,
+    runner_up: &PriceCheckMapping,
+) -> String {
+    match kind {
+        CandidateAmbiguity::Sheet => format!(
+            "订单/核价 Sheet 候选差距不足：最优 [订单 {} / 核价 {}]；次优 [订单 {} / 核价 {}]",
+            best.order_sheet, best.pricing_sheet, runner_up.order_sheet, runner_up.pricing_sheet
+        ),
+        CandidateAmbiguity::Column => format!(
+            "同一 Sheet 组合下，字段列候选差距不足：最优 [{}]；次优 [{}]",
+            sku_qty_columns_summary(best),
+            sku_qty_columns_summary(runner_up)
+        ),
+    }
+}
+
+fn sku_qty_columns_summary(mapping: &PriceCheckMapping) -> String {
+    mapping
+        .sku_qty_pairs
+        .iter()
+        .map(|pair| {
+            format!(
+                "SKU {}{} / 数量 {}{}",
+                excel_column_label(pair.sku_column),
+                header_suffix(&pair.sku_header),
+                excel_column_label(pair.qty_column),
+                header_suffix(&pair.qty_header)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("、")
+}
+
+fn header_suffix(header: &str) -> String {
+    let header = header.trim();
+    if header.is_empty() {
+        String::new()
+    } else {
+        format!("（{header}）")
+    }
+}
+
+fn excel_column_label(mut column: usize) -> String {
+    if column == 0 {
+        return "未设置".to_string();
+    }
+    let mut label = String::new();
+    while column > 0 {
+        let remainder = (column - 1) % 26;
+        label.insert(0, char::from(b'A' + remainder as u8));
+        column = (column - 1) / 26;
+    }
+    label
 }
 
 fn mapping_is_complete(mapping: &PriceCheckMapping) -> bool {
@@ -967,9 +1085,16 @@ fn infer_order_candidate(sheet: &SheetData) -> Option<OrderSheetCandidate> {
         let header = &sheet.rows[header_idx];
         let sku_columns = matching_columns(header, SKU_ALIASES);
         let qty_columns = matching_columns(header, QTY_ALIASES);
-        let pairs = pair_sku_qty_columns(header, &sku_columns, &qty_columns);
         let order_col = best_column(header, ORDER_ID_ALIASES);
         let platform_col = best_column(header, PLATFORM_ORDER_ALIASES);
+        let raw_pairs = pair_sku_qty_columns(header, &sku_columns, &qty_columns);
+        let pairs = deduplicate_equivalent_sku_qty_pairs(
+            sheet,
+            header_idx + 1,
+            &raw_pairs,
+            order_col,
+            platform_col,
+        );
         if order_col.is_none() && platform_col.is_none() && pairs.is_empty() {
             continue;
         }
@@ -992,6 +1117,12 @@ fn infer_order_candidate(sheet: &SheetData) -> Option<OrderSheetCandidate> {
             continue;
         }
         let mut notes = Vec::new();
+        if raw_pairs.len() > pairs.len() {
+            notes.push(format!(
+                "忽略 {} 组数据完全重复的 SKU/数量字段",
+                raw_pairs.len() - pairs.len()
+            ));
+        }
         if pairs.len() > 1 {
             notes.push(format!("识别到 {} 组 SKU/数量字段", pairs.len()));
         }
@@ -1402,6 +1533,68 @@ fn pair_sku_qty_columns(
     pairs
 }
 
+fn deduplicate_equivalent_sku_qty_pairs(
+    sheet: &SheetData,
+    data_start: usize,
+    pairs: &[SkuQtyPair],
+    order_column: Option<usize>,
+    platform_column: Option<usize>,
+) -> Vec<SkuQtyPair> {
+    let mut unique = Vec::new();
+    for pair in pairs {
+        if unique.iter().any(|existing| {
+            sku_qty_pair_data_equivalent(
+                sheet,
+                data_start,
+                existing,
+                pair,
+                order_column,
+                platform_column,
+            )
+        }) {
+            continue;
+        }
+        unique.push(pair.clone());
+    }
+    unique
+}
+
+fn sku_qty_pair_data_equivalent(
+    sheet: &SheetData,
+    data_start: usize,
+    left: &SkuQtyPair,
+    right: &SkuQtyPair,
+    order_column: Option<usize>,
+    platform_column: Option<usize>,
+) -> bool {
+    let mut compared = false;
+    for row in sheet.rows.iter().skip(data_start) {
+        let has_order = [order_column, platform_column]
+            .into_iter()
+            .flatten()
+            .any(|column| {
+                row.get(column)
+                    .is_some_and(|cell| !cell.text().trim().is_empty())
+            });
+        if !has_order {
+            continue;
+        }
+        let left_sku = normalize_sku(&cell_text(row, Some(left.sku_column)));
+        let right_sku = normalize_sku(&cell_text(row, Some(right.sku_column)));
+        let left_qty = row
+            .get(left.qty_column.saturating_sub(1))
+            .and_then(parse_number);
+        let right_qty = row
+            .get(right.qty_column.saturating_sub(1))
+            .and_then(parse_number);
+        if left_sku != right_sku || left_qty != right_qty {
+            return false;
+        }
+        compared |= !left_sku.is_empty() && left_qty.is_some();
+    }
+    compared
+}
+
 fn tier_columns(
     row: &[CellValue],
     sku_column: Option<usize>,
@@ -1800,7 +1993,7 @@ fn build_price_index(sheet: &SheetData, mapping: &PriceCheckMapping) -> PriceInd
     let data_start = mapping
         .pricing_header_row
         .max(mapping.pricing_quantity_header_row.unwrap_or(0));
-    for (_row_index, row) in sheet.rows.iter().enumerate().skip(data_start) {
+    for row in sheet.rows.iter().skip(data_start) {
         let raw_sku = cell_text(row, Some(mapping.pricing_sku_column));
         let raw_country = cell_text(row, Some(mapping.pricing_country_column));
         if raw_sku.is_empty() || raw_country.is_empty() {
@@ -2344,6 +2537,53 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_sku_quantity_columns_are_ignored_for_valid_order_rows() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("国家二字码"),
+                    CellValue::string("SKU"),
+                    CellValue::string("产品总数"),
+                    CellValue::string("SKU"),
+                    CellValue::string("产品总数"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("US"),
+                    CellValue::string("ABC-1"),
+                    CellValue::string("2"),
+                    CellValue::string("ABC-1"),
+                    CellValue::string("2"),
+                ],
+                vec![
+                    CellValue::string("ORDER-2"),
+                    CellValue::string("CA"),
+                    CellValue::string("ABC-2"),
+                    CellValue::string("1"),
+                    CellValue::string("ABC-2"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string(""),
+                    CellValue::string(""),
+                    CellValue::string(""),
+                    CellValue::string(""),
+                    CellValue::string("total"),
+                    CellValue::string("3"),
+                ],
+            ],
+        };
+
+        let candidate = infer_order_candidate(&sheet).expect("order candidate");
+        assert_eq!(candidate.sku_qty_pairs.len(), 1);
+        assert_eq!(candidate.sku_qty_pairs[0].sku_column, 3);
+        assert_eq!(candidate.sku_qty_pairs[0].qty_column, 4);
+        assert!(candidate.notes.iter().any(|note| note.contains("完全重复")));
+    }
+
+    #[test]
     fn pricing_candidate_supports_item_number_and_non_contiguous_tiers() {
         let sheet = SheetData {
             name: "Price".to_string(),
@@ -2589,7 +2829,7 @@ mod tests {
             coverage,
             Some(coverage - 0.01),
             Some(10.0),
-            ambiguous,
+            ambiguous.then_some("订单/核价 Sheet 候选差距不足"),
         )
     }
 
@@ -2620,7 +2860,7 @@ mod tests {
             1.0,
             None,
             None,
-            false,
+            None,
         );
         assert_eq!(missing.status, "confirm");
         assert!(
@@ -2642,7 +2882,7 @@ mod tests {
             1.0,
             None,
             None,
-            false,
+            None,
         );
         assert_eq!(conflict.status, "confirm");
         assert!(
@@ -2652,6 +2892,29 @@ mod tests {
                 .any(|reason| reason.contains("不能相同"))
         );
         assert_eq!(decision(20, 1.0, true).status, "confirm");
+    }
+
+    #[test]
+    fn ambiguity_distinguishes_sheet_and_column_candidates() {
+        let config = Config::default();
+        let best = complete_mapping();
+        let mut column_runner_up = best.clone();
+        column_runner_up.sku_qty_pairs[0].sku_column = 5;
+        assert_eq!(
+            classify_candidate_ambiguity(&best, &column_runner_up, 0.0, 0.0, &config),
+            Some(CandidateAmbiguity::Column)
+        );
+
+        let mut sheet_runner_up = best.clone();
+        sheet_runner_up.order_sheet = "订单备选".to_string();
+        assert_eq!(
+            classify_candidate_ambiguity(&best, &sheet_runner_up, 0.0, 0.0, &config),
+            Some(CandidateAmbiguity::Sheet)
+        );
+        let column_reason =
+            candidate_ambiguity_reason(CandidateAmbiguity::Column, &best, &column_runner_up);
+        assert!(column_reason.contains("最优 [SKU C / 数量 D]"));
+        assert!(column_reason.contains("次优 [SKU E / 数量 D]"));
     }
 
     #[test]
@@ -2721,11 +2984,23 @@ mod tests {
         };
         let wrong =
             validate_price_mapping(&path, &mapping, &Config::default()).expect("valid mapping");
-        assert_eq!((wrong.0, wrong.1, wrong.2), (1, 0, 0.0));
+        assert_eq!(
+            (wrong.evaluated_rows, wrong.matched_rows, wrong.coverage),
+            (1, 0, 0.0)
+        );
+        assert!(wrong.matched_order_rows.is_empty());
         mapping.sku_qty_pairs[0].sku_column = 4;
         let corrected =
             validate_price_mapping(&path, &mapping, &Config::default()).expect("valid mapping");
-        assert_eq!((corrected.0, corrected.1, corrected.2), (1, 1, 1.0));
+        assert_eq!(
+            (
+                corrected.evaluated_rows,
+                corrected.matched_rows,
+                corrected.coverage
+            ),
+            (1, 1, 1.0)
+        );
+        assert_eq!(corrected.matched_order_rows, vec![2]);
         std::fs::remove_file(path)?;
         Ok(())
     }
