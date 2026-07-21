@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as XLSX from "xlsx";
 import type { DesktopAPI, PriceAnalysisFile, ProcessorEvent } from "../../preload";
 import type { ExcelPreviewWorkerRequest, ExcelPreviewWorkerResponse } from "./lib/excel-preview";
 import { App } from "./App";
@@ -88,6 +89,10 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
     saveConfigDocumentAs: vi.fn(async (content) => ({ path: "C:\\saved.json", content, modifiedAt: 2, isDefault: false })),
     restoreDefaultConfig: vi.fn(async () => ({ path: "C:\\config.json", content: "{}\n", modifiedAt: 3, isDefault: false })),
     getTaskHistorySummary: vi.fn(async () => ({ today: { files: 0, tasks: 0, matchRate: 0, exceptions: 0 }, trend: [], recent: [] })),
+    listHeaderTemplates: vi.fn(async () => []),
+    createHeaderTemplate: vi.fn(async () => null),
+    updateHeaderTemplateMappings: vi.fn(async ({ id, mappings }) => ({ id, createdAt: "2026-07-21T08:00:00.000Z", createdBy: "tester", fileName: "template.xlsx", filePath: "C:\\templates\\template.xlsx", mappings })),
+    deleteHeaderTemplate: vi.fn(async () => undefined),
     appendRuntimeLogs: vi.fn(async () => undefined),
     exportRuntimeLog: vi.fn(async () => null),
     openPath: vi.fn(async () => ""),
@@ -370,7 +375,14 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[0]);
     expect(screen.getByRole("heading", { name: "配置中心" })).toBeInTheDocument();
 
-    for (const label of ["规则管理", "模板管理", "数据统计"]) {
+    fireEvent.click(screen.getByRole("button", { name: "模板管理" }));
+    expect(screen.getByRole("heading", { name: "模板管理" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "创建时间" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "创建人" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "模板文件" })).toBeInTheDocument();
+    await waitFor(() => expect(api.listHeaderTemplates).toHaveBeenCalledTimes(1));
+
+    for (const label of ["规则管理", "数据统计"]) {
       fireEvent.click(screen.getByRole("button", { name: label }));
       expect(screen.getByRole("heading", { name: "正在装修中" })).toBeInTheDocument();
       expect(screen.getByText(label, { selector: ".coming-soon-eyebrow" })).toBeInTheDocument();
@@ -808,6 +820,67 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.queryByText("C:\\config.json")).not.toBeInTheDocument();
   });
 
+  it("maps required template headers by clicking preview cells", async () => {
+    const api = createDesktopAPI();
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["订单号", "国家二字码", "SKU", "数量"]]), "Order");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["SKU", "Country", "1"]]), "Pricing");
+    const bytes = new Uint8Array(XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer);
+    api.getConfigDocument = vi.fn(async () => ({
+      path: "C:\\config.json",
+      content: JSON.stringify({ fields: {} }),
+      modifiedAt: 1,
+      isDefault: false,
+    }));
+    api.listHeaderTemplates = vi.fn(async () => [{
+      id: "template-1",
+      createdAt: "2026-07-21T08:00:00.000Z",
+      createdBy: "tester",
+      fileName: "headers.xlsx",
+      filePath: "C:\\templates\\headers.xlsx",
+      mappings: [],
+    }]);
+    api.readExcelPreviewFile = vi.fn(async () => ({ bytes, size: bytes.length, modifiedAt: 1 }));
+    installAPI(api);
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "模板管理" }));
+    fireEvent.click(await screen.findByRole("button", { name: "详情" }));
+    expect(await screen.findByRole("dialog", { name: "headers.xlsx" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "订单字段" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "核价字段" })).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "订单号" }));
+    fireEvent.click(screen.getByRole("button", { name: "国家二字码" }));
+    fireEvent.click(screen.getByRole("button", { name: "SKU" }));
+    fireEvent.click(screen.getByRole("button", { name: "数量" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pricing" }));
+    fireEvent.click(screen.getByRole("button", { name: "SKU" }));
+    fireEvent.click(screen.getByRole("button", { name: "Country" }));
+    fireEvent.click(screen.getByRole("button", { name: "1" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存字段映射" }));
+
+    await waitFor(() => expect(api.updateHeaderTemplateMappings).toHaveBeenCalledWith({
+      id: "template-1",
+      mappings: [
+        expect.objectContaining({ fieldKey: "order_number", sheetName: "Order", column: 1, header: "订单号" }),
+        expect.objectContaining({ fieldKey: "country_code", sheetName: "Order", column: 2, header: "国家二字码" }),
+        expect.objectContaining({ fieldKey: "sku_detail", sheetName: "Order", column: 3, header: "SKU" }),
+        expect.objectContaining({ fieldKey: "qty_detail", sheetName: "Order", column: 4, header: "数量" }),
+        expect.objectContaining({ fieldKey: "pricing_sku", sheetName: "Pricing", column: 1, header: "SKU" }),
+        expect.objectContaining({ fieldKey: "pricing_country", sheetName: "Pricing", column: 2, header: "Country" }),
+        expect.objectContaining({ fieldKey: "price", sheetName: "Pricing", column: 3, header: "1" }),
+      ],
+    }));
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭模板详情" }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(api.deleteHeaderTemplate).toHaveBeenCalledWith("template-1"));
+    expect(screen.queryByText("headers.xlsx")).not.toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
   it("synchronizes grouped config fields with JSON while preserving unknown fields", async () => {
     const api = createDesktopAPI();
     const content = JSON.stringify({ performance: { processing_workers: 0 }, runtime: {}, pricing: {}, extension_field: { keep: true } }, null, 2) + "\n";
@@ -817,9 +890,11 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[0]);
     const workers = await screen.findByRole("spinbutton", { name: "处理线程数" });
     fireEvent.change(workers, { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "模板匹配优先" }));
     const source = screen.getByRole("textbox", { name: "JSON 源码" }) as HTMLTextAreaElement;
     expect(source.value).toContain('"extension_field"');
     expect(source.value).toContain('"processing_workers": 4');
+    expect(source.value).toContain('"template_match_priority": true');
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(api.saveConfigDocument).toHaveBeenCalledWith(expect.objectContaining({
       path: "C:\\config.json",

@@ -54,6 +54,7 @@ import { Progress } from "@/components/ui/progress";
 import { ProgressChart } from "@/components/progress-chart";
 import { ConfigCenterPage } from "@/components/config-center-page";
 import { DashboardPage } from "@/components/dashboard-page";
+import { TemplateManagementPage } from "@/components/template-management-page";
 import { ExcelPreview, type ExcelPreviewCandidate } from "@/components/excel-preview";
 import { MappingEditor, type MappingFieldTarget, type MappingValidationState } from "@/components/mapping-editor";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -1636,7 +1637,7 @@ export function App(): React.JSX.Element {
           </> : null}
         </AnimatePresence>
 
-        <section className={`cyber-workspace is-${activePage}` + (!["workbench", "files", "config"].includes(activePage) ? " is-coming-soon" : "")}>
+        <section className={`cyber-workspace is-${activePage}` + (!["workbench", "files", "config", "templates"].includes(activePage) ? " is-coming-soon" : "")}>
           {activePage === "workbench" ? (
             <DashboardPage
               api={getDesktopAPI()}
@@ -1770,6 +1771,8 @@ export function App(): React.JSX.Element {
           </section>
           </> : activePage === "config" ? (
             <ConfigCenterPage api={getDesktopAPI()} />
+          ) : activePage === "templates" ? (
+            <TemplateManagementPage api={getDesktopAPI()} />
           ) : (
             <section className="coming-soon-page" aria-labelledby="coming-soon-title">
               <div className="coming-soon-icon" aria-hidden="true"><ActiveNavigationIcon /></div>

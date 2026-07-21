@@ -36,6 +36,8 @@ pub(crate) struct Config {
 pub(crate) struct AutomationRules {
     #[serde(default = "default_auto_run")]
     pub(crate) auto_run: bool,
+    #[serde(default)]
+    pub(crate) template_match_priority: bool,
     #[serde(default = "default_coverage_threshold")]
     pub(crate) coverage_threshold: f64,
     #[serde(default = "default_min_trial_rows")]
@@ -50,6 +52,7 @@ impl Default for AutomationRules {
     fn default() -> Self {
         Self {
             auto_run: default_auto_run(),
+            template_match_priority: false,
             coverage_threshold: default_coverage_threshold(),
             min_trial_rows: default_min_trial_rows(),
             candidate_coverage_gap: default_candidate_coverage_gap(),

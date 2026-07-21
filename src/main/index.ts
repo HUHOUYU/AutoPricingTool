@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { access, appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { userInfo } from "node:os";
 import { assertTrustedIpcSender, isTrustedRendererUrl } from "./security";
 import { readExcelPreviewFile } from "./excel-preview-file";
 
@@ -53,6 +54,24 @@ type TaskHistoryRecord = {
   outputDir?: string;
 };
 
+type HeaderTemplateFieldMapping = {
+  fieldKey: string;
+  label: string;
+  sheetName: string;
+  headerRow: number;
+  column: number;
+  header: string;
+};
+
+type HeaderTemplateRecord = {
+  id: string;
+  createdAt: string;
+  createdBy: string;
+  fileName: string;
+  filePath: string;
+  mappings: HeaderTemplateFieldMapping[];
+};
+
 const rootDir = resolve(__dirname, "../..");
 const resourceRootDir = app.isPackaged ? process.resourcesPath : rootDir;
 const writableRootDir = app.isPackaged ? app.getPath("userData") : rootDir;
@@ -63,6 +82,8 @@ const defaultExtractConfigPath = join(writableRootDir, "config", "extract_rules.
 const legacyRuntimeConfigPath = join(writableRootDir, "runtime", "app_config.json");
 const runtimeLogPath = join(writableRootDir, "runtime", "logs", "app.log");
 const taskHistoryPath = join(writableRootDir, "runtime", "task-history.jsonl");
+const templateStoreDir = join(app.getPath("userData"), "templates");
+const templateStorePath = join(templateStoreDir, "templates.json");
 const appIconPath = join(resourceRootDir, "resources", "app-icon.ico");
 const rendererHtmlPath = join(__dirname, "../renderer/index.html");
 const devServerUrl = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL;
@@ -243,6 +264,53 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+async function readHeaderTemplates(): Promise<HeaderTemplateRecord[]> {
+  try {
+    const parsed = JSON.parse(await readFile(templateStorePath, "utf8")) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is HeaderTemplateRecord => {
+      if (!item || typeof item !== "object") return false;
+      const record = item as Partial<HeaderTemplateRecord>;
+      return typeof record.id === "string"
+        && typeof record.createdAt === "string"
+        && typeof record.createdBy === "string"
+        && typeof record.fileName === "string"
+        && typeof record.filePath === "string"
+        && Array.isArray(record.mappings);
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function writeHeaderTemplates(records: HeaderTemplateRecord[]): Promise<void> {
+  await mkdir(templateStoreDir, { recursive: true });
+  await writeFile(templateStorePath, `${JSON.stringify(records, null, 2)}\n`, "utf8");
+}
+
+function parseHeaderTemplateMappings(value: unknown): HeaderTemplateFieldMapping[] {
+  if (!Array.isArray(value)) throw new TypeError("模板字段映射必须是数组");
+  return value.map((item) => {
+    const mapping = requireRecord(item, "模板字段映射");
+    if (typeof mapping.fieldKey !== "string" || !mapping.fieldKey.trim()
+      || typeof mapping.label !== "string" || !mapping.label.trim()
+      || typeof mapping.sheetName !== "string" || !mapping.sheetName.trim()
+      || !Number.isInteger(mapping.headerRow) || Number(mapping.headerRow) < 1
+      || !Number.isInteger(mapping.column) || Number(mapping.column) < 1
+      || typeof mapping.header !== "string") {
+      throw new TypeError("模板字段映射格式无效");
+    }
+    return {
+      fieldKey: mapping.fieldKey.trim(),
+      label: mapping.label.trim(),
+      sheetName: mapping.sheetName.trim(),
+      headerRow: Number(mapping.headerRow),
+      column: Number(mapping.column),
+      header: mapping.header.trim(),
+    };
+  });
+}
+
 function parseConfigContent(content: string): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -291,6 +359,9 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
   if (automation) {
     if (automation.auto_run !== undefined && typeof automation.auto_run !== "boolean") {
       issues.push({ path: "automation.auto_run", message: "必须是布尔值" });
+    }
+    if (automation.template_match_priority !== undefined && typeof automation.template_match_priority !== "boolean") {
+      issues.push({ path: "automation.template_match_priority", message: "必须是布尔值" });
     }
     for (const key of ["coverage_threshold", "candidate_coverage_gap"] as const) {
       const value = automation[key];
@@ -934,6 +1005,61 @@ app.whenReady().then(async () => {
     requireTrustedIpc(event);
     return getTaskHistorySummary();
   });
+  ipcMain.handle("templates:list", (event) => {
+    requireTrustedIpc(event);
+    return readHeaderTemplates();
+  });
+  ipcMain.handle("templates:create", async (event) => {
+    requireTrustedIpc(event);
+    const result = await dialog.showOpenDialog({
+      filters: [
+        { name: "Excel 模板", extensions: ["xlsx", "xls", "xlsm", "xlsb"] },
+      ],
+      properties: ["openFile"],
+    });
+    const sourcePath = result.filePaths[0];
+    if (result.canceled || !sourcePath) return null;
+    if (!isSupportedExcelPath(sourcePath)) throw new TypeError("请选择受支持的 Excel 模板文件");
+    await mkdir(templateStoreDir, { recursive: true });
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const storedName = `${id}${extname(sourcePath).toLowerCase()}`;
+    const storedPath = join(templateStoreDir, storedName);
+    await copyFile(sourcePath, storedPath);
+    const record: HeaderTemplateRecord = {
+      id,
+      createdAt: new Date().toISOString(),
+      createdBy: userInfo().username || "当前用户",
+      fileName: basename(sourcePath),
+      filePath: storedPath,
+      mappings: [],
+    };
+    const records = await readHeaderTemplates();
+    records.unshift(record);
+    await writeHeaderTemplates(records);
+    return record;
+  });
+  ipcMain.handle("templates:update-mappings", async (event, payload: unknown) => {
+    requireTrustedIpc(event);
+    const input = requireRecord(payload, "模板映射参数");
+    if (typeof input.id !== "string" || !input.id.trim()) throw new TypeError("缺少模板 ID");
+    const mappings = parseHeaderTemplateMappings(input.mappings);
+    const records = await readHeaderTemplates();
+    const index = records.findIndex((record) => record.id === input.id);
+    if (index < 0) throw new Error("模板不存在或已被删除");
+    records[index] = { ...records[index], mappings };
+    await writeHeaderTemplates(records);
+    return records[index];
+  });
+  ipcMain.handle("templates:delete", async (event, id: unknown) => {
+    requireTrustedIpc(event);
+    if (typeof id !== "string" || !id.trim()) throw new TypeError("缺少模板 ID");
+    const records = await readHeaderTemplates();
+    const index = records.findIndex((record) => record.id === id);
+    if (index < 0) return;
+    const [record] = records.splice(index, 1);
+    await writeHeaderTemplates(records);
+    if (samePath(dirname(record.filePath), templateStoreDir)) await rm(record.filePath, { force: true });
+  });
   ipcMain.handle("app:append-runtime-log", (event, payload: RuntimeLogRow) => {
     requireTrustedIpc(event);
     const [row] = normalizeRuntimeLogRows([payload]);
@@ -993,7 +1119,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("processor:price-check-analyze", async (event, payload: unknown) => {
     requireTrustedIpc(event);
     processorActivity = "price-analyze";
-    sendProcessorCommand({ ...(await validatePricePayload(payload)), action: "price-check-analyze" });
+    sendProcessorCommand({ ...(await validatePricePayload(payload)), headerTemplates: await readHeaderTemplates(), action: "price-check-analyze" });
   });
   ipcMain.handle("processor:price-check-run", async (event, payload: unknown) => {
     requireTrustedIpc(event);
@@ -1013,7 +1139,7 @@ app.whenReady().then(async () => {
     };
     await persistTaskRecord(activeTask);
     processorActivity = "price-run";
-    sendProcessorCommand({ ...validated, action: "price-check-run" });
+    sendProcessorCommand({ ...validated, headerTemplates: await readHeaderTemplates(), action: "price-check-run" });
   });
   ipcMain.handle("processor:price-check-validate", async (event, payload: unknown) => {
     requireTrustedIpc(event);

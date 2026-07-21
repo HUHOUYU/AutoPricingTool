@@ -36,6 +36,7 @@
   },
   "automation": {
     "auto_run": true,
+    "template_match_priority": false,
     "coverage_threshold": 0.98,
     "min_trial_rows": 10,
     "candidate_coverage_gap": 0.02,

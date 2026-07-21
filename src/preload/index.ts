@@ -42,6 +42,24 @@ export type TaskHistorySummary = {
   recent: TaskHistoryRecord[];
 };
 
+export type HeaderTemplateFieldMapping = {
+  fieldKey: string;
+  label: string;
+  sheetName: string;
+  headerRow: number;
+  column: number;
+  header: string;
+};
+
+export type HeaderTemplateRecord = {
+  id: string;
+  createdAt: string;
+  createdBy: string;
+  fileName: string;
+  filePath: string;
+  mappings: HeaderTemplateFieldMapping[];
+};
+
 export type PriceCheckMapping = {
   orderSheet: string;
   orderHeaderRow: number;
@@ -180,6 +198,11 @@ const desktopAPI = {
   saveConfigDocumentAs: (content: string): Promise<ConfigDocument | null> => ipcRenderer.invoke("config:save-document-as", content),
   restoreDefaultConfig: (): Promise<ConfigDocument> => ipcRenderer.invoke("config:restore-default"),
   getTaskHistorySummary: (): Promise<TaskHistorySummary> => ipcRenderer.invoke("history:get-summary"),
+  listHeaderTemplates: (): Promise<HeaderTemplateRecord[]> => ipcRenderer.invoke("templates:list"),
+  createHeaderTemplate: (): Promise<HeaderTemplateRecord | null> => ipcRenderer.invoke("templates:create"),
+  updateHeaderTemplateMappings: (payload: { id: string; mappings: HeaderTemplateFieldMapping[] }): Promise<HeaderTemplateRecord> =>
+    ipcRenderer.invoke("templates:update-mappings", payload),
+  deleteHeaderTemplate: (id: string): Promise<void> => ipcRenderer.invoke("templates:delete", id),
   appendRuntimeLogs: (rows: RuntimeLogRow[]): Promise<void> => ipcRenderer.invoke("app:append-runtime-logs", rows),
   exportRuntimeLog: (): Promise<string | null> => ipcRenderer.invoke("app:export-runtime-log"),
   openPath: (filePath: string): Promise<string> => ipcRenderer.invoke("app:open-path", filePath),

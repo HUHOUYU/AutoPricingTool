@@ -173,6 +173,7 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
             <fieldset>
               <legend>自动化门槛</legend>
               <label className="config-check"><input type="checkbox" checked={Boolean(automation.auto_run ?? true)} onChange={(event) => updateField("automation", "auto_run", event.currentTarget.checked)} />分析后自动核价</label>
+              <label className="config-check"><input type="checkbox" checked={Boolean(automation.template_match_priority)} onChange={(event) => updateField("automation", "template_match_priority", event.currentTarget.checked)} />模板匹配优先</label>
               <label>覆盖率门槛（%）<input type="number" min="0" max="100" step="0.1" value={Number(automation.coverage_threshold ?? 0.98) * 100} onChange={(event) => updateField("automation", "coverage_threshold", Number(event.currentTarget.value) / 100)} /></label>
               <label>最低试算行数<input type="number" min="1" value={Number(automation.min_trial_rows ?? 10)} onChange={(event) => updateField("automation", "min_trial_rows", Number(event.currentTarget.value))} /></label>
               <label>候选覆盖率差（%）<input type="number" min="0" max="100" step="0.1" value={Number(automation.candidate_coverage_gap ?? 0.02) * 100} onChange={(event) => updateField("automation", "candidate_coverage_gap", Number(event.currentTarget.value) / 100)} /></label>
