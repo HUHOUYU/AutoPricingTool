@@ -1219,6 +1219,7 @@ select:focus-visible {
 
 /* Neon workstation shell */
 .cyber-app {
+  --cyber-sidebar-expanded-width: clamp(192px, calc(18.4vw - 20px), 244px);
   --cyber-bg: #020a18;
   --cyber-sidebar: #061327;
   --cyber-panel: #07172d;
@@ -1238,7 +1239,7 @@ select:focus-visible {
   display: grid;
   width: 100vw;
   height: 100vh;
-  grid-template-columns: clamp(212px, 18.4vw, 264px) minmax(0, 1fr);
+  grid-template-columns: var(--cyber-sidebar-expanded-width) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   color: var(--cyber-text);
@@ -2521,7 +2522,10 @@ html:not(.dark) .cyber-footer { height: 24px; color: var(--cyber-muted); backgro
 }
 
 @media (max-width: 1180px) {
-  .cyber-app { grid-template-columns: 210px minmax(0, 1fr); }
+  .cyber-app {
+    --cyber-sidebar-expanded-width: 190px;
+    grid-template-columns: var(--cyber-sidebar-expanded-width) minmax(0, 1fr);
+  }
   .cyber-metrics { gap: 8px; }
   .cyber-metric { padding-right: 10px; padding-left: 10px; }
   .cyber-metric .metric-title > strong { font-size: 12px; }
@@ -3789,8 +3793,9 @@ html:not(.dark) .cyber-pagination button {
 }
 
 .is-sidebar-collapsed .cyber-sidebar-tools {
-  min-height: 0;
-  flex: 1 1 auto;
+  height: var(--cyber-sidebar-expanded-width);
+  min-height: var(--cyber-sidebar-expanded-width);
+  flex: 0 0 var(--cyber-sidebar-expanded-width);
 }
 
 @media (max-height: 740px) {
