@@ -181,6 +181,22 @@ pub(crate) struct PriceCheckMapping {
     pub(crate) quantity_tier_columns: Vec<PriceTierColumn>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct HeaderTemplateFieldMapping {
+    field_key: String,
+    sheet_name: String,
+    column: usize,
+    header: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct HeaderTemplateRecord {
+    file_name: String,
+    mappings: Vec<HeaderTemplateFieldMapping>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PriceAnalysisFile {
@@ -336,6 +352,7 @@ enum CandidateAmbiguity {
 pub(crate) fn run_price_check_analyze(command: &Value, state: &RuntimeState) -> Result<()> {
     let files = command_files(command)?;
     let config = load_config(&config_path(command))?;
+    let header_templates = command_header_templates(command);
     let mut analyses = Vec::new();
 
     for (index, path) in files.iter().enumerate() {
@@ -353,7 +370,7 @@ pub(crate) fn run_price_check_analyze(command: &Value, state: &RuntimeState) -> 
             "total": files.len(),
             "path": path,
         }));
-        match analyze_path(path, &config) {
+        match analyze_path_with_templates(path, &config, &header_templates) {
             Ok(analysis) => {
                 let requires_confirmation = analysis.requires_confirmation;
                 emit(json!({"type": "price-analysis", "file": analysis.clone()}));
@@ -398,6 +415,7 @@ pub(crate) fn run_price_check(command: &Value, state: &RuntimeState) -> Result<(
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     let mappings = command_mappings(command)?;
+    let header_templates = command_header_templates(command);
     let mut file_results = Vec::new();
     let mut failures = Vec::new();
 
@@ -420,7 +438,7 @@ pub(crate) fn run_price_check(command: &Value, state: &RuntimeState) -> Result<(
             .get(&path.display().to_string())
             .cloned()
             .or_else(|| {
-                analyze_path(path, &config)
+                analyze_path_with_templates(path, &config, &header_templates)
                     .ok()
                     .and_then(|item| item.suggested_mapping)
             });
@@ -737,7 +755,19 @@ fn command_mappings(command: &Value) -> Result<HashMap<String, PriceCheckMapping
     Ok(result)
 }
 
-fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
+fn command_header_templates(command: &Value) -> Vec<HeaderTemplateRecord> {
+    command
+        .get("headerTemplates")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+fn analyze_path_with_templates(
+    path: &Path,
+    config: &Config,
+    header_templates: &[HeaderTemplateRecord],
+) -> Result<PriceAnalysisFile> {
     let workbook = read_workbook_for_processing(path, config)?;
     let mut order_candidates = Vec::new();
     let mut pricing_candidates = Vec::new();
@@ -768,7 +798,44 @@ fn analyze_path(path: &Path, config: &Config) -> Result<PriceAnalysisFile> {
     let mut runner_up_coverage = None;
     let mut score_gap = None;
     let mut ambiguity_reason = None;
-    if !order_candidates.is_empty() && !pricing_candidates.is_empty() {
+    let template_match = config
+        .automation
+        .template_match_priority
+        .then(|| {
+            match_header_template(
+                &workbook.sheets,
+                &order_candidates,
+                &pricing_candidates,
+                header_templates,
+            )
+        })
+        .flatten();
+    if let Some((template_name, mapping)) = template_match {
+        if let (Some(order_sheet), Some(pricing_sheet)) = (
+            workbook
+                .sheets
+                .iter()
+                .find(|sheet| sheet.name == mapping.order_sheet),
+            workbook
+                .sheets
+                .iter()
+                .find(|sheet| sheet.name == mapping.pricing_sheet),
+        ) {
+            let index = build_price_index(pricing_sheet, &mapping);
+            let lines = read_order_lines(order_sheet, &mapping).0;
+            evaluated_rows = lines.len();
+            let evaluated = evaluate_matches(&index, &lines);
+            matched_rows = evaluated.0;
+            matched_order_rows = evaluated.1;
+            coverage = ratio(matched_rows, evaluated_rows);
+            suggested_mapping = Some(mapping);
+            emit(json!({
+                "type": "log",
+                "level": "success",
+                "message": format!("模板优先匹配成功：{template_name}"),
+            }));
+        }
+    } else if !order_candidates.is_empty() && !pricing_candidates.is_empty() {
         let mut combinations = Vec::new();
         for order in order_candidates.iter().take(6) {
             for pricing in pricing_candidates.iter().take(6) {
@@ -1076,6 +1143,131 @@ fn mapping_variants(
         variants.push(variant);
     }
     variants
+}
+
+fn match_header_template(
+    sheets: &[SheetData],
+    order_candidates: &[OrderSheetCandidate],
+    pricing_candidates: &[PricingSheetCandidate],
+    templates: &[HeaderTemplateRecord],
+) -> Option<(String, PriceCheckMapping)> {
+    const ORDER_FIELDS: [&str; 4] = ["order_number", "country_code", "sku_detail", "qty_detail"];
+    const PRICING_FIELDS: [&str; 3] = ["pricing_sku", "pricing_country", "price"];
+
+    for template in templates {
+        let field = |key: &str| {
+            template
+                .mappings
+                .iter()
+                .find(|mapping| mapping.field_key == key)
+        };
+        let order_fields = ORDER_FIELDS.map(field);
+        let pricing_fields = PRICING_FIELDS.map(field);
+        if order_fields.iter().any(Option::is_none) || pricing_fields.iter().any(Option::is_none) {
+            continue;
+        }
+        let order_fields = order_fields.map(Option::unwrap);
+        let pricing_fields = pricing_fields.map(Option::unwrap);
+        if !order_fields
+            .iter()
+            .all(|mapping| mapping.sheet_name == order_fields[0].sheet_name)
+            || !pricing_fields
+                .iter()
+                .all(|mapping| mapping.sheet_name == pricing_fields[0].sheet_name)
+            || order_fields[0].sheet_name == pricing_fields[0].sheet_name
+        {
+            continue;
+        }
+
+        for order in order_candidates {
+            let Some(order_sheet) = sheets.iter().find(|sheet| sheet.name == order.sheet_name)
+            else {
+                continue;
+            };
+            if !order_fields
+                .iter()
+                .all(|mapping| template_header_matches(order_sheet, order.header_row, mapping))
+            {
+                continue;
+            }
+            for pricing in pricing_candidates {
+                if order.sheet_name == pricing.sheet_name {
+                    continue;
+                }
+                let Some(pricing_sheet) =
+                    sheets.iter().find(|sheet| sheet.name == pricing.sheet_name)
+                else {
+                    continue;
+                };
+                let pricing_headers_match = pricing_fields.iter().all(|mapping| {
+                    let row = if mapping.field_key == "price" {
+                        pricing.quantity_header_row.unwrap_or(pricing.header_row)
+                    } else {
+                        pricing.header_row
+                    };
+                    template_header_matches(pricing_sheet, row, mapping)
+                });
+                if !pricing_headers_match {
+                    continue;
+                }
+
+                let mut mapping = mapping_from_candidates(order, pricing);
+                mapping.business_order_number_column = Some(order_fields[0].column);
+                mapping.platform_order_number_column = None;
+                mapping.country_code_column = Some(order_fields[1].column);
+                mapping.country_english_column = None;
+                mapping.country_chinese_column = None;
+                mapping.sku_qty_pairs = vec![SkuQtyPair {
+                    sku_column: order_fields[2].column,
+                    qty_column: order_fields[3].column,
+                    sku_header: order_fields[2].header.clone(),
+                    qty_header: order_fields[3].header.clone(),
+                }];
+                mapping.pricing_sku_column = pricing_fields[0].column;
+                mapping.pricing_country_column = pricing_fields[1].column;
+                let price_column = pricing_fields[2].column;
+                if !mapping
+                    .quantity_tier_columns
+                    .iter()
+                    .any(|tier| tier.column == price_column)
+                {
+                    let quantity_row = pricing.quantity_header_row.unwrap_or(pricing.header_row);
+                    let header = sheet_cell_text(pricing_sheet, quantity_row, price_column);
+                    let Some(quantity) = parse_tier(&header) else {
+                        continue;
+                    };
+                    mapping.quantity_tier_columns.push(PriceTierColumn {
+                        quantity,
+                        column: price_column,
+                        header,
+                    });
+                }
+                return Some((template.file_name.clone(), mapping));
+            }
+        }
+    }
+    None
+}
+
+fn template_header_matches(
+    sheet: &SheetData,
+    header_row: usize,
+    mapping: &HeaderTemplateFieldMapping,
+) -> bool {
+    normalize_header(&sheet_cell_text(sheet, header_row, mapping.column))
+        == normalize_header(&mapping.header)
+}
+
+fn sheet_cell_text(sheet: &SheetData, row: usize, column: usize) -> String {
+    if row == 0 || column == 0 {
+        return String::new();
+    }
+    sheet
+        .rows
+        .get(row - 1)
+        .and_then(|cells| cells.get(column - 1))
+        .map(CellValue::text)
+        .unwrap_or_default()
 }
 
 fn infer_order_candidate(sheet: &SheetData) -> Option<OrderSheetCandidate> {
@@ -2534,6 +2726,88 @@ mod tests {
                 .iter()
                 .any(|note| note.contains("连续数量档位"))
         );
+    }
+
+    #[test]
+    fn header_template_matches_before_candidate_fallback() {
+        let order_sheet = SheetData {
+            name: "Incoming Order".to_string(),
+            rows: vec![vec![
+                CellValue::string("业务订单号"),
+                CellValue::string("平台订单号"),
+                CellValue::string("国家二字码"),
+                CellValue::string("英文国家"),
+                CellValue::string("中文国家"),
+                CellValue::string("SKU"),
+                CellValue::string("Qty"),
+            ]],
+        };
+        let pricing_sheet = SheetData {
+            name: "Incoming Price".to_string(),
+            rows: vec![vec![
+                CellValue::string("SKU"),
+                CellValue::string("Country"),
+                CellValue::string("1pcs"),
+            ]],
+        };
+        let order = OrderSheetCandidate {
+            sheet_name: order_sheet.name.clone(),
+            header_row: 1,
+            sku_qty_pairs: vec![SkuQtyPair {
+                sku_column: 6,
+                qty_column: 7,
+                sku_header: "SKU".to_string(),
+                qty_header: "Qty".to_string(),
+            }],
+            ..OrderSheetCandidate::default()
+        };
+        let pricing = PricingSheetCandidate {
+            sheet_name: pricing_sheet.name.clone(),
+            header_row: 1,
+            sku_column: Some(1),
+            country_column: Some(2),
+            tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 3,
+                header: "1pcs".to_string(),
+            }],
+            ..PricingSheetCandidate::default()
+        };
+        let template = HeaderTemplateRecord {
+            file_name: "template.xlsx".to_string(),
+            mappings: vec![
+                ("order_number", "Order", 1, "业务订单号"),
+                ("country_code", "Order", 3, "国家二字码"),
+                ("sku_detail", "Order", 6, "SKU"),
+                ("qty_detail", "Order", 7, "Qty"),
+                ("pricing_sku", "Pricing", 1, "SKU"),
+                ("pricing_country", "Pricing", 2, "Country"),
+                ("price", "Pricing", 3, "1pcs"),
+            ]
+            .into_iter()
+            .map(
+                |(field_key, sheet_name, column, header)| HeaderTemplateFieldMapping {
+                    field_key: field_key.to_string(),
+                    sheet_name: sheet_name.to_string(),
+                    column,
+                    header: header.to_string(),
+                },
+            )
+            .collect(),
+        };
+
+        let matched = match_header_template(
+            &[order_sheet, pricing_sheet],
+            &[order],
+            &[pricing],
+            &[template],
+        )
+        .expect("template match");
+        assert_eq!(matched.0, "template.xlsx");
+        assert_eq!(matched.1.order_sheet, "Incoming Order");
+        assert_eq!(matched.1.pricing_sheet, "Incoming Price");
+        assert_eq!(matched.1.sku_qty_pairs[0].sku_column, 6);
+        assert_eq!(matched.1.quantity_tier_columns[0].column, 3);
     }
 
     #[test]
