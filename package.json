@@ -29,7 +29,7 @@
   "build": {
     "appId": "com.autopricingtool.app",
     "productName": "AutoPricingTool",
-    "artifactName": "AutoPricingTool_latest.${ext}",
+    "artifactName": "AutoPricingTool.${ext}",
     "asar": true,
     "directories": {
       "output": "dist-electron"
@@ -79,6 +79,7 @@
     ],
     "win": {
       "icon": "resources/app-icon.ico",
+      "executableName": "AutoPricingTool",
       "target": [
         "portable"
       ]

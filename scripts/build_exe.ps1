@@ -1,5 +1,5 @@
 param(
-    [string]$ExeName = "AutoPricingTool_latest"
+    [string]$ExeName = "AutoPricingTool"
 )
 
 $ErrorActionPreference = "Stop"
