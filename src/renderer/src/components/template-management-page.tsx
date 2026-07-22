@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, FilePlus2, FileSpreadsheet, LoaderCircle, Save, X } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
@@ -28,6 +28,43 @@ const fallbackRequiredFields: RequiredTemplateField[] = [
   { key: "pricing_country", label: "核价国家", group: "核价字段" },
   { key: "price", label: "数量价格档位（price）", group: "核价字段" },
 ];
+
+const TEMPLATE_DRAWER_DEFAULT_MAX_WIDTH = 1500;
+const TEMPLATE_DRAWER_MIN_WIDTH = 760;
+const TEMPLATE_DRAWER_EDGE_GAP = 72;
+const TEMPLATE_DRAWER_KEYBOARD_STEP = 24;
+const TEMPLATE_FIELDS_DEFAULT_WIDTH = 330;
+const TEMPLATE_FIELDS_MIN_WIDTH = 280;
+const TEMPLATE_FIELDS_MAX_WIDTH = 600;
+const TEMPLATE_FIELDS_KEYBOARD_STEP = 16;
+const TEMPLATE_PREVIEW_MIN_WIDTH = 360;
+const TEMPLATE_BODY_HORIZONTAL_PADDING = 24;
+const TEMPLATE_BODY_RESIZER_WIDTH = 12;
+const MULTI_SELECT_FIELD_KEYS = new Set(["price"]);
+
+function templateDrawerBounds(viewportWidth = typeof window === "undefined" ? 1440 : window.innerWidth): { min: number; max: number } {
+  const max = Math.max(320, viewportWidth - TEMPLATE_DRAWER_EDGE_GAP);
+  return { min: Math.min(TEMPLATE_DRAWER_MIN_WIDTH, max), max };
+}
+
+function clampTemplateDrawerWidth(width: number): number {
+  const bounds = templateDrawerBounds();
+  return Math.min(bounds.max, Math.max(bounds.min, width));
+}
+
+function defaultTemplateDrawerWidth(): number {
+  return clampTemplateDrawerWidth(Math.min(TEMPLATE_DRAWER_DEFAULT_MAX_WIDTH, window.innerWidth - TEMPLATE_DRAWER_EDGE_GAP));
+}
+
+function templateFieldsBounds(drawerWidth: number): { min: number; max: number } {
+  const availableMax = drawerWidth - TEMPLATE_BODY_HORIZONTAL_PADDING - TEMPLATE_BODY_RESIZER_WIDTH - TEMPLATE_PREVIEW_MIN_WIDTH;
+  return { min: TEMPLATE_FIELDS_MIN_WIDTH, max: Math.max(TEMPLATE_FIELDS_MIN_WIDTH, Math.min(TEMPLATE_FIELDS_MAX_WIDTH, availableMax)) };
+}
+
+function clampTemplateFieldsWidth(width: number, drawerWidth: number): number {
+  const bounds = templateFieldsBounds(drawerWidth);
+  return Math.min(bounds.max, Math.max(bounds.min, width));
+}
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -121,6 +158,12 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
   const [draftMappings, setDraftMappings] = useState<HeaderTemplateFieldMapping[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [drawerWidth, setDrawerWidth] = useState(defaultTemplateDrawerWidth);
+  const [fieldsWidth, setFieldsWidth] = useState(TEMPLATE_FIELDS_DEFAULT_WIDTH);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const drawerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const fieldsResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const drawerWidthRef = useRef(drawerWidth);
 
   const loadPage = useCallback(async (): Promise<void> => {
     if (!api) return;
@@ -139,6 +182,37 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
   }, [api]);
 
   useEffect(() => { void loadPage(); }, [loadPage]);
+  useEffect(() => {
+    const handleWindowResize = (): void => {
+      setViewportWidth(window.innerWidth);
+      setDrawerWidth((current) => clampTemplateDrawerWidth(current));
+    };
+    const handlePointerMove = (event: PointerEvent): void => {
+      const drawerResize = drawerResizeRef.current;
+      if (drawerResize) setDrawerWidth(clampTemplateDrawerWidth(drawerResize.startWidth + drawerResize.startX - event.clientX));
+      const fieldsResize = fieldsResizeRef.current;
+      if (fieldsResize) setFieldsWidth(clampTemplateFieldsWidth(fieldsResize.startWidth + fieldsResize.startX - event.clientX, drawerWidthRef.current));
+    };
+    const stopResize = (): void => {
+      drawerResizeRef.current = null;
+      fieldsResizeRef.current = null;
+    };
+    window.addEventListener("resize", handleWindowResize);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+    return () => {
+      window.removeEventListener("resize", handleWindowResize);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    drawerWidthRef.current = drawerWidth;
+    setFieldsWidth((current) => clampTemplateFieldsWidth(current, drawerWidth));
+  }, [drawerWidth]);
 
   const openDetail = useCallback(async (record: HeaderTemplateRecord): Promise<void> => {
     if (!api) return;
@@ -198,8 +272,10 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
     .map((group) => ({ group, fields: requiredFields.filter((field) => field.group === group) }))
     .filter((section) => section.fields.length > 0), [requiredFields]);
   const completedCount = requiredFields.filter((field) => mappingByField.has(field.key)).length;
-  const orderSheetNames = new Set(requiredFields.filter((field) => field.group === "订单字段").flatMap((field) => mappingByField.get(field.key)?.sheetName ?? []));
-  const pricingSheetNames = new Set(requiredFields.filter((field) => field.group === "核价字段").flatMap((field) => mappingByField.get(field.key)?.sheetName ?? []));
+  const orderFieldKeys = new Set(requiredFields.filter((field) => field.group === "订单字段").map((field) => field.key));
+  const pricingFieldKeys = new Set(requiredFields.filter((field) => field.group === "核价字段").map((field) => field.key));
+  const orderSheetNames = new Set(draftMappings.filter((mapping) => orderFieldKeys.has(mapping.fieldKey)).map((mapping) => mapping.sheetName));
+  const pricingSheetNames = new Set(draftMappings.filter((mapping) => pricingFieldKeys.has(mapping.fieldKey)).map((mapping) => mapping.sheetName));
   const mappingStructureValid = orderSheetNames.size === 1 && pricingSheetNames.size === 1 && Array.from(orderSheetNames)[0] !== Array.from(pricingSheetNames)[0];
   const mappingComplete = requiredFields.length > 0 && completedCount === requiredFields.length && mappingStructureValid;
 
@@ -238,9 +314,23 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
       column: activeSheet.startColumn + columnIndex + 1,
       header: header.trim(),
     };
-    setDraftMappings((current) => [...current.filter((mapping) => mapping.fieldKey !== field.key), next]);
+    const multiSelect = MULTI_SELECT_FIELD_KEYS.has(field.key);
+    setDraftMappings((current) => {
+      if (!multiSelect) return [...current.filter((mapping) => mapping.fieldKey !== field.key), next];
+      const duplicate = current.some((mapping) => mapping.fieldKey === field.key
+        && mapping.sheetName === next.sheetName
+        && mapping.headerRow === next.headerRow
+        && mapping.column === next.column);
+      return duplicate ? current : [...current, next];
+    });
+    if (multiSelect) return;
     const nextField = requiredFields.find((item) => item.key !== field.key && !draftMappings.some((mapping) => mapping.fieldKey === item.key));
     setActiveFieldKey(nextField?.key ?? null);
+  };
+
+  const removeMapping = (target: HeaderTemplateFieldMapping): void => {
+    setDraftMappings((current) => current.filter((mapping) => mapping !== target));
+    setActiveFieldKey(target.fieldKey);
   };
 
   const saveMappings = async (): Promise<void> => {
@@ -256,6 +346,35 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
     } finally {
       setSaving(false);
     }
+  };
+
+  const currentDrawerBounds = useMemo(() => templateDrawerBounds(viewportWidth), [viewportWidth]);
+  const currentFieldsBounds = useMemo(() => templateFieldsBounds(drawerWidth), [drawerWidth]);
+
+  const startDrawerResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    drawerResizeRef.current = { startX: event.clientX, startWidth: drawerWidth };
+  };
+
+  const startFieldsResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    fieldsResizeRef.current = { startX: event.clientX, startWidth: fieldsWidth };
+  };
+
+  const resizeDrawerWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    const delta = event.key === "ArrowLeft" ? TEMPLATE_DRAWER_KEYBOARD_STEP : event.key === "ArrowRight" ? -TEMPLATE_DRAWER_KEYBOARD_STEP : 0;
+    if (!delta) return;
+    event.preventDefault();
+    setDrawerWidth((current) => clampTemplateDrawerWidth(current + delta));
+  };
+
+  const resizeFieldsWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    const delta = event.key === "ArrowLeft" ? TEMPLATE_FIELDS_KEYBOARD_STEP : event.key === "ArrowRight" ? -TEMPLATE_FIELDS_KEYBOARD_STEP : 0;
+    if (!delta) return;
+    event.preventDefault();
+    setFieldsWidth((current) => clampTemplateFieldsWidth(current + delta, drawerWidth));
   };
 
   return (
@@ -277,9 +396,21 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
       </section>
 
       {detail ? <div className="template-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDetail(null); }}>
-        <aside className="template-detail" role="dialog" aria-modal="true" aria-labelledby="template-detail-title">
+        <aside className="template-detail" style={{ width: `${drawerWidth}px` }} role="dialog" aria-modal="true" aria-labelledby="template-detail-title">
+          <div
+            className="template-drawer-resizer"
+            role="separator"
+            aria-label="调整模板详情抽屉宽度"
+            aria-orientation="vertical"
+            aria-valuemin={currentDrawerBounds.min}
+            aria-valuemax={currentDrawerBounds.max}
+            aria-valuenow={drawerWidth}
+            tabIndex={0}
+            onPointerDown={startDrawerResize}
+            onKeyDown={resizeDrawerWithKeyboard}
+          ><i /></div>
           <header><div><span>模板详情</span><h2 id="template-detail-title">{detail.fileName}</h2></div><button type="button" aria-label="关闭模板详情" onClick={() => setDetail(null)}><X /></button></header>
-          <div className="template-detail-body">
+          <div className="template-detail-body" style={{ gridTemplateColumns: `minmax(${TEMPLATE_PREVIEW_MIN_WIDTH}px, 1fr) ${TEMPLATE_BODY_RESIZER_WIDTH}px ${fieldsWidth}px` }}>
             <section className="template-preview-card">
               <div className="template-sheet-tabs">{sheets.map((sheet) => <button type="button" className={sheet.name === activeSheetName ? "is-active" : undefined} key={sheet.name} onClick={() => setActiveSheetName(sheet.name)}>{sheet.name}</button>)}</div>
               <div className="template-grid-scroll">
@@ -295,16 +426,32 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
               </div>
             </section>
 
+            <div
+              className="template-fields-resizer"
+              role="separator"
+              aria-label="调整预览与必填字段宽度"
+              aria-orientation="vertical"
+              aria-valuemin={currentFieldsBounds.min}
+              aria-valuemax={currentFieldsBounds.max}
+              aria-valuenow={fieldsWidth}
+              tabIndex={0}
+              onPointerDown={startFieldsResize}
+              onKeyDown={resizeFieldsWithKeyboard}
+            ><i /></div>
             <section className="template-required-panel">
               <div className="template-required-heading"><div><span>必填字段</span><strong>{completedCount}/{requiredFields.length}</strong></div><p>{usingFallbackFields ? "配置 fields 为空，当前按订单与核价的最小完整映射校验。" : activeFieldKey ? "请在左侧表格中点击对应的表头单元格" : "必填字段已选择完成"}</p></div>
               <div className="template-field-list">{requiredFieldGroups.map((section) => <section className="template-field-group" key={section.group}>
                 <h3>{section.group}</h3>
                 {section.fields.map((field) => {
-                  const mapping = mappingByField.get(field.key);
+                  const fieldMappings = draftMappings.filter((mapping) => mapping.fieldKey === field.key);
+                  const mapping = fieldMappings[0];
+                  const multiSelect = MULTI_SELECT_FIELD_KEYS.has(field.key);
                   const active = activeFieldKey === field.key;
                   return <article className={`${active ? "is-active" : ""}${mapping ? " is-mapped" : ""}`} key={field.key}>
-                    <div><span>{mapping ? <Check /> : null}{field.label}</span><small>{mapping ? `${mapping.sheetName} · ${excelColumnLabel(mapping.column)}${mapping.headerRow} · ${mapping.header}` : "尚未选择"}</small></div>
-                    <button type="button" onClick={() => { setActiveFieldKey(field.key); if (mapping) setActiveSheetName(mapping.sheetName); }}>{mapping ? "重新选择" : "选取表头"}</button>
+                    <div><span>{mapping ? <Check /> : null}{field.label}</span>{multiSelect && fieldMappings.length > 0
+                      ? <div className="template-tier-mappings">{fieldMappings.map((item) => <span key={`${item.sheetName}-${item.headerRow}-${item.column}`}><small>{excelColumnLabel(item.column)}{item.headerRow} · {item.header}</small><button type="button" aria-label={`移除价格档位 ${item.header}`} onClick={() => removeMapping(item)}><X /></button></span>)}</div>
+                      : <small>{mapping ? `${mapping.sheetName} · ${excelColumnLabel(mapping.column)}${mapping.headerRow} · ${mapping.header}` : "尚未选择"}</small>}</div>
+                    <button type="button" onClick={() => { setActiveFieldKey(field.key); if (mapping) setActiveSheetName(mapping.sheetName); }}>{multiSelect ? mapping ? "继续选择" : "选择档位" : mapping ? "重新选择" : "选取表头"}</button>
                   </article>;
                 })}
               </section>)}</div>
