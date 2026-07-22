@@ -20,8 +20,7 @@ fn write_result_sheet(workbook: &mut Workbook, report: &PriceCheckReport) -> Res
     let worksheet = workbook.add_worksheet();
     worksheet.set_name("核价结果")?;
     let headers = [
-        "业务订单号",
-        "平台订单号",
+        "订单号",
         "国家二字码",
         "英文国家名",
         "中文国家名",
@@ -43,8 +42,8 @@ fn write_result_sheet(workbook: &mut Workbook, report: &PriceCheckReport) -> Res
         .set_bold()
         .set_background_color("#E89B82")
         .set_font_color("#FFFFFF");
+    worksheet.write_string_with_format(0, 5, headers[5], &sku_header_format)?;
     worksheet.write_string_with_format(0, 6, headers[6], &sku_header_format)?;
-    worksheet.write_string_with_format(0, 7, headers[7], &sku_header_format)?;
     for (row_index, row) in report.rows.iter().enumerate() {
         write_result_row(worksheet, row_index as u32 + 1, row)?;
     }
@@ -57,7 +56,6 @@ fn write_result_row(worksheet: &mut Worksheet, row: u32, value: &PriceCheckRow) 
     let sku_format = Format::new().set_background_color("#FBE5DD");
     let strings = [
         &value.business_order_number,
-        &value.platform_order_number,
         &value.country_code,
         &value.country_english_name,
         &value.country_chinese_name,
@@ -66,21 +64,21 @@ fn write_result_row(worksheet: &mut Worksheet, row: u32, value: &PriceCheckRow) 
         &value.matched_sku,
     ];
     for (column, text) in strings.iter().enumerate() {
-        if column == 6 || column == 7 {
+        if column == 5 || column == 6 {
             worksheet.write_string_with_format(row, column as u16, text.as_str(), &sku_format)?;
         } else {
             worksheet.write_string(row, column as u16, text.as_str())?;
         }
     }
-    worksheet.write_number(row, 8, value.total_quantity)?;
-    write_optional_number(worksheet, row, 9, value.original_price)?;
-    write_optional_number(worksheet, row, 10, value.pricing_price)?;
-    write_optional_number(worksheet, row, 11, value.price_difference)?;
-    worksheet.write_string(row, 12, &value.status)?;
-    worksheet.write_string(row, 13, &value.exception_reason)?;
-    worksheet.write_string(row, 14, &value.order_source_sheet)?;
-    worksheet.write_string(row, 15, &value.pricing_source_sheet)?;
-    worksheet.write_string(row, 16, &value.source_rows)?;
+    worksheet.write_number(row, 7, value.total_quantity)?;
+    write_optional_number(worksheet, row, 8, value.original_price)?;
+    write_optional_number(worksheet, row, 9, value.pricing_price)?;
+    write_optional_number(worksheet, row, 10, value.price_difference)?;
+    worksheet.write_string(row, 11, &value.status)?;
+    worksheet.write_string(row, 12, &value.exception_reason)?;
+    worksheet.write_string(row, 13, &value.order_source_sheet)?;
+    worksheet.write_string(row, 14, &value.pricing_source_sheet)?;
+    worksheet.write_string(row, 15, &value.source_rows)?;
     Ok(())
 }
 
@@ -119,12 +117,8 @@ fn write_mapping_sheet(workbook: &mut Workbook, report: &PriceCheckReport) -> Re
         ("订单 Sheet", mapping.order_sheet.clone()),
         ("订单表头行", mapping.order_header_row.to_string()),
         (
-            "业务订单号列",
+            "订单号列",
             optional_column(mapping.business_order_number_column),
-        ),
-        (
-            "平台订单号列",
-            optional_column(mapping.platform_order_number_column),
         ),
         ("国家二字码列", optional_column(mapping.country_code_column)),
         (
@@ -270,13 +264,13 @@ mod tests {
                     .expect("regex")
                     .is_match(&result_xml)
             };
-            assert!(styled("G1") && styled("H1") && styled("G2") && styled("H2"));
+            assert!(styled("F1") && styled("G1") && styled("F2") && styled("G2"));
 
             let mut mapping_xml = String::new();
             archive
                 .by_name("xl/worksheets/sheet3.xml")?
                 .read_to_string(&mut mapping_xml)?;
-            for cell in ["A14", "B14", "A18", "B18"] {
+            for cell in ["A13", "B13", "A17", "B17"] {
                 assert!(
                     Regex::new(&format!(r#"<c r="{cell}" s="\d+""#))
                         .expect("regex")

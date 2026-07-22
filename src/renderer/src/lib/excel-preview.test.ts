@@ -77,4 +77,21 @@ describe("findExcelPreviewMatches", () => {
   it("returns no matches for an empty query", () => {
     expect(findExcelPreviewMatches([["SKU"]], "   ")).toEqual([]);
   });
+
+  it("matches only rows containing every comma-separated condition", () => {
+    expect(findExcelPreviewMatches([
+      ["SKU", "Country", "Method"],
+      ["GOOD-1", "US", "Air"],
+      ["GOOD-1", "DE", "Air"],
+      ["OTHER", "US", "Air"],
+    ], " good-1， US, air ")).toEqual([{ rowIndex: 1, columnIndex: 0 }]);
+  });
+
+  it("matches any alternative inside a pipe-separated condition group", () => {
+    expect(findExcelPreviewMatches([
+      ["SKU", "Country"],
+      ["GOOD-1", "United States"],
+      ["GOOD-1", "Germany"],
+    ], "US | United States | 美国, GOOD-1")).toEqual([{ rowIndex: 1, columnIndex: 1 }]);
+  });
 });

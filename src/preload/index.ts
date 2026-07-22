@@ -71,7 +71,6 @@ export type PriceCheckMapping = {
   orderSheet: string;
   orderHeaderRow: number;
   businessOrderNumberColumn?: number | null;
-  platformOrderNumberColumn?: number | null;
   countryCodeColumn?: number | null;
   countryEnglishColumn?: number | null;
   countryChineseColumn?: number | null;
@@ -101,7 +100,6 @@ export type PriceAnalysisCandidate = {
   headerRow: number;
   score: number;
   businessOrderNumberColumn?: number | null;
-  platformOrderNumberColumn?: number | null;
   countryCodeColumn?: number | null;
   countryEnglishColumn?: number | null;
   countryChineseColumn?: number | null;
@@ -135,6 +133,9 @@ export type PriceAnalysisFile = {
     matchedRows: number;
     coverage: number;
     runnerUpCoverage?: number | null;
+    candidateScore?: number | null;
+    runnerUpScore?: number | null;
+    scoreKind?: "field" | "sheet" | null;
     scoreGap?: number | null;
   };
   issues: string[];

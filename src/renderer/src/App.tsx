@@ -149,7 +149,7 @@ const DETAIL_DRAWER_DEFAULT_RATIO = 0.9;
 const DETAIL_DRAWER_MIN_WIDTH = 760;
 const DETAIL_DRAWER_EDGE_GAP = 72;
 const DETAIL_DRAWER_KEYBOARD_STEP = 24;
-const DETAIL_SIDEBAR_DEFAULT_WIDTH = 320;
+const DETAIL_SIDEBAR_DEFAULT_WIDTH = 360;
 const DETAIL_SIDEBAR_MIN_WIDTH = 280;
 const DETAIL_SIDEBAR_MAX_WIDTH = 520;
 const DETAIL_SIDEBAR_KEYBOARD_STEP = 16;
@@ -219,12 +219,22 @@ function fileNameFromPath(path: string): string {
   return path.split(/[\\/]/).pop() || path;
 }
 
+function normalizeAlternativeOrderColumns(mapping: PriceCheckMapping): PriceCheckMapping {
+  const countryEnglishColumn = mapping.countryEnglishColumn === mapping.countryCodeColumn
+    ? null
+    : mapping.countryEnglishColumn;
+  const countryChineseColumn = mapping.countryChineseColumn === mapping.countryCodeColumn
+    || mapping.countryChineseColumn === countryEnglishColumn
+    ? null
+    : mapping.countryChineseColumn;
+  return { ...mapping, countryEnglishColumn, countryChineseColumn };
+}
+
 function buildMapping(order: PriceAnalysisCandidate, pricing: PriceAnalysisCandidate): PriceCheckMapping {
-  return {
+  return normalizeAlternativeOrderColumns({
     orderSheet: order.sheetName,
     orderHeaderRow: order.headerRow,
     businessOrderNumberColumn: order.businessOrderNumberColumn ?? null,
-    platformOrderNumberColumn: order.platformOrderNumberColumn ?? null,
     countryCodeColumn: order.countryCodeColumn ?? null,
     countryEnglishColumn: order.countryEnglishColumn ?? null,
     countryChineseColumn: order.countryChineseColumn ?? null,
@@ -238,7 +248,7 @@ function buildMapping(order: PriceAnalysisCandidate, pricing: PriceAnalysisCandi
     pricingCountryColumn: pricing.countryColumn ?? 1,
     pricingShippingMethodColumn: pricing.shippingMethodColumn ?? null,
     quantityTierColumns: pricing.tierColumns ?? [],
-  };
+  });
 }
 
 function formatCoverage(value: number | undefined): string {
@@ -265,14 +275,15 @@ function DecisionMappingText({ value }: { value: string }): React.JSX.Element {
   );
 }
 
-function DecisionReason({ reason }: { reason: string }): React.JSX.Element {
+function DecisionReason({ reason, bestScore, runnerUpScore, scoreKind }: { reason: string; bestScore?: number | null; runnerUpScore?: number | null; scoreKind?: "field" | "sheet" | null }): React.JSX.Element {
   const comparison = /^(.*?)(?:：|:)\s*最优\s*\[(.*?)\]\s*[；;]\s*次优\s*\[(.*?)\]\s*$/.exec(reason);
   if (!comparison) return <li className="decision-reason is-plain">{reason}</li>;
+  const score = (value: number | null | undefined): React.JSX.Element | null => value == null ? null : <small>{scoreKind === "sheet" ? "Sheet" : "字段"} {value.toFixed(1)} 分</small>;
   return (
     <li className="decision-reason is-comparison">
       <p>{comparison[1]}</p>
-      <div className="decision-candidate is-best"><b>最优</b><DecisionMappingText value={comparison[2]} /></div>
-      <div className="decision-candidate is-alternate"><b>次优</b><DecisionMappingText value={comparison[3]} /></div>
+      <div className="decision-candidate is-best"><span><b>最优</b>{score(bestScore)}</span><DecisionMappingText value={comparison[2]} /></div>
+      <div className="decision-candidate is-alternate"><span><b>次选</b>{score(runnerUpScore)}</span><DecisionMappingText value={comparison[3]} /></div>
     </li>
   );
 }
@@ -342,7 +353,7 @@ function IconAction({ icon: Icon, label, onClick, disabled = false, active = fal
 function mappingIsComplete(mapping: PriceCheckMapping | null | undefined): boolean {
   return Boolean(
     mapping &&
-    (mapping.businessOrderNumberColumn || mapping.platformOrderNumberColumn) &&
+    mapping.businessOrderNumberColumn &&
     (mapping.countryCodeColumn || mapping.countryEnglishColumn || mapping.countryChineseColumn) &&
     mapping.skuQtyPairs.length > 0 &&
     mapping.pricingSkuColumn > 0 &&
@@ -380,8 +391,7 @@ function mappingTargetLabel(target: MappingFieldTarget | null): string {
   if (!target) return "";
   const labels: Partial<Record<MappingFieldTarget, string>> = {
     orderHeaderRow: "订单表头行",
-    businessOrderNumberColumn: "业务订单号",
-    platformOrderNumberColumn: "平台订单号",
+    businessOrderNumberColumn: "订单号",
     countryCodeColumn: "国家二字码",
     countryEnglishColumn: "英文国家名",
     countryChineseColumn: "中文国家名",
@@ -411,7 +421,6 @@ function mappingColumnConflict(mapping: PriceCheckMapping, target: MappingFieldT
       ]
     : [
         ["businessOrderNumberColumn", mapping.businessOrderNumberColumn],
-        ["platformOrderNumberColumn", mapping.platformOrderNumberColumn],
         ["countryCodeColumn", mapping.countryCodeColumn],
         ["countryEnglishColumn", mapping.countryEnglishColumn],
         ["countryChineseColumn", mapping.countryChineseColumn],
@@ -598,6 +607,7 @@ export function App(): React.JSX.Element {
   const sendMappingValidation = useCallback((path: string, mapping: PriceCheckMapping, version: number): void => {
     if (mappingValidationInFlightRef.current) {
       pendingMappingValidationRef.current = { path, mapping, version };
+      setMappingValidations((current) => ({ ...current, [path]: { status: "validating", result: current[path]?.result ?? null } }));
       return;
     }
     const api = getDesktopAPI();
@@ -647,9 +657,10 @@ export function App(): React.JSX.Element {
         analysesRef.current = nextAnalyses;
         setAnalyses(nextAnalyses);
         if (analysis.suggestedMapping) {
+          const suggestedMapping = normalizeAlternativeOrderColumns(analysis.suggestedMapping as PriceCheckMapping);
           const nextMappings = {
             ...mappingsRef.current,
-            [analysis.inputPath]: analysis.suggestedMapping as PriceCheckMapping,
+            [analysis.inputPath]: suggestedMapping,
           };
           mappingsRef.current = nextMappings;
           setMappings(nextMappings);
@@ -674,7 +685,7 @@ export function App(): React.JSX.Element {
             ...current,
             [analysis.inputPath]: {
               ...current[analysis.inputPath],
-              [analysis.suggestedMapping!.orderSheet]: analysis.matchedOrderRows ?? [],
+              [suggestedMapping.orderSheet]: analysis.matchedOrderRows ?? [],
             },
           }));
         }
@@ -701,7 +712,7 @@ export function App(): React.JSX.Element {
         if (event.requestVersion === currentVersion) {
           setMappingValidations((current) => ({ ...current, [event.inputPath]: { status: "ready", result: event } }));
           const orderSheet = mappingsRef.current[event.inputPath]?.orderSheet;
-          if (orderSheet && event.matchedOrderRows) {
+          if (orderSheet && event.errors.length === 0 && event.matchedOrderRows) {
             setMatchedOrderRowsBySheet((current) => ({
               ...current,
               [event.inputPath]: { ...current[event.inputPath], [orderSheet]: event.matchedOrderRows ?? [] },
@@ -733,6 +744,9 @@ export function App(): React.JSX.Element {
           completedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
         };
         setResults((current) => ({ ...current, [event.path]: result }));
+        if (confirmedPathsRef.current.has(event.path)) {
+          setActiveTab(event.status === "completed" && (event.exceptionRows ?? 0) === 0 ? "success" : "error");
+        }
         appendLog(
           event.status === "completed"
             ? fileNameFromPath(event.path) +
@@ -874,7 +888,31 @@ export function App(): React.JSX.Element {
     return { imported: newPaths.length, duplicates: duplicateCount };
   }, [appendLog, batchStarted, files, setActiveTab]);
 
-  const addFiles = useCallback((incoming: File[]): void => {
+  const ensureOutputDirectory = useCallback(async (): Promise<string | null> => {
+    const api = getDesktopAPI();
+    if (!api) return null;
+    if (outputDir) return outputDir;
+    try {
+      const configuredOutputDir = (await api.getRuntimeConfig()).recent_output_dir?.trim() ?? "";
+      if (configuredOutputDir) {
+        setOutputDir(configuredOutputDir);
+        return configuredOutputDir;
+      }
+    } catch {
+      // 读取失败时仍允许用户重新选择并修复输出目录配置。
+    }
+    const selected = await api.selectDirectory("output", true);
+    if (!selected) {
+      appendLog("未选择输出文件夹，本次导入已取消", "warning");
+      toast.warning("请选择输出文件夹后再导入");
+      return null;
+    }
+    setOutputDir(selected);
+    appendLog("输出文件夹已保存：" + selected, "success");
+    return selected;
+  }, [appendLog, outputDir]);
+
+  const addFiles = useCallback(async (incoming: File[]): Promise<void> => {
     const api = getDesktopAPI();
     if (!api) return;
     if (incoming.length !== 1) {
@@ -900,8 +938,9 @@ export function App(): React.JSX.Element {
       toast.warning("无法读取文件路径，请双击选择文件重试");
       return;
     }
+    if (!await ensureOutputDirectory()) return;
     registerPaths(paths, "file");
-  }, [appendLog, registerPaths]);
+  }, [appendLog, ensureOutputDirectory, registerPaths]);
 
   const chooseInputFile = useCallback(async (): Promise<void> => {
     const api = getDesktopAPI();
@@ -942,6 +981,7 @@ export function App(): React.JSX.Element {
       try {
         const directoryPath = api.getPathForFile(incoming[0]);
         if (!directoryPath) throw new Error("无法读取文件夹路径");
+        if (!await ensureOutputDirectory()) return;
         await scanInputDirectory(directoryPath);
         return;
       } catch (error) {
@@ -968,10 +1008,11 @@ export function App(): React.JSX.Element {
       toast.warning("拖入的文件夹中没有支持的 Excel 文件");
       return;
     }
+    if (!await ensureOutputDirectory()) return;
     registerPaths(paths, "folder");
     const skipped = incoming.length - paths.length;
     if (skipped > 0) toast.info(`文件夹导入完成，已跳过 ${skipped} 个非 Excel 文件`);
-  }, [appendLog, registerPaths, scanInputDirectory]);
+  }, [appendLog, ensureOutputDirectory, registerPaths, scanInputDirectory]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: importSourceMode === "file" ? {
@@ -994,7 +1035,7 @@ export function App(): React.JSX.Element {
         toast.warning(message);
         return;
       }
-      if (importSourceMode === "file") addFiles(acceptedFiles);
+      if (importSourceMode === "file") void addFiles(acceptedFiles);
       else void addFolder(acceptedFiles);
     },
   });
@@ -1064,12 +1105,17 @@ export function App(): React.JSX.Element {
       appendLog("仍有文件没有可执行字段映射，请先分析并确认", "warning");
       return;
     }
-    const effectiveOutputDir = outputDir || await api.getDefaultPriceOutputDir();
+    const effectiveOutputDir = await ensureOutputDirectory();
+    if (!effectiveOutputDir) return;
     setBatchStarted(true);
     setIsAnalyzing(false);
     setIsRunning(true);
     setIsPaused(false);
-    setResults({});
+    setResults((current) => {
+      const next = { ...current };
+      for (const path of runnableFiles) delete next[path];
+      return next;
+    });
     setExpandedPath(null);
     setActivePath("");
     setProgress({ current: 0, total: runnableFiles.length, phase: "run", path: "" });
@@ -1850,7 +1896,7 @@ export function App(): React.JSX.Element {
                   onKeyDown={resizeDetailSidebarWithKeyboard}
                 ><i /></div>
                 <div className="issue-detail-column">
-                  <section><h3>自动化判定</h3>{detailAnalysis ? <><div className={"decision-card is-" + detailAnalysis.automationDecision.status}><strong>{detailAnalysis.automationDecision.status === "eligible" ? "可自动处理" : detailAnalysis.automationDecision.status === "confirm" ? "需要人工确认" : "分析异常"}</strong><span>试算 {detailAnalysis.automationDecision.matchedRows}/{detailAnalysis.automationDecision.evaluatedRows} 行 · {formatCoverage(detailAnalysis.automationDecision.coverage)}</span></div><ul className="decision-reasons">{detailAnalysis.automationDecision.reasons.map((reason) => <DecisionReason reason={reason} key={reason} />)}</ul></> : <p>文件尚未分析。</p>}</section>
+                  <section><h3>自动化判定</h3>{detailAnalysis ? <><div className={"decision-card is-" + detailAnalysis.automationDecision.status}><strong>{detailAnalysis.automationDecision.status === "eligible" ? "可自动处理" : detailAnalysis.automationDecision.status === "confirm" ? "需要人工确认" : "分析异常"}</strong><span>试算 {detailAnalysis.automationDecision.matchedRows}/{detailAnalysis.automationDecision.evaluatedRows} 行 · {formatCoverage(detailAnalysis.automationDecision.coverage)}</span></div><ul className="decision-reasons">{detailAnalysis.automationDecision.reasons.map((reason) => <DecisionReason reason={reason} bestScore={detailAnalysis.automationDecision.candidateScore} runnerUpScore={detailAnalysis.automationDecision.runnerUpScore} scoreKind={detailAnalysis.automationDecision.scoreKind} key={reason} />)}</ul></> : <p>文件尚未分析。</p>}</section>
                   {detailAnalysis && detailMapping ? <MappingEditor analysis={detailAnalysis} mapping={detailMapping} workbook={detailPreviewWorkbook} activeSheetName={detailPreviewSheetName} activeTarget={activeMappingTarget} validation={detailValidation} onActiveTargetChange={selectMappingTarget} onMappingChange={(mapping) => commitMapping(detailPath, mapping)} onColumnChange={(target, column, header) => changeMappingColumn(target, column, header)} onSheetChange={(orderSheet, pricingSheet, previewSheet) => { updateMapping(detailPath, orderSheet, pricingSheet); setDetailPreviewSheetName(previewSheet); }} onPreviewSheetChange={setDetailPreviewSheetName} onRevalidate={() => revalidateMapping(detailPath)} onConfirm={() => void confirmAndContinue(detailPath)} /> : null}
                   {detailResult ? <section><h3>处理结果</h3><div className="result-summary"><span>总行数<strong>{detailResult.totalRows ?? 0}</strong></span><span>已匹配<strong>{detailResult.matchedRows ?? 0}</strong></span><span>异常行<strong>{detailResult.exceptionRows ?? 0}</strong></span></div>{detailResult.message ? <p>{detailResult.message}</p> : null}{detailResult.outputPath ? <Button variant="outline" onClick={() => void getDesktopAPI()?.openPath(detailResult.outputPath ?? "")}>打开结果文件</Button> : null}</section> : null}
                   {detailPath && fileStatusByPath[detailPath] && tabForStatus(fileStatusByPath[detailPath]) === "error" ? <section><h3>异常处理</h3><p>调整源文件或配置后，可以重新分析当前文件。</p><Button type="button" variant="outline" onClick={() => void retryAnalysis(detailPath)}><RefreshCw />重新分析此文件</Button></section> : null}
@@ -2247,7 +2293,7 @@ export function App(): React.JSX.Element {
                                 <label>订单 Sheet<select value={currentMapping?.orderSheet ?? ""} onChange={(event) => updateMapping(path, event.currentTarget.value, currentMapping?.pricingSheet ?? "")}>{analysis.orderSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.validOrderRows ?? 0} 行</option>)}</select></label>
                                 <label>核价 Sheet<select value={currentMapping?.pricingSheet ?? ""} onChange={(event) => updateMapping(path, currentMapping?.orderSheet ?? "", event.currentTarget.value)}>{analysis.pricingSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.validPriceRows ?? 0} 行</option>)}</select></label>
                               </div>
-                              {currentMapping ? <div className="mapping-line"><span>表头：订单第 {currentMapping.orderHeaderRow} 行 / 核价第 {currentMapping.pricingHeaderRow} 行</span><span>订单号：{columnLabel(currentMapping.businessOrderNumberColumn ?? currentMapping.platformOrderNumberColumn)}</span><span>国家：{columnLabel(currentMapping.countryCodeColumn)} + {columnLabel(currentMapping.countryEnglishColumn)} + {columnLabel(currentMapping.countryChineseColumn)}</span><span>SKU/数量：{currentMapping.skuQtyPairs.map((pair) => pair.skuColumn + "/" + pair.qtyColumn).join("、") || "未识别"}</span><span>数量档位：{currentMapping.quantityTierColumns.map((tier) => tier.quantity).join("、") || "未识别"}</span></div> : null}
+                              {currentMapping ? <div className="mapping-line"><span>表头：订单第 {currentMapping.orderHeaderRow} 行 / 核价第 {currentMapping.pricingHeaderRow} 行</span><span>订单号：{columnLabel(currentMapping.businessOrderNumberColumn)}</span><span>国家：{columnLabel(currentMapping.countryCodeColumn)} + {columnLabel(currentMapping.countryEnglishColumn)} + {columnLabel(currentMapping.countryChineseColumn)}</span><span>SKU/数量：{currentMapping.skuQtyPairs.map((pair) => pair.skuColumn + "/" + pair.qtyColumn).join("、") || "未识别"}</span><span>数量档位：{currentMapping.quantityTierColumns.map((tier) => tier.quantity).join("、") || "未识别"}</span></div> : null}
                               {analysis.issues.length > 0 ? <ul className="detail-issues">{analysis.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}
                             </>
                           ) : <div className="detail-empty">尚未分析此文件</div>}

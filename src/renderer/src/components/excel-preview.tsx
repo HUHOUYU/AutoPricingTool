@@ -78,7 +78,7 @@ function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetN
   if (sheetName === mapping.orderSheet) {
     if (mapping.skuQtyPairs.some((pair) => pair.skuColumn === column || pair.qtyColumn === column)) return " is-sku-qty-column";
     if (mapping.orderPriceColumn === column) return " is-price-column";
-    if ([mapping.businessOrderNumberColumn, mapping.platformOrderNumberColumn, mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn, mapping.shippingMethodColumn].includes(column)) return " is-mapped-column";
+    if ([mapping.businessOrderNumberColumn, mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn, mapping.shippingMethodColumn].includes(column)) return " is-mapped-column";
   }
   if (sheetName === mapping.pricingSheet) {
     if (mapping.pricingSkuColumn === column) return " is-sku-column";
@@ -129,6 +129,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchMatchIndex, setActiveSearchMatchIndex] = useState(0);
+  const [searchPreferredColumns, setSearchPreferredColumns] = useState<number[]>([]);
   const [loadAll, setLoadAll] = useState(false);
 
   useEffect(() => {
@@ -137,6 +138,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     setResizingColumn(null);
     setSearchOpen(false);
     setSearchQuery("");
+    setSearchPreferredColumns([]);
     setLoadAll(false);
   }, [filePath]);
 
@@ -208,13 +210,22 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const activeSheet = useMemo<ExcelPreviewSheet | null>(() => (
     workbook?.sheets.find((sheet) => sheet.name === activeSheetName) ?? null
   ), [activeSheetName, workbook]);
-  const searchMatches = useMemo<ExcelPreviewSearchMatch[]>(
-    () => findExcelPreviewMatches(activeSheet?.rows ?? [], searchQuery),
-    [activeSheet, searchQuery],
-  );
+  const searchMatches = useMemo<ExcelPreviewSearchMatch[]>(() => {
+    const matches = findExcelPreviewMatches(activeSheet?.rows ?? [], searchQuery);
+    if (!activeSheet || activeSheet.name !== mapping?.pricingSheet || searchPreferredColumns.length === 0) return matches;
+    const preferredColumnIndexes = searchPreferredColumns
+      .map((column) => column - activeSheet.startColumn - 1)
+      .filter((columnIndex) => columnIndex >= 0 && columnIndex < activeSheet.displayedColumnCount);
+    return matches.map((match) => {
+      const row = activeSheet.rows[match.rowIndex] ?? [];
+      const columnIndex = preferredColumnIndexes.find((index) => row[index]?.trim());
+      return columnIndex === undefined ? match : { ...match, columnIndex };
+    });
+  }, [activeSheet, mapping?.pricingSheet, searchPreferredColumns, searchQuery]);
   const activeSearchMatch = searchMatches.length > 0
     ? searchMatches[activeSearchMatchIndex % searchMatches.length]
     : null;
+  const searchMatchedRowSet = useMemo(() => new Set(searchMatches.map((match) => match.rowIndex)), [searchMatches]);
   const shouldVirtualizeRows = (activeSheet?.rows.length ?? 0) > 100;
   const rowVirtualizer = useVirtualizer({
     count: shouldVirtualizeRows ? activeSheet?.rows.length ?? 0 : 0,
@@ -236,14 +247,22 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
 
   useEffect(() => {
     const handleFindShortcut = (event: KeyboardEvent): void => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "f" && activeSheet) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "f") {
+        if (!searchOpen && !activeSheet) return;
         event.preventDefault();
-        setSearchOpen(true);
-        requestAnimationFrame(() => searchInputRef.current?.focus());
+        if (searchOpen) {
+          setSearchOpen(false);
+          setSearchQuery("");
+          setSearchPreferredColumns([]);
+        } else {
+          setSearchOpen(true);
+          requestAnimationFrame(() => searchInputRef.current?.focus());
+        }
       } else if (event.key === "Escape" && searchOpen) {
         event.preventDefault();
         setSearchOpen(false);
         setSearchQuery("");
+        setSearchPreferredColumns([]);
       }
     };
     document.addEventListener("keydown", handleFindShortcut);
@@ -298,6 +317,36 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const closeSearch = (): void => {
     setSearchOpen(false);
     setSearchQuery("");
+    setSearchPreferredColumns([]);
+  };
+
+  const searchPricingForOrderRow = (row: string[], absoluteRow: number): void => {
+    if (!mapping || !activeSheet || activeSheet.name !== mapping.orderSheet || absoluteRow <= mapping.orderHeaderRow) return;
+    const valueAt = (absoluteColumn: number | null | undefined): string => {
+      if (!absoluteColumn) return "";
+      return row[absoluteColumn - activeSheet.startColumn - 1]?.trim() ?? "";
+    };
+    const countries = Array.from(new Set([mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn]
+      .map(valueAt)
+      .filter(Boolean)));
+    const skuQuantity = mapping.skuQtyPairs
+      .map((pair) => ({ sku: valueAt(pair.skuColumn), quantity: valueAt(pair.qtyColumn) }))
+      .find((item) => item.sku);
+    const sku = skuQuantity?.sku ?? "";
+    const quantity = Number(skuQuantity?.quantity.replaceAll(",", "") ?? Number.NaN);
+    const priceColumn = Number.isInteger(quantity)
+      ? mapping.quantityTierColumns.find((tier) => tier.quantity === quantity)?.column
+      : undefined;
+    const termGroups = [sku, countries.join(" | ")].filter(Boolean);
+    if (termGroups.length === 0) return;
+    setSearchQuery(termGroups.join(", "));
+    setSearchPreferredColumns([priceColumn, mapping.pricingSkuColumn, mapping.pricingCountryColumn]
+      .filter((column): column is number => typeof column === "number" && column > 0));
+    setSearchOpen(true);
+    setActiveSearchMatchIndex(0);
+    if (!loadAll) setLoadAll(true);
+    onActiveSheetChange(mapping.pricingSheet);
+    requestAnimationFrame(() => searchInputRef.current?.focus());
   };
 
   const resizeColumn = (columnIndex: number, width: number): void => {
@@ -384,9 +433,12 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                 ref={searchInputRef}
                 type="search"
                 aria-label="搜索表格数据"
-                placeholder="搜索当前 Sheet"
+                placeholder="逗号=且，竖线=或"
                 value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
+                onChange={(event) => {
+                  setSearchPreferredColumns([]);
+                  setSearchQuery(event.target.value);
+                }}
                 onKeyDown={(event) => {
                   const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : event.key === "Enter" ? event.shiftKey ? -1 : 1 : null;
                   if (direction === null) return;
@@ -455,7 +507,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                   </span>
                 ))}
               </div>
-              {frozenHeaderRow ? <div className="excel-preview-row excel-preview-frozen-header" style={gridStyle} aria-label={`冻结表头，第 ${activeHeaderRow} 行`}>
+              {frozenHeaderRow ? <div className={`excel-preview-row excel-preview-frozen-header${searchMatchedRowSet.has(frozenHeaderIndex) ? " is-search-matched-row" : ""}`} style={gridStyle} aria-label={`冻结表头，第 ${activeHeaderRow} 行`}>
                 <span className="excel-preview-row-number is-header-row" onClick={() => onRowSelect?.(activeHeaderRow ?? 1)}>{activeHeaderRow}</span>
                 {orderedColumnIndexes.map((columnIndex) => {
                   const cell = frozenHeaderRow[columnIndex] ?? "";
@@ -475,15 +527,18 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                   const row = activeSheet.rows[virtualRow.index] ?? [];
                   const absoluteRow = activeSheet.startRow + virtualRow.index + 1;
                   const isMatchedOrderRow = activeSheet.name === mapping?.orderSheet && matchedOrderRowSet.has(absoluteRow);
+                  const isSearchMatchedRow = searchMatchedRowSet.has(virtualRow.index);
                   return (
                     <div
-                      className="excel-preview-row"
+                      className={`excel-preview-row${isSearchMatchedRow ? " is-search-matched-row" : ""}`}
                       style={{ ...gridStyle, height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
                       key={virtualRow.key}
                     >
                       <span
                         className={`excel-preview-row-number${activeHeaderRow === absoluteRow ? " is-header-row" : ""}${isMatchedOrderRow ? " is-matched-row" : ""}`}
                         onClick={() => onRowSelect?.(absoluteRow)}
+                        onDoubleClick={() => searchPricingForOrderRow(row, absoluteRow)}
+                        title={activeSheet.name === mapping?.orderSheet && absoluteRow > mapping.orderHeaderRow ? "双击在核价 Sheet 中联合查询" : undefined}
                       >{absoluteRow}</span>
                       {orderedColumnIndexes.map((columnIndex) => {
                         const cell = row[columnIndex] ?? "";

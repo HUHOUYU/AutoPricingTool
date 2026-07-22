@@ -3428,12 +3428,14 @@ html:not(.dark) .cyber-log-drawer {
 .decision-reason.is-plain { border-left: 2px solid var(--cyber-border); padding: 3px 0 3px 8px; color: var(--cyber-muted); line-height: 1.55; }
 .decision-reason.is-comparison { display: grid; box-sizing: border-box; width: 100%; gap: 6px; border: 1px solid var(--cyber-border-soft); border-radius: 9px; padding: 8px; background: var(--cyber-panel); }
 .decision-reason.is-comparison > p { margin: 0; color: var(--cyber-muted); font-size: 9px; line-height: 1.4; }
-.decision-candidate { display: grid; min-width: 0; grid-template-columns: 36px minmax(0, 1fr); align-items: start; gap: 7px; border-radius: 7px; padding: 6px 7px; }
-.decision-candidate > b { display: grid; min-height: 20px; place-items: center; border-radius: 6px; font-size: 9px; line-height: 20px; }
+.decision-candidate { display: grid; min-width: 0; grid-template-columns: 48px minmax(0, 1fr); align-items: start; gap: 7px; border-radius: 7px; padding: 6px 7px; }
+.decision-candidate > span:first-child { display: grid; gap: 3px; }
+.decision-candidate > span:first-child > b { display: grid; min-height: 20px; place-items: center; border-radius: 6px; font-size: 9px; line-height: 20px; }
+.decision-candidate > span:first-child > small { color: var(--cyber-muted); font-family: var(--font-code); font-size: 8px; text-align: center; white-space: nowrap; }
 .decision-candidate.is-best { background: color-mix(in srgb, var(--success) 8%, var(--cyber-panel)); }
-.decision-candidate.is-best > b { color: color-mix(in srgb, var(--success) 82%, var(--cyber-text)); background: color-mix(in srgb, var(--success) 16%, transparent); }
+.decision-candidate.is-best > span:first-child > b { color: color-mix(in srgb, var(--success) 82%, var(--cyber-text)); background: color-mix(in srgb, var(--success) 16%, transparent); }
 .decision-candidate.is-alternate { background: color-mix(in srgb, var(--cyber-amber) 8%, var(--cyber-panel)); }
-.decision-candidate.is-alternate > b { color: color-mix(in srgb, var(--cyber-amber) 86%, var(--cyber-text)); background: color-mix(in srgb, var(--cyber-amber) 16%, transparent); }
+.decision-candidate.is-alternate > span:first-child > b { color: color-mix(in srgb, var(--cyber-amber) 86%, var(--cyber-text)); background: color-mix(in srgb, var(--cyber-amber) 16%, transparent); }
 .decision-reason-value { min-width: 0; color: var(--cyber-muted); font-family: var(--font-code); font-size: 9px; line-height: 20px; }
 .decision-reason-value.is-paired { display: grid; width: 100%; gap: 4px; }
 .decision-reason-value.is-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
@@ -3628,7 +3630,9 @@ html:not(.dark) .cyber-log-drawer {
 .excel-preview-row .excel-preview-row-number { cursor: pointer; }
 .excel-preview-row .excel-preview-row-number.is-matched-row:not(.is-header-row) { color: color-mix(in srgb, var(--success) 82%, var(--cyber-text)); background: color-mix(in srgb, var(--success) 18%, var(--cyber-panel)); font-weight: 700; }
 .excel-preview-row .excel-preview-row-number.is-header-row { color: #ffffff; background: var(--cyber-primary); font-weight: 800; }
-.excel-preview-row > span.is-search-match { position: relative; z-index: 4; color: var(--cyber-text); background: color-mix(in srgb, var(--cyber-amber) 32%, var(--cyber-panel)); box-shadow: inset 0 0 0 2px var(--cyber-amber); }
+.excel-preview-row.is-search-matched-row > span { color: var(--cyber-text); background: color-mix(in srgb, var(--cyber-status-info) 10%, var(--cyber-panel)); }
+.excel-preview-row.is-search-matched-row > .excel-preview-row-number { color: var(--cyber-status-info); background: color-mix(in srgb, var(--cyber-status-info) 18%, var(--cyber-panel)); font-weight: 800; }
+.excel-preview-row > span.is-search-match { position: relative; z-index: 4; color: var(--cyber-text); background: color-mix(in srgb, var(--cyber-amber) 22%, var(--cyber-panel)); box-shadow: inset 0 0 0 2px var(--cyber-amber); }
 
 .excel-preview-panel > footer {
   display: flex;

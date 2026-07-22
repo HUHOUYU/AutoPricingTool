@@ -31,8 +31,6 @@ const ORDER_ID_ALIASES: &[&str] = &[
     "order",
     "name",
     "订单",
-];
-const PLATFORM_ORDER_ALIASES: &[&str] = &[
     "平台订单号",
     "平台单号",
     "子订单号",
@@ -118,7 +116,7 @@ const PRICE_ALIASES: &[&str] = &[
 ];
 const FIXED_PRICE_ALIASES: &[&str] = &["productshippingvattax", "shippingvattax"];
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SkuQtyPair {
     pub(crate) sku_column: usize,
@@ -134,7 +132,6 @@ pub(crate) struct OrderSheetCandidate {
     pub(crate) header_row: usize,
     pub(crate) score: f64,
     pub(crate) business_order_number_column: Option<usize>,
-    pub(crate) platform_order_number_column: Option<usize>,
     pub(crate) country_code_column: Option<usize>,
     pub(crate) country_english_column: Option<usize>,
     pub(crate) country_chinese_column: Option<usize>,
@@ -146,7 +143,7 @@ pub(crate) struct OrderSheetCandidate {
     pub(crate) notes: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PriceTierColumn {
     pub(crate) quantity: i64,
@@ -170,13 +167,12 @@ pub(crate) struct PricingSheetCandidate {
     pub(crate) notes: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PriceCheckMapping {
     pub(crate) order_sheet: String,
     pub(crate) order_header_row: usize,
     pub(crate) business_order_number_column: Option<usize>,
-    pub(crate) platform_order_number_column: Option<usize>,
     pub(crate) country_code_column: Option<usize>,
     pub(crate) country_english_column: Option<usize>,
     pub(crate) country_chinese_column: Option<usize>,
@@ -232,6 +228,9 @@ pub(crate) struct AutomationDecision {
     pub(crate) matched_rows: usize,
     pub(crate) coverage: f64,
     pub(crate) runner_up_coverage: Option<f64>,
+    pub(crate) candidate_score: Option<f64>,
+    pub(crate) runner_up_score: Option<f64>,
+    pub(crate) score_kind: Option<String>,
     pub(crate) score_gap: Option<f64>,
 }
 
@@ -249,7 +248,6 @@ pub(crate) struct PriceCheckException {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PriceCheckRow {
     pub(crate) business_order_number: String,
-    pub(crate) platform_order_number: String,
     pub(crate) country_code: String,
     pub(crate) country_english_name: String,
     pub(crate) country_chinese_name: String,
@@ -294,7 +292,6 @@ struct CountryInfo {
 #[derive(Debug, Clone)]
 struct OrderLine {
     business_order_number: String,
-    platform_order_number: String,
     country: CountryInfo,
     shipping_method: String,
     original_sku: String,
@@ -308,7 +305,6 @@ struct OrderLine {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AggregatedOrderSku {
     pub(crate) business_order_number: String,
-    pub(crate) platform_order_number: String,
     pub(crate) country_code: String,
     pub(crate) country_english_name: String,
     pub(crate) country_chinese_name: String,
@@ -353,6 +349,17 @@ struct MappingValidationResult {
     coverage: f64,
     matched_order_rows: Vec<usize>,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MappingCandidateEvaluation {
+    coverage: f64,
+    sheet_score: f64,
+    field_score: f64,
+    total: usize,
+    matched: usize,
+    mapping: PriceCheckMapping,
+    matched_rows: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -603,7 +610,6 @@ fn validate_price_mapping(
         .unwrap_or_default();
     let order_mapped_columns = [
         mapping.business_order_number_column,
-        mapping.platform_order_number_column,
         mapping.country_code_column,
         mapping.country_english_column,
         mapping.country_chinese_column,
@@ -808,6 +814,9 @@ fn analyze_path_with_templates(
     let mut matched_rows = 0;
     let mut matched_order_rows = Vec::new();
     let mut runner_up_coverage = None;
+    let mut candidate_score = None;
+    let mut runner_up_score = None;
+    let mut automation_score_kind = None;
     let mut score_gap = None;
     let mut ambiguity_reason = None;
     let template_match = config
@@ -866,62 +875,89 @@ fn analyze_path_with_templates(
                         let total = lines.len();
                         let (matched, matched_rows) = evaluate_matches(&index, &lines);
                         let pair_coverage = ratio(matched, total);
-                        combinations.push((
-                            pair_coverage,
-                            order.score + pricing.score,
+                        combinations.push(MappingCandidateEvaluation {
+                            coverage: pair_coverage,
+                            sheet_score: order.score + pricing.score,
+                            field_score: sku_qty_field_score(order_sheet, &mapping, config),
                             total,
                             matched,
                             mapping,
                             matched_rows,
-                        ));
+                        });
                     }
                 }
             }
         }
         combinations.sort_by(|left, right| {
             right
-                .0
-                .total_cmp(&left.0)
-                .then_with(|| right.1.total_cmp(&left.1))
+                .coverage
+                .total_cmp(&left.coverage)
+                .then_with(|| right.sheet_score.total_cmp(&left.sheet_score))
+                .then_with(|| right.field_score.total_cmp(&left.field_score))
+                .then_with(|| right.total.cmp(&left.total))
+                .then_with(|| {
+                    left.mapping
+                        .sku_qty_pairs
+                        .len()
+                        .cmp(&right.mapping.sku_qty_pairs.len())
+                })
         });
         if combinations
             .iter()
-            .any(|item| item.4.order_sheet != item.4.pricing_sheet)
+            .any(|item| item.mapping.order_sheet != item.mapping.pricing_sheet)
         {
-            combinations.retain(|item| item.4.order_sheet != item.4.pricing_sheet);
+            combinations.retain(|item| item.mapping.order_sheet != item.mapping.pricing_sheet);
         }
-        if let Some((best_coverage, best_score, total, matched, best_mapping, best_matched_rows)) =
-            combinations.first().cloned()
-        {
-            coverage = best_coverage;
-            evaluated_rows = total;
-            matched_rows = matched;
-            matched_order_rows = best_matched_rows;
-            if let Some(runner_up) = combinations.get(1) {
-                runner_up_coverage = Some(runner_up.0);
-                score_gap = Some((best_score - runner_up.1).max(0.0));
+        if let Some(best) = combinations.first().cloned() {
+            coverage = best.coverage;
+            evaluated_rows = best.total;
+            matched_rows = best.matched;
+            matched_order_rows = best.matched_rows.clone();
+            if let Some(runner_up) = combinations
+                .iter()
+                .skip(1)
+                .find(|candidate| !mapping_is_nested_variant(&best.mapping, &candidate.mapping))
+            {
+                runner_up_coverage = Some(runner_up.coverage);
+                let same_sheet_pair = best.mapping.order_sheet == runner_up.mapping.order_sheet
+                    && best.mapping.pricing_sheet == runner_up.mapping.pricing_sheet;
+                let best_comparison_score = if same_sheet_pair {
+                    best.field_score
+                } else {
+                    best.sheet_score
+                };
+                let runner_up_comparison_score = if same_sheet_pair {
+                    runner_up.field_score
+                } else {
+                    runner_up.sheet_score
+                };
+                let comparison_score_kind = if same_sheet_pair { "field" } else { "sheet" };
+                score_gap = Some((best_comparison_score - runner_up_comparison_score).max(0.0));
                 if let Some(kind) = classify_candidate_ambiguity(
-                    &best_mapping,
-                    &runner_up.4,
-                    best_coverage - runner_up.0,
-                    best_score - runner_up.1,
+                    &best.mapping,
+                    &runner_up.mapping,
+                    best.coverage - runner_up.coverage,
+                    best_comparison_score - runner_up_comparison_score,
                     config,
                 ) {
+                    candidate_score = Some(best_comparison_score);
+                    runner_up_score = Some(runner_up_comparison_score);
+                    automation_score_kind = Some(comparison_score_kind.to_string());
                     ambiguity_reason = Some(candidate_ambiguity_reason(
                         kind,
-                        &best_mapping,
-                        &runner_up.4,
+                        &best.mapping,
+                        &runner_up.mapping,
                     ));
                 }
             }
-            suggested_mapping = Some(best_mapping);
+            suggested_mapping = Some(best.mapping);
             if let Some(reason) = ambiguity_reason.as_ref() {
                 issues.push(format!("{reason}，需要确认"));
             }
         }
     }
 
-    let automation_decision = decide_automation(
+    let mut automation_decision = decide_automation(
         config,
         suggested_mapping.as_ref(),
         !order_candidates.is_empty(),
@@ -933,6 +969,9 @@ fn analyze_path_with_templates(
         score_gap,
         ambiguity_reason.as_deref(),
     );
+    automation_decision.candidate_score = candidate_score;
+    automation_decision.runner_up_score = runner_up_score;
+    automation_decision.score_kind = automation_score_kind;
     let requires_confirmation = automation_decision.status != "eligible";
     if suggested_mapping
         .as_ref()
@@ -962,6 +1001,22 @@ fn analyze_path_with_templates(
         automation_decision,
         issues,
     })
+}
+
+fn mapping_is_nested_variant(
+    left_mapping: &PriceCheckMapping,
+    right_mapping: &PriceCheckMapping,
+) -> bool {
+    let mut left_base = left_mapping.clone();
+    let mut right_base = right_mapping.clone();
+    left_base.sku_qty_pairs.clear();
+    right_base.sku_qty_pairs.clear();
+    if left_base != right_base {
+        return false;
+    }
+    let left_pairs = left_mapping.sku_qty_pairs.iter().collect::<HashSet<_>>();
+    let right_pairs = right_mapping.sku_qty_pairs.iter().collect::<HashSet<_>>();
+    left_pairs.is_subset(&right_pairs) || right_pairs.is_subset(&left_pairs)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1021,6 +1076,9 @@ fn decide_automation(
         matched_rows,
         coverage,
         runner_up_coverage,
+        candidate_score: None,
+        runner_up_score: None,
+        score_kind: None,
         score_gap,
     }
 }
@@ -1104,8 +1162,7 @@ fn excel_column_label(mut column: usize) -> String {
 }
 
 fn mapping_is_complete(mapping: &PriceCheckMapping) -> bool {
-    (mapping.business_order_number_column.is_some()
-        || mapping.platform_order_number_column.is_some())
+    mapping.business_order_number_column.is_some()
         && (mapping.country_code_column.is_some()
             || mapping.country_english_column.is_some()
             || mapping.country_chinese_column.is_some())
@@ -1123,7 +1180,6 @@ fn mapping_from_candidates(
         order_sheet: order.sheet_name.clone(),
         order_header_row: order.header_row,
         business_order_number_column: order.business_order_number_column,
-        platform_order_number_column: order.platform_order_number_column,
         country_code_column: order.country_code_column,
         country_english_column: order.country_english_column,
         country_chinese_column: order.country_chinese_column,
@@ -1157,6 +1213,181 @@ fn mapping_variants(
     variants
 }
 
+fn sku_qty_field_score(
+    order_sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    config: &Config,
+) -> f64 {
+    let Some(header) = order_sheet
+        .rows
+        .get(mapping.order_header_row.saturating_sub(1))
+    else {
+        return 0.0;
+    };
+    let data_start = mapping.order_header_row;
+    let pair_scores = mapping
+        .sku_qty_pairs
+        .iter()
+        .map(|pair| {
+            let sku_column = pair.sku_column.saturating_sub(1);
+            let qty_column = pair.qty_column.saturating_sub(1);
+            let sku_header = header
+                .get(sku_column)
+                .map(CellValue::text)
+                .unwrap_or_default();
+            let qty_header = header
+                .get(qty_column)
+                .map(CellValue::text)
+                .unwrap_or_default();
+            let sku_rule = order_field_rule(config, "sku");
+            let product_rule = order_field_rule(config, "product_name");
+            let sku_header_confidence =
+                field_header_confidence(&sku_header, sku_rule, SKU_ALIASES).max(
+                    field_header_confidence(&sku_header, product_rule, PRODUCT_NAME_ALIASES),
+                );
+            let sku_sample_confidence = field_sample_confidence(
+                order_sheet,
+                data_start,
+                sku_column,
+                if field_header_confidence(&sku_header, sku_rule, SKU_ALIASES)
+                    >= field_header_confidence(&sku_header, product_rule, PRODUCT_NAME_ALIASES)
+                {
+                    sku_rule
+                } else {
+                    product_rule
+                },
+            );
+            let qty_header_confidence = field_header_confidence(
+                &qty_header,
+                order_field_rule(config, "quantity"),
+                QTY_ALIASES,
+            );
+            let qty_sample_confidence =
+                numeric_column_confidence(order_sheet, data_start, qty_column);
+            let distance = pair.sku_column.abs_diff(pair.qty_column);
+            let proximity_confidence =
+                (1.0 - distance.saturating_sub(1) as f64 * 0.12).clamp(0.4, 1.0);
+            let completeness = pair_completeness(order_sheet, data_start, sku_column, qty_column);
+            100.0
+                * (sku_header_confidence * 0.40
+                    + sku_sample_confidence * 0.15
+                    + qty_header_confidence * 0.20
+                    + qty_sample_confidence * 0.10
+                    + proximity_confidence * 0.10
+                    + completeness * 0.05)
+        })
+        .collect::<Vec<_>>();
+    if pair_scores.is_empty() {
+        0.0
+    } else {
+        pair_scores.iter().sum::<f64>() / pair_scores.len() as f64
+    }
+}
+
+fn field_header_confidence(
+    header: &str,
+    rule: Option<&FieldRule>,
+    fallback_aliases: &[&str],
+) -> f64 {
+    (configured_header_score(header, rule, fallback_aliases) as f64 / HEADER_EXACT_SCORE as f64)
+        .clamp(0.0, 1.0)
+}
+
+fn field_sample_confidence(
+    sheet: &SheetData,
+    data_start: usize,
+    column: usize,
+    rule: Option<&FieldRule>,
+) -> f64 {
+    let values = sheet
+        .rows
+        .iter()
+        .skip(data_start)
+        .take(ORDER_HEADER_SCAN_ROWS)
+        .filter_map(|row| row.get(column).map(CellValue::text))
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return 0.0;
+    }
+    let Some(rule) = rule else {
+        return 1.0;
+    };
+    let positive = if rule.compiled_value_patterns.is_empty() {
+        1.0
+    } else {
+        ratio(
+            values
+                .iter()
+                .filter(|value| {
+                    rule.compiled_value_patterns
+                        .iter()
+                        .any(|pattern| pattern.is_match(value))
+                })
+                .count(),
+            values.len(),
+        )
+    };
+    let negative = ratio(
+        values
+            .iter()
+            .filter(|value| {
+                rule.compiled_negative_patterns
+                    .iter()
+                    .any(|pattern| pattern.is_match(value))
+            })
+            .count(),
+        values.len(),
+    );
+    (positive - negative).clamp(0.0, 1.0)
+}
+
+fn numeric_column_confidence(sheet: &SheetData, data_start: usize, column: usize) -> f64 {
+    let values = sheet
+        .rows
+        .iter()
+        .skip(data_start)
+        .take(ORDER_HEADER_SCAN_ROWS)
+        .filter_map(|row| row.get(column).map(CellValue::text))
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>();
+    ratio(
+        values
+            .iter()
+            .filter(|value| {
+                value
+                    .trim()
+                    .parse::<f64>()
+                    .is_ok_and(|number| number >= 0.0)
+            })
+            .count(),
+        values.len(),
+    )
+}
+
+fn pair_completeness(
+    sheet: &SheetData,
+    data_start: usize,
+    sku_column: usize,
+    qty_column: usize,
+) -> f64 {
+    let rows = sheet
+        .rows
+        .iter()
+        .skip(data_start)
+        .take(ORDER_HEADER_SCAN_ROWS)
+        .collect::<Vec<_>>();
+    ratio(
+        rows.iter()
+            .filter(|row| {
+                !cell_text(row, Some(sku_column + 1)).is_empty()
+                    && !cell_text(row, Some(qty_column + 1)).is_empty()
+            })
+            .count(),
+        rows.len(),
+    )
+}
+
 fn match_header_template(
     sheets: &[SheetData],
     order_candidates: &[OrderSheetCandidate],
@@ -1164,7 +1395,7 @@ fn match_header_template(
     templates: &[HeaderTemplateRecord],
 ) -> Option<(String, PriceCheckMapping)> {
     const ORDER_FIELDS: [&str; 4] = ["order_number", "country_code", "sku_detail", "qty_detail"];
-    const PRICING_FIELDS: [&str; 3] = ["pricing_sku", "pricing_country", "price"];
+    const PRICING_FIELDS: [&str; 2] = ["pricing_sku", "pricing_country"];
 
     for template in templates {
         let field = |key: &str| {
@@ -1175,7 +1406,15 @@ fn match_header_template(
         };
         let order_fields = ORDER_FIELDS.map(field);
         let pricing_fields = PRICING_FIELDS.map(field);
-        if order_fields.iter().any(Option::is_none) || pricing_fields.iter().any(Option::is_none) {
+        let price_fields = template
+            .mappings
+            .iter()
+            .filter(|mapping| mapping.field_key == "price")
+            .collect::<Vec<_>>();
+        if order_fields.iter().any(Option::is_none)
+            || pricing_fields.iter().any(Option::is_none)
+            || price_fields.is_empty()
+        {
             continue;
         }
         let order_fields = order_fields.map(Option::unwrap);
@@ -1184,6 +1423,9 @@ fn match_header_template(
             .iter()
             .all(|mapping| mapping.sheet_name == order_fields[0].sheet_name)
             || !pricing_fields
+                .iter()
+                .all(|mapping| mapping.sheet_name == pricing_fields[0].sheet_name)
+            || !price_fields
                 .iter()
                 .all(|mapping| mapping.sheet_name == pricing_fields[0].sheet_name)
             || order_fields[0].sheet_name == pricing_fields[0].sheet_name
@@ -1212,12 +1454,13 @@ fn match_header_template(
                     continue;
                 };
                 let pricing_headers_match = pricing_fields.iter().all(|mapping| {
-                    let row = if mapping.field_key == "price" {
-                        pricing.quantity_header_row.unwrap_or(pricing.header_row)
-                    } else {
-                        pricing.header_row
-                    };
-                    template_header_matches(pricing_sheet, row, mapping)
+                    template_header_matches(pricing_sheet, pricing.header_row, mapping)
+                }) && price_fields.iter().all(|mapping| {
+                    template_header_matches(
+                        pricing_sheet,
+                        pricing.quantity_header_row.unwrap_or(pricing.header_row),
+                        mapping,
+                    )
                 });
                 if !pricing_headers_match {
                     continue;
@@ -1225,7 +1468,6 @@ fn match_header_template(
 
                 let mut mapping = mapping_from_candidates(order, pricing);
                 mapping.business_order_number_column = Some(order_fields[0].column);
-                mapping.platform_order_number_column = None;
                 mapping.country_code_column = Some(order_fields[1].column);
                 mapping.country_english_column = None;
                 mapping.country_chinese_column = None;
@@ -1237,23 +1479,23 @@ fn match_header_template(
                 }];
                 mapping.pricing_sku_column = pricing_fields[0].column;
                 mapping.pricing_country_column = pricing_fields[1].column;
-                let price_column = pricing_fields[2].column;
-                if !mapping
-                    .quantity_tier_columns
+                let quantity_row = pricing.quantity_header_row.unwrap_or(pricing.header_row);
+                let selected_tiers = price_fields
                     .iter()
-                    .any(|tier| tier.column == price_column)
-                {
-                    let quantity_row = pricing.quantity_header_row.unwrap_or(pricing.header_row);
-                    let header = sheet_cell_text(pricing_sheet, quantity_row, price_column);
-                    let Some(quantity) = parse_tier(&header) else {
-                        continue;
-                    };
-                    mapping.quantity_tier_columns.push(PriceTierColumn {
-                        quantity,
-                        column: price_column,
-                        header,
-                    });
-                }
+                    .map(|price| {
+                        let header = sheet_cell_text(pricing_sheet, quantity_row, price.column);
+                        parse_tier(&header).map(|quantity| PriceTierColumn {
+                            quantity,
+                            column: price.column,
+                            header,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>();
+                let Some(mut selected_tiers) = selected_tiers else {
+                    continue;
+                };
+                selected_tiers.sort_by_key(|tier| (tier.quantity, tier.column));
+                mapping.quantity_tier_columns = selected_tiers;
                 return Some((template.file_name.clone(), mapping));
             }
         }
@@ -1313,12 +1555,6 @@ fn infer_order_candidate_with_config(
             order_field_rule(config, "order_number"),
             ORDER_ID_ALIASES,
         );
-        let platform_col = configured_best_column(
-            sheet,
-            header_idx,
-            order_field_rule(config, "platform_order_number"),
-            PLATFORM_ORDER_ALIASES,
-        );
         let mut raw_pairs = pair_sku_qty_columns(header, &sku_columns, &qty_columns);
         let using_product_name = raw_pairs.is_empty();
         if using_product_name {
@@ -1330,18 +1566,16 @@ fn infer_order_candidate_with_config(
             );
             raw_pairs = pair_sku_qty_columns(header, &product_name_columns, &qty_columns);
         }
-        let pairs = deduplicate_equivalent_sku_qty_pairs(
-            sheet,
-            header_idx + 1,
-            &raw_pairs,
-            order_col,
-            platform_col,
-        );
-        if order_col.is_none() && platform_col.is_none() && pairs.is_empty() {
+        let pairs =
+            deduplicate_equivalent_sku_qty_pairs(sheet, header_idx + 1, &raw_pairs, order_col);
+        if order_col.is_none() && pairs.is_empty() {
             continue;
         }
         let (country_code, country_en, country_cn) =
             infer_order_country_columns(sheet, header_idx, config);
+        let country_en = country_en.filter(|column| Some(*column) != country_code);
+        let country_cn = country_cn
+            .filter(|column| Some(*column) != country_code && Some(*column) != country_en);
         let shipping = best_shipping_column(
             sheet,
             header_idx,
@@ -1360,11 +1594,10 @@ fn infer_order_candidate_with_config(
             header_idx + 1,
             &pairs,
             order_col,
-            platform_col,
             [country_code, country_en, country_cn],
         );
         if valid_rows == 0
-            || (order_col.is_none() && platform_col.is_none())
+            || order_col.is_none()
             || pairs.is_empty()
             || country_code.is_none() && country_en.is_none() && country_cn.is_none()
         {
@@ -1388,7 +1621,6 @@ fn infer_order_candidate_with_config(
         }
         let field_score = (pairs.len() as f64 * 24.0)
             + if order_col.is_some() { 24.0 } else { 0.0 }
-            + if platform_col.is_some() { 8.0 } else { 0.0 }
             + if country_code.is_some() { 8.0 } else { 0.0 }
             + if country_en.is_some() { 6.0 } else { 0.0 }
             + if country_cn.is_some() { 6.0 } else { 0.0 }
@@ -1402,7 +1634,6 @@ fn infer_order_candidate_with_config(
             score: field_score + valid_rows as f64 * 0.02 + ratio(country_rows, valid_rows) * 20.0
                 - price_matrix_penalty,
             business_order_number_column: order_col.map(|column| column + 1),
-            platform_order_number_column: platform_col.map(|column| column + 1),
             country_code_column: country_code.map(|column| column + 1),
             country_english_column: country_en.map(|column| column + 1),
             country_chinese_column: country_cn.map(|column| column + 1),
@@ -1448,20 +1679,13 @@ fn infer_pricing_candidate_with_config(
             order_field_rule(config, "quantity"),
             QTY_ALIASES,
         );
-        let order_like = (configured_best_column(
+        let order_like = configured_best_column(
             sheet,
             header_idx,
             order_field_rule(config, "order_number"),
             ORDER_ID_ALIASES,
         )
         .is_some()
-            || configured_best_column(
-                sheet,
-                header_idx,
-                order_field_rule(config, "platform_order_number"),
-                PLATFORM_ORDER_ALIASES,
-            )
-            .is_some())
             && !pair_sku_qty_columns(header, &sku_columns, &qty_columns).is_empty();
         if order_like {
             continue;
@@ -1787,16 +2011,14 @@ fn score_order_rows(
     data_start: usize,
     pairs: &[SkuQtyPair],
     order_column: Option<usize>,
-    platform_column: Option<usize>,
     country_columns: [Option<usize>; 3],
 ) -> (usize, usize) {
     let mut valid = 0;
     let mut country_rows = 0;
     for row in sheet.rows.iter().skip(data_start).take(120) {
-        let has_order = [order_column, platform_column]
-            .into_iter()
-            .flatten()
-            .any(|column| row.get(column).is_some_and(|cell| !cell.is_empty()));
+        let has_order = order_column
+            .and_then(|column| row.get(column))
+            .is_some_and(|cell| !cell.is_empty());
         let has_pair = pairs.iter().any(|pair| {
             row.get(pair.sku_column.saturating_sub(1))
                 .is_some_and(|cell| !cell.is_empty())
@@ -2086,19 +2308,11 @@ fn deduplicate_equivalent_sku_qty_pairs(
     data_start: usize,
     pairs: &[SkuQtyPair],
     order_column: Option<usize>,
-    platform_column: Option<usize>,
 ) -> Vec<SkuQtyPair> {
     let mut unique = Vec::new();
     for pair in pairs {
         if unique.iter().any(|existing| {
-            sku_qty_pair_data_equivalent(
-                sheet,
-                data_start,
-                existing,
-                pair,
-                order_column,
-                platform_column,
-            )
+            sku_qty_pair_data_equivalent(sheet, data_start, existing, pair, order_column)
         }) {
             continue;
         }
@@ -2113,17 +2327,12 @@ fn sku_qty_pair_data_equivalent(
     left: &SkuQtyPair,
     right: &SkuQtyPair,
     order_column: Option<usize>,
-    platform_column: Option<usize>,
 ) -> bool {
     let mut compared = false;
     for row in sheet.rows.iter().skip(data_start) {
-        let has_order = [order_column, platform_column]
-            .into_iter()
-            .flatten()
-            .any(|column| {
-                row.get(column)
-                    .is_some_and(|cell| !cell.text().trim().is_empty())
-            });
+        let has_order = order_column
+            .and_then(|column| row.get(column))
+            .is_some_and(|cell| !cell.text().trim().is_empty());
         if !has_order {
             continue;
         }
@@ -2442,7 +2651,6 @@ fn read_order_lines(
     let data_start = mapping.order_header_row;
     for (row_index, row) in sheet.rows.iter().enumerate().skip(data_start) {
         let business = cell_text(row, mapping.business_order_number_column);
-        let platform = cell_text(row, mapping.platform_order_number_column);
         let code = cell_text(row, mapping.country_code_column);
         let english = cell_text(row, mapping.country_english_column);
         let chinese = cell_text(row, mapping.country_chinese_column);
@@ -2453,7 +2661,7 @@ fn read_order_lines(
         } else {
             normalize_shipping(&shipping_from_column)
         };
-        if business.is_empty() && platform.is_empty() {
+        if business.is_empty() {
             continue;
         }
         let mut row_has_sku = false;
@@ -2498,12 +2706,7 @@ fn read_order_lines(
             }
             let matched_sku = normalize_sku(&raw_sku);
             lines.push(OrderLine {
-                business_order_number: if business.is_empty() {
-                    platform.clone()
-                } else {
-                    business.clone()
-                },
-                platform_order_number: platform.clone(),
+                business_order_number: business.clone(),
                 country: country.clone(),
                 shipping_method: shipping.clone(),
                 original_sku: raw_sku,
@@ -2620,18 +2823,6 @@ fn aggregate_lines(lines: &[OrderLine]) -> Vec<AggregatedOrderSku> {
                 row.original_sku.push_str(" | ");
                 row.original_sku.push_str(&line.original_sku);
             }
-            if !row
-                .platform_order_number
-                .split(" | ")
-                .any(|value| value == line.platform_order_number)
-                && !line.platform_order_number.is_empty()
-            {
-                if !row.platform_order_number.is_empty() {
-                    row.platform_order_number.push_str(" | ");
-                }
-                row.platform_order_number
-                    .push_str(&line.platform_order_number);
-            }
             if row.original_price.is_none() {
                 row.original_price = line.original_price;
             }
@@ -2640,7 +2831,6 @@ fn aggregate_lines(lines: &[OrderLine]) -> Vec<AggregatedOrderSku> {
             positions.insert(key, result.len());
             result.push(AggregatedOrderSku {
                 business_order_number: line.business_order_number.clone(),
-                platform_order_number: line.platform_order_number.clone(),
                 country_code: line.country.code.clone(),
                 country_english_name: line.country.english.clone(),
                 country_chinese_name: line.country.chinese.clone(),
@@ -2711,7 +2901,6 @@ fn process_price_file(
         };
         rows.push(PriceCheckRow {
             business_order_number: item.business_order_number.clone(),
-            platform_order_number: item.platform_order_number.clone(),
             country_code: item.country_code.clone(),
             country_english_name: item.country_english_name.clone(),
             country_chinese_name: item.country_chinese_name.clone(),
@@ -3046,6 +3235,39 @@ mod tests {
     }
 
     #[test]
+    fn platform_order_header_is_treated_as_the_single_order_number() {
+        let mut config = Config::default();
+        config.pricing_fields.order.insert(
+            "order_number".to_string(),
+            FieldRule {
+                header_aliases: vec!["平台订单号".to_string()],
+                ..FieldRule::default()
+            },
+        );
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("平台订单号"),
+                    CellValue::string("国家二字码"),
+                    CellValue::string("SKU"),
+                    CellValue::string("数量"),
+                ],
+                vec![
+                    CellValue::string("ORD-1"),
+                    CellValue::string("US"),
+                    CellValue::string("SKU-1"),
+                    CellValue::string("1"),
+                ],
+            ],
+        };
+
+        let candidate =
+            infer_order_candidate_with_config(&sheet, &config).expect("order candidate");
+        assert_eq!(candidate.business_order_number_column, Some(1));
+    }
+
+    #[test]
     fn country_three_fields_are_one_identity() {
         let country = normalize_country_fields("US", "United States", "美国");
         assert_eq!(country.code, "US");
@@ -3189,6 +3411,7 @@ mod tests {
                 CellValue::string("SKU"),
                 CellValue::string("Country"),
                 CellValue::string("1pcs"),
+                CellValue::string("2pcs"),
             ]],
         };
         let order = OrderSheetCandidate {
@@ -3207,11 +3430,18 @@ mod tests {
             header_row: 1,
             sku_column: Some(1),
             country_column: Some(2),
-            tier_columns: vec![PriceTierColumn {
-                quantity: 1,
-                column: 3,
-                header: "1pcs".to_string(),
-            }],
+            tier_columns: vec![
+                PriceTierColumn {
+                    quantity: 1,
+                    column: 3,
+                    header: "1pcs".to_string(),
+                },
+                PriceTierColumn {
+                    quantity: 2,
+                    column: 4,
+                    header: "2pcs".to_string(),
+                },
+            ],
             ..PricingSheetCandidate::default()
         };
         let template = HeaderTemplateRecord {
@@ -3224,6 +3454,7 @@ mod tests {
                 ("pricing_sku", "Pricing", 1, "SKU"),
                 ("pricing_country", "Pricing", 2, "Country"),
                 ("price", "Pricing", 3, "1pcs"),
+                ("price", "Pricing", 4, "2pcs"),
             ]
             .into_iter()
             .map(
@@ -3248,7 +3479,15 @@ mod tests {
         assert_eq!(matched.1.order_sheet, "Incoming Order");
         assert_eq!(matched.1.pricing_sheet, "Incoming Price");
         assert_eq!(matched.1.sku_qty_pairs[0].sku_column, 6);
-        assert_eq!(matched.1.quantity_tier_columns[0].column, 3);
+        assert_eq!(
+            matched
+                .1
+                .quantity_tier_columns
+                .iter()
+                .map(|tier| (tier.quantity, tier.column))
+                .collect::<Vec<_>>(),
+            vec![(1, 3), (2, 4)]
+        );
     }
 
     #[test]
@@ -3515,7 +3754,6 @@ mod tests {
         let country = normalize_country_fields("US", "United States", "美国");
         let line = |quantity: f64, source_row: usize| OrderLine {
             business_order_number: "ORDER-1".to_string(),
-            platform_order_number: "PLATFORM-1".to_string(),
             country: country.clone(),
             shipping_method: String::new(),
             original_sku: "ABC123-RED".to_string(),
@@ -3778,6 +4016,63 @@ mod tests {
             candidate_ambiguity_reason(CandidateAmbiguity::Column, &best, &column_runner_up);
         assert!(column_reason.contains("最优 [SKU C / 数量 D]"));
         assert!(column_reason.contains("次优 [SKU E / 数量 D]"));
+    }
+
+    #[test]
+    fn nested_mapping_is_not_a_distinct_runner_up() {
+        let best = complete_mapping();
+        let mut nested = best.clone();
+        nested.sku_qty_pairs.push(SkuQtyPair {
+            sku_column: 5,
+            qty_column: 6,
+            sku_header: "备用 SKU".to_string(),
+            qty_header: "备用数量".to_string(),
+        });
+        assert!(mapping_is_nested_variant(&best, &nested));
+
+        let mut distinct = best.clone();
+        distinct.sku_qty_pairs[0] = nested.sku_qty_pairs[1].clone();
+        assert!(!mapping_is_nested_variant(&best, &distinct));
+    }
+
+    #[test]
+    fn field_mapping_score_prefers_recognized_sku_quantity_columns() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("数量"),
+                    CellValue::string("备注"),
+                    CellValue::string("说明"),
+                ],
+                vec![
+                    CellValue::string("SKU-1"),
+                    CellValue::string("2"),
+                    CellValue::string("SKU-1"),
+                    CellValue::string("two"),
+                ],
+            ],
+        };
+        let mut recognized = complete_mapping();
+        recognized.sku_qty_pairs = vec![SkuQtyPair {
+            sku_column: 1,
+            qty_column: 2,
+            sku_header: "SKU".to_string(),
+            qty_header: "数量".to_string(),
+        }];
+        let mut unrecognized = recognized.clone();
+        unrecognized.sku_qty_pairs[0] = SkuQtyPair {
+            sku_column: 3,
+            qty_column: 4,
+            sku_header: "备注".to_string(),
+            qty_header: "说明".to_string(),
+        };
+
+        assert!(
+            sku_qty_field_score(&sheet, &recognized, &Config::default())
+                > sku_qty_field_score(&sheet, &unrecognized, &Config::default())
+        );
     }
 
     #[test]

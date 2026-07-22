@@ -6,7 +6,6 @@ import { Button } from "./ui/button";
 export type MappingFieldTarget =
   | "orderHeaderRow"
   | "businessOrderNumberColumn"
-  | "platformOrderNumberColumn"
   | "countryCodeColumn"
   | "countryEnglishColumn"
   | "countryChineseColumn"
@@ -163,8 +162,7 @@ export function MappingEditor({
         <summary>订单字段</summary>
         <div className="mapping-fields">
           <label className={`mapping-field${activeTarget === "orderHeaderRow" ? " is-active" : ""}`} onClick={() => onActiveTargetChange("orderHeaderRow")}><span>表头行<em>{activeTarget === "orderHeaderRow" ? "点击行号选择" : ""}</em></span><input aria-label="订单表头行" type="number" min={1} max={orderSheet?.rowCount ?? 1} value={mapping.orderHeaderRow} onFocus={() => onActiveTargetChange("orderHeaderRow")} onChange={(event) => update({ orderHeaderRow: Number(event.currentTarget.value) || 0 })} /></label>
-          <FieldSelect label="业务订单号" value={mapping.businessOrderNumberColumn} options={orderOptions} target="businessOrderNumberColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("businessOrderNumberColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
-          <FieldSelect label="平台订单号" value={mapping.platformOrderNumberColumn} options={orderOptions} target="platformOrderNumberColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("platformOrderNumberColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
+          <FieldSelect label="订单号" value={mapping.businessOrderNumberColumn} options={orderOptions} target="businessOrderNumberColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("businessOrderNumberColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
           <FieldSelect label="国家二字码" value={mapping.countryCodeColumn} options={orderOptions} target="countryCodeColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("countryCodeColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
           <FieldSelect label="英文国家名" value={mapping.countryEnglishColumn} options={orderOptions} target="countryEnglishColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("countryEnglishColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
           <FieldSelect label="中文国家名" value={mapping.countryChineseColumn} options={orderOptions} target="countryChineseColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("countryChineseColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />

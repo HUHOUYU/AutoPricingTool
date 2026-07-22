@@ -64,13 +64,20 @@ function stringValue(value: unknown): string {
 }
 
 export function findExcelPreviewMatches(rows: string[][], query: string): ExcelPreviewSearchMatch[] {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  if (!normalizedQuery) return [];
+  const termGroups = query
+    .split(/[,，]/)
+    .map((group) => Array.from(new Set(group
+      .split("|")
+      .map((term) => term.trim().toLocaleLowerCase())
+      .filter(Boolean))))
+    .filter((group) => group.length > 0);
+  if (termGroups.length === 0) return [];
   const matches: ExcelPreviewSearchMatch[] = [];
   rows.forEach((row, rowIndex) => {
-    row.forEach((cell, columnIndex) => {
-      if (cell.toLocaleLowerCase().includes(normalizedQuery)) matches.push({ rowIndex, columnIndex });
-    });
+    const normalizedCells = row.map((cell) => cell.toLocaleLowerCase());
+    if (!termGroups.every((group) => group.some((term) => normalizedCells.some((cell) => cell.includes(term))))) return;
+    const columnIndex = normalizedCells.findIndex((cell) => termGroups[0].some((term) => cell.includes(term)));
+    matches.push({ rowIndex, columnIndex: Math.max(0, columnIndex) });
   });
   return matches;
 }
