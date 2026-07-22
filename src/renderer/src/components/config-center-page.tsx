@@ -30,6 +30,8 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
   const [restoring, setRestoring] = useState(false);
   const [sourceScrollTop, setSourceScrollTop] = useState(0);
   const [processingCapacity, setProcessingCapacity] = useState<ProcessingCapacity | null>(null);
+  const [rememberWindowSize, setRememberWindowSize] = useState(false);
+  const [windowPreferenceLoading, setWindowPreferenceLoading] = useState(true);
 
   const applyDocument = useCallback((next: ConfigDocument): void => {
     setDocument(next);
@@ -56,6 +58,31 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
     if (!api) return;
     void api.getProcessingCapacity().then(setProcessingCapacity).catch(() => setProcessingCapacity(null));
   }, [api]);
+  useEffect(() => {
+    if (!api) {
+      setWindowPreferenceLoading(false);
+      return;
+    }
+    void api.getWindowPreferences()
+      .then((preferences) => setRememberWindowSize(preferences.rememberSize))
+      .catch(() => toast.error("窗口大小设置读取失败"))
+      .finally(() => setWindowPreferenceLoading(false));
+  }, [api]);
+
+  const toggleRememberWindowSize = async (): Promise<void> => {
+    if (!api || windowPreferenceLoading) return;
+    const nextValue = !rememberWindowSize;
+    setWindowPreferenceLoading(true);
+    try {
+      const preferences = await api.setRememberWindowSize(nextValue);
+      setRememberWindowSize(preferences.rememberSize);
+      toast.success(preferences.rememberSize ? "已记录当前窗口大小" : "已关闭窗口大小记录");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "窗口大小设置保存失败");
+    } finally {
+      setWindowPreferenceLoading(false);
+    }
+  };
 
   const updateSource = (nextSource: string): void => {
     setSource(nextSource);
@@ -196,6 +223,21 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
               <div className="config-field"><span>输入目录</span><div className="config-path-field"><input aria-label="输入目录" value={String(runtime.recent_input_dir ?? "")} onChange={(event) => updateField("runtime", "recent_input_dir", event.currentTarget.value)} /><Button type="button" variant="outline" aria-label="选择输入目录" onClick={() => void selectRuntimeDirectory("recent_input_dir", "input")}><FolderOpen />选择</Button></div></div>
               <div className="config-field"><span>输出目录</span><div className="config-path-field"><input aria-label="输出目录" value={String(runtime.recent_output_dir ?? "")} onChange={(event) => updateField("runtime", "recent_output_dir", event.currentTarget.value)} /><Button type="button" variant="outline" aria-label="选择输出目录" onClick={() => void selectRuntimeDirectory("recent_output_dir", "output")}><FolderOpen />选择</Button></div></div>
               <label className="config-check"><input type="checkbox" checked={Boolean(runtime.archive_standard_files)} onChange={(event) => updateField("runtime", "archive_standard_files", event.currentTarget.checked)} />归档标准文件</label>
+            </fieldset>
+            <fieldset>
+              <legend>界面偏好</legend>
+              <div className="config-switch-row">
+                <span><strong>记住窗口大小</strong><small>开启后记录当前宽高，下次启动时自动恢复</small></span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="记住窗口大小"
+                  aria-checked={rememberWindowSize}
+                  className="config-switch"
+                  disabled={windowPreferenceLoading}
+                  onClick={() => void toggleRememberWindowSize()}
+                ><i /></button>
+              </div>
             </fieldset>
             <fieldset>
               <legend>性能限制</legend>

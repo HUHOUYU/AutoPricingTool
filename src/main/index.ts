@@ -7,6 +7,14 @@ import { createInterface } from "node:readline";
 import { availableParallelism, userInfo } from "node:os";
 import { assertTrustedIpcSender, isTrustedRendererUrl } from "./security";
 import { readExcelPreviewFile } from "./excel-preview-file";
+import {
+  initialWindowSize,
+  MIN_WINDOW_SIZE,
+  normalizeWindowPreferences,
+  setRememberedWindowSize,
+  type WindowPreferences,
+  type WindowSize,
+} from "./window-preferences";
 
 type RuntimeConfig = {
   recent_input_dir?: string;
@@ -84,6 +92,7 @@ const runtimeLogPath = join(writableRootDir, "runtime", "logs", "app.log");
 const taskHistoryPath = join(writableRootDir, "runtime", "task-history.jsonl");
 const templateStoreDir = join(app.getPath("userData"), "templates");
 const templateStorePath = join(templateStoreDir, "templates.json");
+const windowPreferencesPath = join(app.getPath("userData"), "window-preferences.json");
 const appIconPath = join(resourceRootDir, "resources", "app-icon.ico");
 const rendererHtmlPath = join(__dirname, "../renderer/index.html");
 const devServerUrl = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL;
@@ -107,11 +116,14 @@ const outputArtifactDirs = ["汇总", "正式命名", "待确认", "异常"];
 const supportedExcelExtensions = new Set([".xlsx", ".xlsm", ".xlsb", ".xls"]);
 const MAX_INPUT_FILES = 5_000;
 const defaultWindowBackgroundColor = "#EEF3F8";
+const windowResizeSaveDelayMs = 300;
 const detectedProcessingThreads = availableParallelism();
 const maxConfiguredProcessingWorkers = Math.max(0, detectedProcessingThreads - 1);
 let processor: ChildProcessWithoutNullStreams | null = null;
 let processorActivity: "scan" | "start" | "merge" | "price-analyze" | "price-validate" | "price-run" | null = null;
 let activeTask: TaskHistoryRecord | null = null;
+let windowPreferences: WindowPreferences = { rememberSize: false };
+let windowPreferencesWriteQueue: Promise<void> = Promise.resolve();
 
 type ProcessorCommand = Record<string, unknown> & {
   action: string;
@@ -154,6 +166,25 @@ function samePath(left: string, right: string): boolean {
   return process.platform === "win32"
     ? leftPath.toLowerCase() === rightPath.toLowerCase()
     : leftPath === rightPath;
+}
+
+async function readWindowPreferences(): Promise<WindowPreferences> {
+  try {
+    return normalizeWindowPreferences(JSON.parse(await readFile(windowPreferencesPath, "utf8")) as unknown);
+  } catch {
+    return { rememberSize: false };
+  }
+}
+
+async function writeWindowPreferences(preferences: WindowPreferences): Promise<void> {
+  const content = `${JSON.stringify(preferences, null, 2)}\n`;
+  windowPreferencesWriteQueue = windowPreferencesWriteQueue.catch(() => undefined).then(async () => {
+    await mkdir(dirname(windowPreferencesPath), { recursive: true });
+    const temporaryPath = `${windowPreferencesPath}.${process.pid}.tmp`;
+    await writeFile(temporaryPath, content, "utf8");
+    await rename(temporaryPath, windowPreferencesPath);
+  });
+  return windowPreferencesWriteQueue;
 }
 
 function isSupportedExcelPath(path: string): boolean {
@@ -778,11 +809,12 @@ async function nextAvailableCopyPath(directory: string, fileName: string): Promi
 }
 
 function createWindow(): void {
+  const initialSize = initialWindowSize(windowPreferences);
   const mainWindow = new BrowserWindow({
-    width: 1650,
-    height: 1120,
-    minWidth: 1100,
-    minHeight: 700,
+    width: initialSize.width,
+    height: initialSize.height,
+    minWidth: MIN_WINDOW_SIZE.width,
+    minHeight: MIN_WINDOW_SIZE.height,
     title: "Excel 订单批量核价工具",
     backgroundColor: defaultWindowBackgroundColor,
     show: false,
@@ -794,6 +826,27 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: true,
     },
+  });
+  let resizeSaveTimer: NodeJS.Timeout | undefined;
+  let pendingWindowSize: WindowSize | undefined;
+  mainWindow.on("resize", () => {
+    if (!windowPreferences.rememberSize || mainWindow.isMaximized() || mainWindow.isMinimized() || mainWindow.isFullScreen()) return;
+    const [width, height] = mainWindow.getSize();
+    pendingWindowSize = { width, height };
+    if (resizeSaveTimer) clearTimeout(resizeSaveTimer);
+    resizeSaveTimer = setTimeout(() => {
+      if (!pendingWindowSize) return;
+      windowPreferences = setRememberedWindowSize(windowPreferences, true, pendingWindowSize);
+      pendingWindowSize = undefined;
+      void writeWindowPreferences(windowPreferences).catch(() => undefined);
+    }, windowResizeSaveDelayMs);
+  });
+  mainWindow.on("closed", () => {
+    if (resizeSaveTimer) clearTimeout(resizeSaveTimer);
+    if (windowPreferences.rememberSize && pendingWindowSize) {
+      windowPreferences = setRememberedWindowSize(windowPreferences, true, pendingWindowSize);
+      void writeWindowPreferences(windowPreferences).catch(() => undefined);
+    }
   });
   mainWindow.once("ready-to-show", () => mainWindow.show());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -957,6 +1010,7 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   installContentSecurityPolicy();
   await markInterruptedTasks();
+  windowPreferences = await readWindowPreferences();
 
   ipcMain.handle("app:get-runtime-config", (event) => {
     requireTrustedIpc(event);
@@ -984,6 +1038,20 @@ app.whenReady().then(async () => {
   ipcMain.handle("window:close", (event) => {
     requireTrustedIpc(event);
     BrowserWindow.fromWebContents(event.sender)?.close();
+  });
+  ipcMain.handle("window:get-preferences", (event) => {
+    requireTrustedIpc(event);
+    return windowPreferences;
+  });
+  ipcMain.handle("window:set-remember-size", async (event, rememberSize: unknown) => {
+    requireTrustedIpc(event);
+    if (typeof rememberSize !== "boolean") throw new TypeError("记住窗口大小选项必须是布尔值");
+    const targetWindow = BrowserWindow.fromWebContents(event.sender);
+    const fallbackSize = initialWindowSize(windowPreferences);
+    const [width, height] = targetWindow?.getSize() ?? [fallbackSize.width, fallbackSize.height];
+    windowPreferences = setRememberedWindowSize(windowPreferences, rememberSize, { width, height });
+    await writeWindowPreferences(windowPreferences);
+    return windowPreferences;
   });
   ipcMain.handle("app:set-runtime-config", (event, payload: unknown) => {
     requireTrustedIpc(event);

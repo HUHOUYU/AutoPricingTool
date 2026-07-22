@@ -7,6 +7,12 @@ export type RuntimeConfig = {
   archive_standard_files?: boolean;
 };
 
+export type WindowPreferences = {
+  rememberSize: boolean;
+  width?: number;
+  height?: number;
+};
+
 export type DirectoryScanResult = {
   files: string[];
   skippedTemporary: number;
@@ -190,6 +196,8 @@ const desktopAPI = {
   minimizeWindow: (): Promise<void> => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: (): Promise<void> => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: (): Promise<void> => ipcRenderer.invoke("window:close"),
+  getWindowPreferences: (): Promise<WindowPreferences> => ipcRenderer.invoke("window:get-preferences"),
+  setRememberWindowSize: (rememberSize: boolean): Promise<WindowPreferences> => ipcRenderer.invoke("window:set-remember-size", rememberSize),
   getRuntimeConfig: (): Promise<RuntimeConfig> => ipcRenderer.invoke("app:get-runtime-config"),
   getDefaultPriceOutputDir: (): Promise<string> => ipcRenderer.invoke("app:get-default-price-output-dir"),
   getProcessingCapacity: (): Promise<ProcessingCapacity> => ipcRenderer.invoke("app:get-processing-capacity"),
