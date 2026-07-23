@@ -870,6 +870,9 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.keyDown(document, { key: "f", ctrlKey: true });
     const previewSearch = screen.getByRole("searchbox", { name: "搜索表格数据" });
     await waitFor(() => expect(previewSearch).toHaveFocus());
+    expect(previewSearch).toHaveAttribute("size", "18");
+    fireEvent.change(previewSearch, { target: { value: "GOOD-1, US | United States | 美国" } });
+    expect(previewSearch).toHaveAttribute("size", "32");
     fireEvent.change(previewSearch, { target: { value: "订单" } });
     await waitFor(() => expect(screen.getByText("1/2")).toBeInTheDocument());
     expect(dialog.querySelector(".excel-preview-rows .is-search-match")).toHaveTextContent("订单号");

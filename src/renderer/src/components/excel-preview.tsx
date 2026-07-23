@@ -36,6 +36,8 @@ const previewColumnWidth = 120;
 const previewColumnMinWidth = 64;
 const previewColumnMaxWidth = 480;
 const skuPairShadeStrengths = [14, 20, 26, 32, 38];
+const searchInputMinimumCharacters = 18;
+const searchInputPlaceholder = "逗号=且，竖线=或";
 
 type SkuPairStyle = CSSProperties & { "--sku-pair-strength": string };
 
@@ -433,7 +435,8 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                 ref={searchInputRef}
                 type="search"
                 aria-label="搜索表格数据"
-                placeholder="逗号=且，竖线=或"
+                placeholder={searchInputPlaceholder}
+                size={Math.max(searchInputMinimumCharacters, Array.from(searchQuery).length + 1)}
                 value={searchQuery}
                 onChange={(event) => {
                   setSearchPreferredColumns([]);
