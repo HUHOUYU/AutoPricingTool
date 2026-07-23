@@ -1,4 +1,4 @@
-use crate::config::{Config, FieldRule, load_config};
+use crate::config::{Config, CountryIdentity, FieldRule, PricingRules, load_config};
 use crate::country_catalog::COUNTRY_ALIASES;
 use crate::excel_engine::{CellValue, SheetData};
 use crate::ipc::{config_path, emit};
@@ -301,6 +301,13 @@ struct OrderLine {
     original_price: Option<f64>,
     source_sheet: String,
     source_row: usize,
+    sku_pair_priority: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SourceAssignment {
+    pub(crate) source_row: usize,
+    pub(crate) sku_pair_priority: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -316,6 +323,17 @@ pub(crate) struct AggregatedOrderSku {
     pub(crate) original_price: Option<f64>,
     pub(crate) source_sheet: String,
     pub(crate) source_rows: Vec<usize>,
+    pub(crate) source_assignments: Vec<SourceAssignment>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct PriceWritebackRow {
+    pub(crate) source_row: usize,
+    pub(crate) sku_pair_priority: Option<usize>,
+    pub(crate) matched: bool,
+    pub(crate) pricing_price: Option<f64>,
+    pub(crate) price_difference: Option<f64>,
+    pub(crate) order_row_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -609,11 +627,8 @@ fn validate_price_mapping(
         .map(Vec::len)
         .max()
         .unwrap_or_default();
-    let order_mapped_columns = [
+    let mut order_mapped_columns = [
         mapping.business_order_number_column,
-        mapping.country_code_column,
-        mapping.country_english_column,
-        mapping.country_chinese_column,
         mapping.shipping_method_column,
         mapping.order_price_column,
     ]
@@ -626,6 +641,17 @@ fn validate_price_mapping(
             .flat_map(|pair| [pair.sku_column, pair.qty_column]),
     )
     .collect::<Vec<_>>();
+    for (identity, column) in [
+        (CountryIdentity::Iso2, mapping.country_code_column),
+        (CountryIdentity::English, mapping.country_english_column),
+        (CountryIdentity::Chinese, mapping.country_chinese_column),
+    ] {
+        if config.pricing.uses_country_identity(identity)
+            && let Some(column) = column
+        {
+            order_mapped_columns.push(column);
+        }
+    }
     if order_mapped_columns
         .iter()
         .any(|column| *column == 0 || *column > order_columns)
@@ -680,7 +706,7 @@ fn validate_price_mapping(
     }
 
     let index = build_price_index(pricing_sheet, mapping);
-    let lines = read_order_lines(order_sheet, mapping).0;
+    let lines = read_order_lines(order_sheet, mapping, config).0;
     let evaluated_rows = lines.len();
     let (matched_rows, matched_order_rows) = evaluate_matches(&index, &lines);
     let coverage = ratio(matched_rows, evaluated_rows);
@@ -844,7 +870,7 @@ fn analyze_path_with_templates(
                 .find(|sheet| sheet.name == mapping.pricing_sheet),
         ) {
             let index = build_price_index(pricing_sheet, &mapping);
-            let lines = read_order_lines(order_sheet, &mapping).0;
+            let lines = read_order_lines(order_sheet, &mapping, config).0;
             evaluated_rows = lines.len();
             let evaluated = evaluate_matches(&index, &lines);
             matched_rows = evaluated.0;
@@ -872,7 +898,7 @@ fn analyze_path_with_templates(
                         .find(|sheet| sheet.name == mapping.pricing_sheet);
                     if let (Some(order_sheet), Some(pricing_sheet)) = (order_sheet, pricing_sheet) {
                         let index = build_price_index(pricing_sheet, &mapping);
-                        let lines = read_order_lines(order_sheet, &mapping).0;
+                        let lines = read_order_lines(order_sheet, &mapping, config).0;
                         let total = lines.len();
                         let (matched, matched_rows) = evaluate_matches(&index, &lines);
                         let pair_coverage = ratio(matched, total);
@@ -2602,9 +2628,35 @@ fn normalize_country_fields(code: &str, english: &str, chinese: &str) -> Country
     }
 }
 
+fn normalize_order_country_fields(
+    code: &str,
+    english: &str,
+    chinese: &str,
+    rules: &PricingRules,
+) -> CountryInfo {
+    normalize_country_fields(
+        if rules.uses_country_identity(CountryIdentity::Iso2) {
+            code
+        } else {
+            ""
+        },
+        if rules.uses_country_identity(CountryIdentity::English) {
+            english
+        } else {
+            ""
+        },
+        if rules.uses_country_identity(CountryIdentity::Chinese) {
+            chinese
+        } else {
+            ""
+        },
+    )
+}
+
 fn read_order_lines(
     sheet: &SheetData,
     mapping: &PriceCheckMapping,
+    config: &Config,
 ) -> (Vec<OrderLine>, Vec<PriceCheckException>) {
     let mut lines = Vec::new();
     let mut exceptions = Vec::new();
@@ -2614,7 +2666,8 @@ fn read_order_lines(
         let code = cell_text(row, mapping.country_code_column);
         let english = cell_text(row, mapping.country_english_column);
         let chinese = cell_text(row, mapping.country_chinese_column);
-        let mut country = normalize_country_fields(&code, &english, &chinese);
+        let mut country =
+            normalize_order_country_fields(&code, &english, &chinese, &config.pricing);
         let shipping_from_column = cell_text(row, mapping.shipping_method_column);
         let shipping = if shipping_from_column.is_empty() {
             country.inferred_shipping.clone()
@@ -2625,7 +2678,7 @@ fn read_order_lines(
             continue;
         }
         let mut row_has_sku = false;
-        for pair in &mapping.sku_qty_pairs {
+        for (sku_pair_priority, pair) in mapping.sku_qty_pairs.iter().enumerate() {
             let raw_sku = cell_text(row, Some(pair.sku_column));
             if raw_sku.is_empty() {
                 continue;
@@ -2678,6 +2731,7 @@ fn read_order_lines(
                     .and_then(parse_price),
                 source_sheet: sheet.name.clone(),
                 source_row: row_index + 1,
+                sku_pair_priority,
             });
         }
         if !row_has_sku && !mapping.sku_qty_pairs.is_empty() {
@@ -2689,10 +2743,16 @@ fn read_order_lines(
                 message: "订单记录没有可用 SKU".to_string(),
             });
         }
-        if !country.conflict
-            && country.code.is_empty()
-            && (!code.is_empty() || !english.is_empty() || !chinese.is_empty())
-        {
+        let has_enabled_country_value = [
+            (CountryIdentity::Iso2, &code),
+            (CountryIdentity::English, &english),
+            (CountryIdentity::Chinese, &chinese),
+        ]
+        .into_iter()
+        .any(|(identity, value)| {
+            config.pricing.uses_country_identity(identity) && !value.is_empty()
+        });
+        if !country.conflict && country.code.is_empty() && has_enabled_country_value {
             country.reason = "国家字段无法标准化".to_string();
         }
     }
@@ -2786,7 +2846,18 @@ fn aggregate_lines(lines: &[OrderLine]) -> Vec<AggregatedOrderSku> {
             if row.original_price.is_none() {
                 row.original_price = line.original_price;
             }
-            row.source_rows.push(line.source_row);
+            if !row.source_rows.contains(&line.source_row) {
+                row.source_rows.push(line.source_row);
+            }
+            if !row.source_assignments.contains(&SourceAssignment {
+                source_row: line.source_row,
+                sku_pair_priority: line.sku_pair_priority,
+            }) {
+                row.source_assignments.push(SourceAssignment {
+                    source_row: line.source_row,
+                    sku_pair_priority: line.sku_pair_priority,
+                });
+            }
         } else {
             positions.insert(key, result.len());
             result.push(AggregatedOrderSku {
@@ -2801,10 +2872,85 @@ fn aggregate_lines(lines: &[OrderLine]) -> Vec<AggregatedOrderSku> {
                 original_price: line.original_price,
                 source_sheet: line.source_sheet.clone(),
                 source_rows: vec![line.source_row],
+                source_assignments: vec![SourceAssignment {
+                    source_row: line.source_row,
+                    sku_pair_priority: line.sku_pair_priority,
+                }],
             });
         }
     }
     result
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MatchedRowCandidate {
+    sku_pair_priority: usize,
+    pricing_price: f64,
+}
+
+fn record_matched_candidates(
+    candidates: &mut HashMap<usize, MatchedRowCandidate>,
+    item: &AggregatedOrderSku,
+    pricing_price: f64,
+) {
+    for assignment in &item.source_assignments {
+        let candidate = MatchedRowCandidate {
+            sku_pair_priority: assignment.sku_pair_priority,
+            pricing_price,
+        };
+        candidates
+            .entry(assignment.source_row)
+            .and_modify(|current| {
+                if candidate.sku_pair_priority < current.sku_pair_priority {
+                    *current = candidate;
+                }
+            })
+            .or_insert(candidate);
+    }
+}
+
+fn build_writeback_rows(
+    sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    candidates: &HashMap<usize, MatchedRowCandidate>,
+) -> Vec<PriceWritebackRow> {
+    let mut order_counts: HashMap<String, usize> = HashMap::new();
+    for row in sheet.rows.iter().skip(mapping.order_header_row) {
+        let order_number = cell_text(row, mapping.business_order_number_column);
+        if !order_number.is_empty() {
+            *order_counts.entry(order_number).or_default() += 1;
+        }
+    }
+
+    let mut seen_orders = HashSet::new();
+    let mut rows = Vec::new();
+    for (row_index, row) in sheet.rows.iter().enumerate().skip(mapping.order_header_row) {
+        let order_number = cell_text(row, mapping.business_order_number_column);
+        if order_number.is_empty() {
+            continue;
+        }
+        let source_row = row_index + 1;
+        let order_row_count = if seen_orders.insert(order_number.clone()) {
+            order_counts.get(&order_number).copied().unwrap_or_default()
+        } else {
+            0
+        };
+        let original_price = mapping
+            .order_price_column
+            .and_then(|column| row.get(column.saturating_sub(1)))
+            .and_then(parse_price);
+        let candidate = candidates.get(&source_row);
+        rows.push(PriceWritebackRow {
+            source_row,
+            sku_pair_priority: candidate.map(|value| value.sku_pair_priority),
+            matched: candidate.is_some(),
+            pricing_price: candidate.map(|value| value.pricing_price),
+            price_difference: candidate
+                .and_then(|value| original_price.map(|original| value.pricing_price - original)),
+            order_row_count,
+        });
+    }
+    rows
 }
 
 fn process_price_file(
@@ -2814,6 +2960,10 @@ fn process_price_file(
     config: &Config,
     state: &RuntimeState,
 ) -> Result<PriceCheckReport> {
+    crate::pricing_writer::validate_source_format(input_path)?;
+    let order_price_column = mapping
+        .order_price_column
+        .ok_or_else(|| anyhow!("订单 Sheet 找不到 TOTAL Price/原始价格列，未生成结果文件"))?;
     let workbook = read_workbook_for_processing(input_path, config)?;
     let order_sheet = workbook
         .sheets
@@ -2825,7 +2975,7 @@ fn process_price_file(
         .iter()
         .find(|sheet| sheet.name == mapping.pricing_sheet)
         .ok_or_else(|| anyhow!("找不到核价 Sheet: {}", mapping.pricing_sheet))?;
-    let (lines, mut exceptions) = read_order_lines(order_sheet, mapping);
+    let (lines, mut exceptions) = read_order_lines(order_sheet, mapping, config);
     for exception in &mut exceptions {
         exception.file_path = input_path.display().to_string();
     }
@@ -2833,6 +2983,7 @@ fn process_price_file(
     let index = build_price_index(pricing_sheet, mapping);
     let mut rows = Vec::new();
     let mut matched_rows = 0;
+    let mut matched_candidates = HashMap::new();
     for (position, item) in aggregated.iter().enumerate() {
         state.wait_if_paused();
         if state.should_stop() {
@@ -2846,6 +2997,9 @@ fn process_price_file(
         );
         if lookup.status == "matched" {
             matched_rows += 1;
+            if let Some(pricing_price) = lookup.price {
+                record_matched_candidates(&mut matched_candidates, item, pricing_price);
+            }
         } else {
             exceptions.push(PriceCheckException {
                 file_path: input_path.display().to_string(),
@@ -2898,6 +3052,7 @@ fn process_price_file(
     }
     let total_rows = rows.len();
     let output_path = output_path_for(input_path, output_dir);
+    let writeback_rows = build_writeback_rows(order_sheet, mapping, &matched_candidates);
     let mut report = PriceCheckReport {
         input_path: input_path.display().to_string(),
         output_path: output_path.display().to_string(),
@@ -2909,7 +3064,14 @@ fn process_price_file(
         exception_rows: total_rows.saturating_sub(matched_rows),
         coverage: ratio(matched_rows, total_rows),
     };
-    crate::pricing_writer::write_price_result(&output_path, &report)?;
+    crate::pricing_writer::write_price_result(
+        input_path,
+        &output_path,
+        &mapping.order_sheet,
+        mapping.order_header_row,
+        order_price_column,
+        &writeback_rows,
+    )?;
     report.output_path = output_path.display().to_string();
     Ok(report)
 }
@@ -3110,7 +3272,16 @@ fn output_path_for(input_path: &Path, output_dir: &Path) -> PathBuf {
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("未命名");
-    let file_name = format!("{}_核价结果.xlsx", safe_file_name(stem));
+    let extension = match input_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("xlsm") => "xlsm",
+        _ => "xlsx",
+    };
+    let file_name = format!("{}_核价结果.{extension}", safe_file_name(stem));
     output_dir.join(file_name)
 }
 
@@ -3272,6 +3443,30 @@ mod tests {
     fn country_conflict_is_not_silently_resolved() {
         let country = normalize_country_fields("US", "Canada", "美国");
         assert!(country.conflict);
+    }
+
+    #[test]
+    fn order_country_identity_uses_only_enabled_fields() {
+        let english_only = PricingRules {
+            country_identity: vec![CountryIdentity::English],
+        };
+        let country = normalize_order_country_fields("US", "Canada", "美国", &english_only);
+        assert_eq!(country.code, "CA");
+        assert!(!country.conflict);
+
+        let iso2_only = PricingRules {
+            country_identity: vec![CountryIdentity::Iso2],
+        };
+        let country = normalize_order_country_fields("US", "Canada", "加拿大", &iso2_only);
+        assert_eq!(country.code, "US");
+        assert!(!country.conflict);
+
+        let chinese_only = PricingRules {
+            country_identity: vec![CountryIdentity::Chinese],
+        };
+        let country = normalize_order_country_fields("US", "Canada", "加拿大", &chinese_only);
+        assert_eq!(country.code, "CA");
+        assert!(!country.conflict);
     }
 
     #[test]
@@ -3754,11 +3949,100 @@ mod tests {
             original_price: Some(10.0),
             source_sheet: "订单".to_string(),
             source_row,
+            sku_pair_priority: 0,
         };
         let rows = aggregate_lines(&[line(1.0, 2), line(2.0, 3)]);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].total_quantity, 3.0);
         assert_eq!(rows[0].source_rows, vec![2, 3]);
+    }
+
+    #[test]
+    fn writeback_uses_the_highest_priority_successful_sku_group() {
+        let mut candidates = HashMap::new();
+        let item = |priority| AggregatedOrderSku {
+            source_assignments: vec![SourceAssignment {
+                source_row: 2,
+                sku_pair_priority: priority,
+            }],
+            ..AggregatedOrderSku::default()
+        };
+
+        record_matched_candidates(&mut candidates, &item(2), 30.0);
+        record_matched_candidates(&mut candidates, &item(0), 10.0);
+        record_matched_candidates(&mut candidates, &item(1), 20.0);
+
+        let selected = candidates.get(&2).expect("matched candidate");
+        assert_eq!(selected.sku_pair_priority, 0);
+        assert_eq!(selected.pricing_price, 10.0);
+    }
+
+    #[test]
+    fn writeback_falls_back_to_later_success_and_counts_all_order_rows() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("SKU"),
+                    CellValue::string("TOTAL Price"),
+                ],
+                vec![
+                    CellValue::string(" ORDER-1 "),
+                    CellValue::string("INVALID"),
+                    CellValue::string("12"),
+                ],
+                vec![
+                    CellValue::string("ORDER-2"),
+                    CellValue::string(""),
+                    CellValue::string("8"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-2"),
+                    CellValue::string("20"),
+                ],
+                vec![
+                    CellValue::string(""),
+                    CellValue::string("SKU-3"),
+                    CellValue::string("6"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-4"),
+                    CellValue::string("9"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            order_price_column: Some(3),
+            ..PriceCheckMapping::default()
+        };
+        let candidates = HashMap::from([(
+            4,
+            MatchedRowCandidate {
+                sku_pair_priority: 1,
+                pricing_price: 18.0,
+            },
+        )]);
+
+        let rows = build_writeback_rows(&sheet, &mapping, &candidates);
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.source_row, row.order_row_count))
+                .collect::<Vec<_>>(),
+            vec![(2, 3), (3, 1), (4, 0), (6, 0)]
+        );
+        assert!(!rows[0].matched);
+        assert_eq!(rows[2].sku_pair_priority, Some(1));
+        assert_eq!(rows[2].pricing_price, Some(18.0));
+        assert_eq!(rows[2].price_difference, Some(-2.0));
+        assert!(!rows[3].matched);
+        assert_eq!(rows[3].pricing_price, None);
+        assert_eq!(rows[3].price_difference, None);
     }
 
     #[test]
@@ -4072,6 +4356,10 @@ mod tests {
         let output_dir = Path::new("output");
         let output_path = output_path_for(Path::new("orders/order.xlsx"), output_dir);
         assert_eq!(output_path, output_dir.join("order_核价结果.xlsx"));
+        assert_eq!(
+            output_path_for(Path::new("orders/order.xlsm"), output_dir),
+            output_dir.join("order_核价结果.xlsm")
+        );
     }
 
     #[test]

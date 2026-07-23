@@ -23,6 +23,8 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) performance: PerformanceRules,
     #[serde(default)]
+    pub(crate) pricing: PricingRules,
+    #[serde(default)]
     pub(crate) automation: AutomationRules,
     #[serde(default)]
     pub(crate) filename_rules: FilenameRules,
@@ -32,6 +34,35 @@ pub(crate) struct Config {
     pub(crate) pricing_fields: PricingFieldRules,
     #[serde(default)]
     pub(crate) output: OutputRules,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CountryIdentity {
+    #[serde(rename = "iso2")]
+    Iso2,
+    English,
+    Chinese,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct PricingRules {
+    #[serde(default = "default_country_identity")]
+    pub(crate) country_identity: Vec<CountryIdentity>,
+}
+
+impl PricingRules {
+    pub(crate) fn uses_country_identity(&self, identity: CountryIdentity) -> bool {
+        self.country_identity.contains(&identity)
+    }
+}
+
+impl Default for PricingRules {
+    fn default() -> Self {
+        Self {
+            country_identity: default_country_identity(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -283,6 +314,14 @@ fn default_header_scan_rows() -> usize {
     20
 }
 
+fn default_country_identity() -> Vec<CountryIdentity> {
+    vec![
+        CountryIdentity::Iso2,
+        CountryIdentity::English,
+        CountryIdentity::Chinese,
+    ]
+}
+
 fn default_auto_run() -> bool {
     true
 }
@@ -434,6 +473,9 @@ pub(crate) fn load_config(path: &Path) -> Result<Config> {
 }
 
 fn prepare_config(config: &mut Config) -> Result<()> {
+    if config.pricing.country_identity.is_empty() {
+        anyhow::bail!("pricing.country_identity 至少需要保留一个国家身份字段");
+    }
     config.filename_rules.compiled_date_patterns =
         compile_indexed_patterns(&config.filename_rules.date_patterns)?;
     config.filename_rules.compiled_manual_confirm_patterns = compile_patterns(
@@ -561,6 +603,65 @@ mod tests {
         let config = load_config(&path).expect("checked-in extraction config must be valid");
         assert!(config.pricing_fields.order.contains_key("sku"));
         assert!(config.pricing_fields.pricing.contains_key("fixed_price"));
+        assert_eq!(config.pricing.country_identity.len(), 3);
+    }
+
+    #[test]
+    fn country_identity_defaults_to_all_supported_fields() {
+        let config: Config = serde_json::from_str("{}").expect("empty config must use defaults");
+
+        assert!(config.pricing.uses_country_identity(CountryIdentity::Iso2));
+        assert!(
+            config
+                .pricing
+                .uses_country_identity(CountryIdentity::English)
+        );
+        assert!(
+            config
+                .pricing
+                .uses_country_identity(CountryIdentity::Chinese)
+        );
+    }
+
+    #[test]
+    fn country_identity_accepts_a_supported_subset() {
+        let mut config: Config =
+            serde_json::from_str(r#"{"pricing":{"country_identity":["english"]}}"#)
+                .expect("supported identity must parse");
+
+        prepare_config(&mut config).expect("supported identity must validate");
+        assert!(!config.pricing.uses_country_identity(CountryIdentity::Iso2));
+        assert!(
+            config
+                .pricing
+                .uses_country_identity(CountryIdentity::English)
+        );
+        assert!(
+            !config
+                .pricing
+                .uses_country_identity(CountryIdentity::Chinese)
+        );
+    }
+
+    #[test]
+    fn country_identity_rejects_an_empty_list() {
+        let mut config: Config = serde_json::from_str(r#"{"pricing":{"country_identity":[]}}"#)
+            .expect("empty identity list is valid JSON");
+
+        let error = prepare_config(&mut config).expect_err("empty identity list must fail");
+        assert!(format!("{error:#}").contains("pricing.country_identity 至少需要保留一个"));
+    }
+
+    #[test]
+    fn country_identity_rejects_unknown_values() {
+        let error = serde_json::from_str::<Config>(r#"{"pricing":{"country_identity":["iso3"]}}"#)
+            .expect_err("unknown identity must fail");
+
+        let message = error.to_string();
+        assert!(message.contains("iso3"));
+        assert!(message.contains("iso2"));
+        assert!(message.contains("english"));
+        assert!(message.contains("chinese"));
     }
 
     #[test]

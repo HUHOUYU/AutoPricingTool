@@ -15,6 +15,7 @@ rust_xlsxwriter = "0.93"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha1 = "0.10"
+umya-spreadsheet = "=3.0.1"
 zip = "4.6"
 
 [build-dependencies]

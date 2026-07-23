@@ -1,284 +1,399 @@
-use crate::pricing::{PriceCheckReport, PriceCheckRow};
-use anyhow::Result;
-use rust_xlsxwriter::{Format, Workbook, Worksheet};
+use crate::pricing::PriceWritebackRow;
+use anyhow::{Context, Result, anyhow};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) fn write_price_result(path: &Path, report: &PriceCheckReport) -> Result<()> {
-    if let Some(parent) = path.parent() {
+const WRITEBACK_HEADERS: [&str; 3] = ["核价价格", "价格差异", "订单行数"];
+const WRITEBACK_COLUMN_COUNT: u32 = WRITEBACK_HEADERS.len() as u32;
+const SUPPORTED_WRITEBACK_EXTENSIONS: [&str; 2] = ["xlsx", "xlsm"];
+const LEGACY_EXCEL_EXTENSIONS: [&str; 2] = ["xls", "xlsb"];
+
+pub(crate) fn write_price_result(
+    source_path: &Path,
+    output_path: &Path,
+    order_sheet_name: &str,
+    header_row: usize,
+    total_price_column: usize,
+    rows: &[PriceWritebackRow],
+) -> Result<()> {
+    validate_source_format(source_path)?;
+    if total_price_column == 0 {
+        return Err(anyhow!(
+            "订单 Sheet 找不到 TOTAL Price/原始价格列，未生成结果文件"
+        ));
+    }
+    if header_row == 0 {
+        return Err(anyhow!("订单 Sheet 表头行无效，未生成结果文件"));
+    }
+    if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut workbook = Workbook::new();
-    write_result_sheet(&mut workbook, report)?;
-    write_exception_sheet(&mut workbook, report)?;
-    write_mapping_sheet(&mut workbook, report)?;
-    workbook.save(path)?;
-    Ok(())
-}
 
-fn write_result_sheet(workbook: &mut Workbook, report: &PriceCheckReport) -> Result<()> {
-    let worksheet = workbook.add_worksheet();
-    worksheet.set_name("核价结果")?;
-    let headers = [
-        "订单号",
-        "国家二字码",
-        "英文国家名",
-        "中文国家名",
-        "物流方式",
-        "原始SKU",
-        "匹配SKU",
-        "合计数量",
-        "原始价格",
-        "核价价格",
-        "价格差异",
-        "核价状态",
-        "异常说明",
-        "订单来源Sheet",
-        "核价来源Sheet",
-        "原始行号",
-    ];
-    write_headers(worksheet, &headers)?;
-    let sku_header_format = Format::new()
-        .set_bold()
-        .set_background_color("#E89B82")
-        .set_font_color("#FFFFFF");
-    worksheet.write_string_with_format(0, 5, headers[5], &sku_header_format)?;
-    worksheet.write_string_with_format(0, 6, headers[6], &sku_header_format)?;
-    for (row_index, row) in report.rows.iter().enumerate() {
-        write_result_row(worksheet, row_index as u32 + 1, row)?;
+    let mut workbook = umya_spreadsheet::reader::xlsx::read(source_path)
+        .with_context(|| format!("读取源工作簿失败: {}", source_path.display()))?;
+    workbook
+        .sheet_by_name(order_sheet_name)
+        .with_context(|| format!("找不到订单 Sheet: {order_sheet_name}"))?;
+
+    let insert_column = u32::try_from(total_price_column + 1)
+        .map_err(|_| anyhow!("TOTAL Price 列号超出支持范围"))?;
+    workbook.insert_new_column_by_index(order_sheet_name, insert_column, WRITEBACK_COLUMN_COUNT);
+
+    let worksheet = workbook
+        .sheet_by_name_mut(order_sheet_name)
+        .with_context(|| format!("找不到订单 Sheet: {order_sheet_name}"))?;
+    copy_column_layout(
+        worksheet,
+        u32::try_from(total_price_column)?,
+        insert_column,
+        WRITEBACK_COLUMN_COUNT,
+    );
+
+    for (offset, header) in WRITEBACK_HEADERS.iter().enumerate() {
+        let column = insert_column + offset as u32;
+        worksheet
+            .cell_mut((column, u32::try_from(header_row)?))
+            .set_value(*header);
     }
-    worksheet.set_freeze_panes(1, 0)?;
-    worksheet.autofilter(0, 0, report.rows.len() as u32, (headers.len() - 1) as u16)?;
-    Ok(())
+    for row in rows {
+        let row_number = u32::try_from(row.source_row)?;
+        if let Some(value) = row.pricing_price {
+            worksheet
+                .cell_mut((insert_column, row_number))
+                .set_value_number(value);
+        }
+        if let Some(value) = row.price_difference {
+            worksheet
+                .cell_mut((insert_column + 1, row_number))
+                .set_value_number(value);
+        }
+        worksheet
+            .cell_mut((insert_column + 2, row_number))
+            .set_value_number(row.order_row_count as f64);
+    }
+
+    let temporary_path = sibling_work_path(output_path, "tmp");
+    let backup_path = sibling_work_path(output_path, "bak");
+    let write_result = umya_spreadsheet::writer::xlsx::write(&workbook, &temporary_path)
+        .with_context(|| format!("写入临时结果文件失败: {}", temporary_path.display()));
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(error);
+    }
+    replace_output_file(&temporary_path, output_path, &backup_path)
 }
 
-fn write_result_row(worksheet: &mut Worksheet, row: u32, value: &PriceCheckRow) -> Result<()> {
-    let sku_format = Format::new().set_background_color("#FBE5DD");
-    let strings = [
-        &value.business_order_number,
-        &value.country_code,
-        &value.country_english_name,
-        &value.country_chinese_name,
-        &value.shipping_method,
-        &value.original_sku,
-        &value.matched_sku,
-    ];
-    for (column, text) in strings.iter().enumerate() {
-        if column == 5 || column == 6 {
-            worksheet.write_string_with_format(row, column as u16, text.as_str(), &sku_format)?;
-        } else {
-            worksheet.write_string(row, column as u16, text.as_str())?;
+pub(crate) fn validate_source_format(source_path: &Path) -> Result<()> {
+    let extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if SUPPORTED_WRITEBACK_EXTENSIONS.contains(&extension.as_str()) {
+        return Ok(());
+    }
+    if LEGACY_EXCEL_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(anyhow!(
+            "原表回写不支持 .{extension}，请先将源文件另存为 .xlsx 后重试"
+        ));
+    }
+    Err(anyhow!(
+        "原表回写仅支持 .xlsx/.xlsm，请先将源文件另存为 .xlsx 后重试"
+    ))
+}
+
+fn copy_column_layout(
+    worksheet: &mut umya_spreadsheet::Worksheet,
+    source_column: u32,
+    first_target_column: u32,
+    target_count: u32,
+) {
+    let source_dimension = worksheet
+        .column_dimension_by_number(source_column)
+        .map(|column| {
+            (
+                column.width(),
+                column.hidden(),
+                column.best_fit(),
+                column.auto_width(),
+                column.style().clone(),
+            )
+        });
+    if let Some((width, hidden, best_fit, auto_width, style)) = source_dimension {
+        for column_number in first_target_column..first_target_column + target_count {
+            worksheet
+                .column_dimension_by_number_mut(column_number)
+                .set_width(width)
+                .set_hidden(hidden)
+                .set_best_fit(best_fit)
+                .set_auto_width(auto_width)
+                .set_style(style.clone());
         }
     }
-    worksheet.write_number(row, 7, value.total_quantity)?;
-    write_optional_number(worksheet, row, 8, value.original_price)?;
-    write_optional_number(worksheet, row, 9, value.pricing_price)?;
-    write_optional_number(worksheet, row, 10, value.price_difference)?;
-    worksheet.write_string(row, 11, &value.status)?;
-    worksheet.write_string(row, 12, &value.exception_reason)?;
-    worksheet.write_string(row, 13, &value.order_source_sheet)?;
-    worksheet.write_string(row, 14, &value.pricing_source_sheet)?;
-    worksheet.write_string(row, 15, &value.source_rows)?;
-    Ok(())
-}
 
-fn write_exception_sheet(workbook: &mut Workbook, report: &PriceCheckReport) -> Result<()> {
-    let worksheet = workbook.add_worksheet();
-    worksheet.set_name("核价异常")?;
-    let headers = ["文件", "Sheet", "原始行号", "异常类型", "异常说明"];
-    write_headers(worksheet, &headers)?;
-    for (row_index, error) in report.exceptions.iter().enumerate() {
-        let row = row_index as u32 + 1;
-        worksheet.write_string(row, 0, &error.file_path)?;
-        worksheet.write_string(row, 1, &error.sheet_name)?;
-        if let Some(source_row) = error.source_row {
-            worksheet.write_number(row, 2, source_row as f64)?;
-        }
-        worksheet.write_string(row, 3, &error.kind)?;
-        worksheet.write_string(row, 4, &error.message)?;
-    }
-    worksheet.set_freeze_panes(1, 0)?;
-    worksheet.autofilter(
-        0,
-        0,
-        report.exceptions.len() as u32,
-        (headers.len() - 1) as u16,
-    )?;
-    Ok(())
-}
-
-fn write_mapping_sheet(workbook: &mut Workbook, report: &PriceCheckReport) -> Result<()> {
-    let worksheet = workbook.add_worksheet();
-    worksheet.set_name("字段映射")?;
-    let headers = ["映射项目", "实际值"];
-    write_headers(worksheet, &headers)?;
-    let mapping = &report.mapping;
-    let rows = [
-        ("订单 Sheet", mapping.order_sheet.clone()),
-        ("订单表头行", mapping.order_header_row.to_string()),
-        (
-            "订单号列",
-            optional_column(mapping.business_order_number_column),
-        ),
-        ("国家二字码列", optional_column(mapping.country_code_column)),
-        (
-            "英文国家列",
-            optional_column(mapping.country_english_column),
-        ),
-        (
-            "中文国家列",
-            optional_column(mapping.country_chinese_column),
-        ),
-        (
-            "物流方式列",
-            optional_column(mapping.shipping_method_column),
-        ),
-        ("订单价格列", optional_column(mapping.order_price_column)),
-        ("核价 Sheet", mapping.pricing_sheet.clone()),
-        ("核价表头行", mapping.pricing_header_row.to_string()),
-        (
-            "数量表头行",
-            mapping
-                .pricing_quantity_header_row
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
-        ),
-        ("核价 SKU 列", mapping.pricing_sku_column.to_string()),
-        ("核价国家列", mapping.pricing_country_column.to_string()),
-        (
-            "核价物流列",
-            optional_column(mapping.pricing_shipping_method_column),
-        ),
-        (
-            "数量档位列",
-            mapping
-                .quantity_tier_columns
-                .iter()
-                .map(|tier| format!("{}=>{}", tier.quantity, tier.column))
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
-        (
-            "SKU/数量配对",
-            mapping
-                .sku_qty_pairs
-                .iter()
-                .map(|pair| format!("{}=>{}", pair.sku_column, pair.qty_column))
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
-        ("试算覆盖率", format!("{:.1}%", report.coverage * 100.0)),
-    ];
-    for (row_index, (key, value)) in rows.iter().enumerate() {
-        let row = row_index as u32 + 1;
-        if key.contains("SKU") {
-            let sku_format = Format::new().set_background_color("#FBE5DD");
-            worksheet.write_string_with_format(row, 0, *key, &sku_format)?;
-            worksheet.write_string_with_format(row, 1, value, &sku_format)?;
-        } else {
-            worksheet.write_string(row, 0, *key)?;
-            worksheet.write_string(row, 1, value)?;
+    let highest_row = worksheet.highest_row();
+    for row_number in 1..=highest_row {
+        for column_number in first_target_column..first_target_column + target_count {
+            worksheet.copy_cell_styling((source_column, row_number), (column_number, row_number));
         }
     }
-    worksheet.set_freeze_panes(1, 0)?;
-    worksheet.autofilter(0, 0, rows.len() as u32, 1)?;
-    Ok(())
 }
 
-fn write_headers(worksheet: &mut Worksheet, headers: &[&str]) -> Result<()> {
-    let format = Format::new().set_bold().set_background_color("#D9EAF7");
-    for (column, header) in headers.iter().enumerate() {
-        worksheet.write_string_with_format(0, column as u16, *header, &format)?;
-        worksheet.set_column_width(column as u16, if column == 13 { 30.0 } else { 18.0 })?;
-    }
-    Ok(())
+fn sibling_work_path(output_path: &Path, marker: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let stem = output_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("核价结果");
+    let extension = output_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("xlsx");
+    output_path.with_file_name(format!(
+        ".{stem}.{marker}-{}-{nonce}.{extension}",
+        std::process::id()
+    ))
 }
 
-fn write_optional_number(
-    worksheet: &mut Worksheet,
-    row: u32,
-    column: u16,
-    value: Option<f64>,
+fn replace_output_file(
+    temporary_path: &Path,
+    output_path: &Path,
+    backup_path: &Path,
 ) -> Result<()> {
-    if let Some(value) = value {
-        worksheet.write_number(row, column, value)?;
+    let had_existing_output = output_path.exists();
+    if had_existing_output {
+        fs::rename(output_path, backup_path)
+            .with_context(|| format!("暂存已有结果文件失败: {}", output_path.display()))?;
+    }
+    if let Err(error) = fs::rename(temporary_path, output_path) {
+        if had_existing_output {
+            let _ = fs::rename(backup_path, output_path);
+        }
+        let _ = fs::remove_file(temporary_path);
+        return Err(error).with_context(|| format!("替换结果文件失败: {}", output_path.display()));
+    }
+    if had_existing_output {
+        let _ = fs::remove_file(backup_path);
     }
     Ok(())
-}
-
-fn optional_column(value: Option<usize>) -> String {
-    value.map(|column| column.to_string()).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pricing::{PriceCheckMapping, PriceTierColumn, SkuQtyPair};
-    use regex::Regex;
+    use rust_xlsxwriter::{Format, Workbook};
     use std::io::Read;
 
-    #[test]
-    fn result_workbook_marks_sku_columns_and_mapping_rows() -> Result<()> {
-        let path = std::env::temp_dir().join(format!(
-            "auto-pricing-sku-style-{}-{}.xlsx",
+    fn unique_path(name: &str, extension: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "auto-pricing-{name}-{}-{}.{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_nanos()
-        ));
-        let report = PriceCheckReport {
-            rows: vec![PriceCheckRow {
-                original_sku: "RAW-1".to_string(),
-                matched_sku: "MATCH-1".to_string(),
-                ..PriceCheckRow::default()
-            }],
-            mapping: PriceCheckMapping {
-                pricing_sku_column: 1,
-                pricing_country_column: 2,
-                sku_qty_pairs: vec![SkuQtyPair {
-                    sku_column: 3,
-                    qty_column: 4,
-                    ..SkuQtyPair::default()
-                }],
-                quantity_tier_columns: vec![PriceTierColumn {
-                    quantity: 1,
-                    column: 3,
-                    header: "1".to_string(),
-                }],
-                ..PriceCheckMapping::default()
-            },
-            ..PriceCheckReport::default()
-        };
-        write_price_result(&path, &report)?;
+                .as_nanos(),
+            extension
+        ))
+    }
 
+    fn create_source_workbook(path: &Path) -> Result<()> {
+        let mut workbook = Workbook::new();
         {
-            let file = fs::File::open(&path)?;
-            let mut archive = zip::ZipArchive::new(file)?;
-            let mut result_xml = String::new();
-            archive
-                .by_name("xl/worksheets/sheet1.xml")?
-                .read_to_string(&mut result_xml)?;
-            let styled = |cell: &str| {
-                Regex::new(&format!(r#"<c r="{cell}" s="\d+""#))
-                    .expect("regex")
-                    .is_match(&result_xml)
-            };
-            assert!(styled("F1") && styled("G1") && styled("F2") && styled("G2"));
-
-            let mut mapping_xml = String::new();
-            archive
-                .by_name("xl/worksheets/sheet3.xml")?
-                .read_to_string(&mut mapping_xml)?;
-            for cell in ["A13", "B13", "A17", "B17"] {
-                assert!(
-                    Regex::new(&format!(r#"<c r="{cell}" s="\d+""#))
-                        .expect("regex")
-                        .is_match(&mapping_xml)
-                );
+            let order = workbook.add_worksheet();
+            order.set_name("订单")?;
+            let price_format = Format::new()
+                .set_num_format("0.00")
+                .set_background_color("#FFF2CC")
+                .set_border(rust_xlsxwriter::FormatBorder::Thin);
+            order.set_column_width(2, 16)?;
+            order.write_string(0, 0, "订单号")?;
+            order.write_string(0, 1, "SKU")?;
+            order.write_string_with_format(0, 2, "TOTAL Price", &price_format)?;
+            order.write_string(0, 3, "Name")?;
+            order.write_string(0, 4, "Address")?;
+            for (row, (order_number, price)) in
+                [("ORDER-1", 10.0), ("ORDER-1", 12.0), ("ORDER-1", 8.0)]
+                    .into_iter()
+                    .enumerate()
+            {
+                let row = row as u32 + 1;
+                order.write_string(row, 0, order_number)?;
+                order.write_string(row, 1, format!("SKU-{row}"))?;
+                order.write_number_with_format(row, 2, price, &price_format)?;
+                order.write_string(row, 3, format!("Name-{row}"))?;
+                order.write_string(row, 4, format!("Address-{row}"))?;
             }
+            order.write_formula(4, 3, "=C2+C3")?;
+            order.merge_range(5, 3, 5, 4, "merged", &Format::new())?;
         }
-        fs::remove_file(path)?;
+        {
+            let pricing = workbook.add_worksheet();
+            pricing.set_name("核价")?;
+            pricing.write_string(0, 0, "保留内容")?;
+            pricing.write_formula(1, 0, "=订单!C2")?;
+            pricing.write_formula(2, 0, "=订单!D2")?;
+        }
+        workbook.save(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn writes_back_into_a_copy_and_preserves_workbook_structure() -> Result<()> {
+        let source_path = unique_path("writeback-source", "xlsx");
+        let output_path = unique_path("writeback-output", "xlsx");
+        create_source_workbook(&source_path)?;
+        let source_before = fs::read(&source_path)?;
+        let source_modified_before = fs::metadata(&source_path)?.modified()?;
+        fs::write(&output_path, b"existing-result")?;
+        write_price_result(
+            &source_path,
+            &output_path,
+            "订单",
+            1,
+            3,
+            &[
+                PriceWritebackRow {
+                    source_row: 2,
+                    pricing_price: Some(11.0),
+                    price_difference: Some(1.0),
+                    order_row_count: 3,
+                    matched: true,
+                    ..PriceWritebackRow::default()
+                },
+                PriceWritebackRow {
+                    source_row: 3,
+                    pricing_price: Some(9.0),
+                    price_difference: Some(-3.0),
+                    order_row_count: 0,
+                    matched: true,
+                    ..PriceWritebackRow::default()
+                },
+                PriceWritebackRow {
+                    source_row: 4,
+                    order_row_count: 0,
+                    ..PriceWritebackRow::default()
+                },
+            ],
+        )?;
+
+        assert_eq!(fs::read(&source_path)?, source_before);
+        assert_eq!(
+            fs::metadata(&source_path)?.modified()?,
+            source_modified_before
+        );
+        let output = umya_spreadsheet::reader::xlsx::read(&output_path)?;
+        assert_eq!(output.sheet_count(), 2);
+        let order = output.sheet_by_name("订单")?;
+        assert_eq!(order.value("D1"), "核价价格");
+        assert_eq!(order.value("E1"), "价格差异");
+        assert_eq!(order.value("F1"), "订单行数");
+        assert_eq!(order.value("G1"), "Name");
+        assert_eq!(order.value("H1"), "Address");
+        assert_eq!(order.value("D2"), "11");
+        assert_eq!(order.value("E2"), "1");
+        assert_eq!(order.value("F2"), "3");
+        assert_eq!(order.value("E3"), "-3");
+        assert_eq!(order.value("F3"), "0");
+        assert_eq!(order.value("D4"), "");
+        assert_eq!(order.value("E4"), "");
+        assert_eq!(order.value("F4"), "0");
+        assert_eq!(order.value("G2"), "Name-1");
+        assert_eq!(order.cell("G5").expect("formula cell").formula(), "C2+C3");
+        assert!(
+            order
+                .merge_cells()
+                .iter()
+                .any(|range| range.range() == "G6:H6")
+        );
+        assert_eq!(order.style("C2"), order.style("D2"));
+        assert_eq!(order.style("C2"), order.style("E2"));
+        assert_eq!(order.style("C2"), order.style("F2"));
+        assert_eq!(output.sheet_by_name("核价")?.value("A1"), "保留内容");
+        assert_eq!(
+            output
+                .sheet_by_name("核价")?
+                .cell("A3")
+                .expect("cross-sheet formula")
+                .formula(),
+            "'订单'!G2"
+        );
+
+        fs::remove_file(source_path)?;
+        fs::remove_file(output_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_legacy_formats_without_creating_output() {
+        for extension in LEGACY_EXCEL_EXTENSIONS {
+            let source_path = unique_path("legacy-source", extension);
+            let output_path = unique_path("legacy-output", "xlsx");
+            let error = write_price_result(&source_path, &output_path, "订单", 1, 3, &[])
+                .expect_err("legacy format must be rejected");
+            assert!(error.to_string().contains("另存为 .xlsx"));
+            assert!(!output_path.exists());
+        }
+    }
+
+    #[test]
+    fn missing_total_price_column_does_not_create_output() -> Result<()> {
+        let source_path = unique_path("missing-price-source", "xlsx");
+        let output_path = unique_path("missing-price-output", "xlsx");
+        create_source_workbook(&source_path)?;
+
+        let error = write_price_result(&source_path, &output_path, "订单", 1, 0, &[])
+            .expect_err("missing price column must fail");
+
+        assert!(error.to_string().contains("TOTAL Price"));
+        assert!(!output_path.exists());
+        fs::remove_file(source_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_vba_project_when_writing_xlsm() -> Result<()> {
+        let source_path = unique_path("macro-source", "xlsm");
+        let output_path = unique_path("macro-output", "xlsm");
+        create_source_workbook(&source_path)?;
+        add_fake_vba_project(&source_path)?;
+
+        write_price_result(&source_path, &output_path, "订单", 1, 3, &[])?;
+
+        let file = fs::File::open(&output_path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        let mut macro_bytes = Vec::new();
+        archive
+            .by_name("xl/vbaProject.bin")?
+            .read_to_end(&mut macro_bytes)?;
+        assert_eq!(macro_bytes, b"fake-vba-project");
+
+        fs::remove_file(source_path)?;
+        fs::remove_file(output_path)?;
+        Ok(())
+    }
+
+    fn add_fake_vba_project(path: &Path) -> Result<()> {
+        let source = fs::read(path)?;
+        let cursor = std::io::Cursor::new(source);
+        let mut input = zip::ZipArchive::new(cursor)?;
+        let rewritten = unique_path("macro-rewritten", "xlsm");
+        let file = fs::File::create(&rewritten)?;
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        for index in 0..input.len() {
+            let mut entry = input.by_index(index)?;
+            writer.start_file(entry.name(), options)?;
+            std::io::copy(&mut entry, &mut writer)?;
+        }
+        writer.start_file("xl/vbaProject.bin", options)?;
+        use std::io::Write;
+        writer.write_all(b"fake-vba-project")?;
+        writer.finish()?;
+        fs::rename(rewritten, path)?;
         Ok(())
     }
 }
