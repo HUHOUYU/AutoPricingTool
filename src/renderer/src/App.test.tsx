@@ -176,7 +176,10 @@ describe("AutoPricingTool cyber workstation", () => {
     FakeExcelPreviewWorker.instances = [];
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete (HTMLElement.prototype as { scrollIntoView?: HTMLElement["scrollIntoView"] }).scrollIntoView;
+  });
 
   it("imports a dropped workbook and starts analysis", async () => {
     const api = createDesktopAPI();
@@ -593,6 +596,7 @@ describe("AutoPricingTool cyber workstation", () => {
 
   it("runs pricing after analysis completes", async () => {
     const api = createDesktopAPI();
+    api.getRuntimeConfig = vi.fn(async () => ({ recent_output_dir: "C:\\output", recent_config_path: "C:\\config.json", auto_reveal_manual_result: true }));
     installAPI(api);
     render(<App />);
     openFileProcessing();
@@ -611,6 +615,7 @@ describe("AutoPricingTool cyber workstation", () => {
       api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ totalRows: 14, matchedRows: 14, exceptionRows: 0 }] });
     });
     expect(screen.getByRole("progressbar", { name: "批次处理完成 100%" })).toHaveAttribute("aria-valuenow", "100");
+    expect(useUIStore.getState().activeTab).toBe("pending");
     expect(screen.getByText(/1\/1 个文件/)).toBeInTheDocument();
     expect(screen.queryByText(/1\/14 个文件/)).not.toBeInTheDocument();
   });
@@ -672,6 +677,9 @@ describe("AutoPricingTool cyber workstation", () => {
 
   it("keeps risky files for confirmation and continues only the confirmed file", async () => {
     const api = createDesktopAPI();
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    api.getRuntimeConfig = vi.fn(async () => ({ recent_output_dir: "C:\\output", recent_config_path: "C:\\config.json", auto_reveal_manual_result: true }));
     api.listExcelFiles = vi.fn(async () => ({
       files: ["C:\\orders\\order.xlsx", "C:\\orders\\other.xlsx"],
       skippedTemporary: 0,
@@ -717,6 +725,8 @@ describe("AutoPricingTool cyber workstation", () => {
       api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ totalRows: 14, matchedRows: 14, exceptionRows: 0 }] });
     });
     await waitFor(() => expect(screen.getByRole("button", { name: "完成1" })).toHaveClass("is-active"));
+    await waitFor(() => expect(screen.getByText("order.xlsx").closest("tr")).toHaveClass("is-result-revealed"));
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
 
     fireEvent.click(screen.getByRole("button", { name: "待确认1" }));
     fireEvent.click(await screen.findByRole("button", { name: "详情" }));
@@ -728,6 +738,32 @@ describe("AutoPricingTool cyber workstation", () => {
       api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ totalRows: 8, matchedRows: 8, exceptionRows: 0 }] });
     });
     await waitFor(() => expect(screen.getByRole("button", { name: "完成2" })).toHaveClass("is-active"));
+  });
+
+  it("keeps the confirmation tab active after a manual file result by default", async () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    dropFiles([new File(["xlsx"], "manual.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("manual.xlsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
+    const analysis = createAnalysis("C:\\orders\\manual.xlsx");
+    analysis.fileName = "manual.xlsx";
+    analysis.requiresConfirmation = true;
+    analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: analysis });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "待确认1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认并处理此文件" }));
+    await act(async () => {
+      api.emit({ type: "price-file-result", path: "C:\\orders\\manual.xlsx", status: "completed", totalRows: 7, matchedRows: 7, exceptionRows: 0 });
+      api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ totalRows: 7, matchedRows: 7, exceptionRows: 0 }] });
+    });
+    await waitFor(() => expect(useUIStore.getState().activeTab).toBe("confirm"));
   });
 
   it("shows automation reasons in the file detail drawer", async () => {
@@ -1249,10 +1285,15 @@ describe("AutoPricingTool cyber workstation", () => {
     expect((screen.getByRole("textbox", { name: "JSON 源码" }) as HTMLTextAreaElement).value).toContain('"processing_workers": 7');
     fireEvent.change(workers, { target: { value: "4" } });
     fireEvent.click(screen.getByRole("checkbox", { name: "模板匹配优先" }));
+    const revealSwitch = screen.getByRole("switch", { name: "手动处理后定位结果" });
+    expect(revealSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(revealSwitch);
+    expect(revealSwitch).toHaveAttribute("aria-checked", "true");
     const source = screen.getByRole("textbox", { name: "JSON 源码" }) as HTMLTextAreaElement;
     expect(source.value).toContain('"extension_field"');
     expect(source.value).toContain('"processing_workers": 4');
     expect(source.value).toContain('"template_match_priority": true');
+    expect(source.value).toContain('"auto_reveal_manual_result": true');
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(api.saveConfigDocument).toHaveBeenCalledWith(expect.objectContaining({
       path: "C:\\config.json",

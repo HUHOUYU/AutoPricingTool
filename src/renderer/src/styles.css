@@ -1686,6 +1686,11 @@ html:not(.dark) .cyber-file-table th { background: #edf4fb; }
 .column-resizer.is-resizing::after { top: 0; height: 100vh; background: var(--cyber-primary); box-shadow: 0 0 0 1px color-mix(in srgb, var(--cyber-primary) 18%, transparent); opacity: 1; transform: none; }
 .cyber-file-table tbody tr:not(.cyber-detail):hover { background: rgb(23 103 255 / 7%); }
 .cyber-file-table tbody tr.is-selected { background: rgb(23 103 255 / 10%); }
+.cyber-file-table tbody tr.is-result-revealed > td { animation: result-row-reveal 1.8s ease-out; }
+@keyframes result-row-reveal {
+  0%, 35% { background: color-mix(in srgb, var(--cyber-primary) 22%, var(--cyber-panel)); box-shadow: inset 0 0 0 1px var(--cyber-primary); }
+  100% { background: transparent; box-shadow: inset 0 0 0 1px transparent; }
+}
 .cyber-file-table .checkbox-column { width: 38px !important; min-width: 38px; max-width: 38px; padding: 0; text-align: center; }
 .cyber-file-table th.checkbox-column > [role="checkbox"],
 .cyber-file-table td.checkbox-column > [role="checkbox"] {

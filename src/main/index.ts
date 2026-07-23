@@ -21,6 +21,7 @@ type RuntimeConfig = {
   recent_output_dir?: string;
   recent_config_path?: string;
   archive_standard_files?: boolean;
+  auto_reveal_manual_result?: boolean;
 };
 
 type ExportFileRowsPayload = {
@@ -156,6 +157,12 @@ function validateRuntimeConfigUpdate(value: unknown): RuntimeConfig {
       throw new TypeError("运行配置字段 archive_standard_files 必须是布尔值");
     }
     result.archive_standard_files = input.archive_standard_files;
+  }
+  if (input.auto_reveal_manual_result !== undefined) {
+    if (typeof input.auto_reveal_manual_result !== "boolean") {
+      throw new TypeError("运行配置字段 auto_reveal_manual_result 必须是布尔值");
+    }
+    result.auto_reveal_manual_result = input.auto_reveal_manual_result;
   }
   return result;
 }
@@ -415,6 +422,26 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
     }
   }
 
+  const pricing = config.pricing as Record<string, unknown> | undefined;
+  if (pricing?.country_identity !== undefined) {
+    const countryIdentity = pricing.country_identity;
+    const allowedCountryIdentities = new Set(["iso2", "english", "chinese"]);
+    if (!Array.isArray(countryIdentity)) {
+      issues.push({ path: "pricing.country_identity", message: "必须是数组" });
+    } else if (countryIdentity.length === 0) {
+      issues.push({ path: "pricing.country_identity", message: "至少需要保留一个国家身份字段" });
+    } else {
+      countryIdentity.forEach((value, index) => {
+        if (typeof value !== "string" || !allowedCountryIdentities.has(value)) {
+          issues.push({
+            path: `pricing.country_identity[${index}]`,
+            message: "仅支持 iso2、english、chinese",
+          });
+        }
+      });
+    }
+  }
+
   const runtime = config.runtime as Record<string, unknown> | undefined;
   if (runtime) {
     for (const key of ["recent_input_dir", "recent_output_dir", "recent_config_path"] as const) {
@@ -425,6 +452,9 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
     }
     if (runtime.archive_standard_files !== undefined && typeof runtime.archive_standard_files !== "boolean") {
       issues.push({ path: "runtime.archive_standard_files", message: "必须是布尔值" });
+    }
+    if (runtime.auto_reveal_manual_result !== undefined && typeof runtime.auto_reveal_manual_result !== "boolean") {
+      issues.push({ path: "runtime.auto_reveal_manual_result", message: "必须是布尔值" });
     }
   }
   return { valid: issues.length === 0, issues };
@@ -600,6 +630,9 @@ function runtimeFromConfig(config: Record<string, unknown>): RuntimeConfig {
     ...(typeof input.archive_standard_files === "boolean"
       ? { archive_standard_files: input.archive_standard_files }
       : {}),
+    ...(typeof input.auto_reveal_manual_result === "boolean"
+      ? { auto_reveal_manual_result: input.auto_reveal_manual_result }
+      : {}),
   };
 }
 
@@ -653,6 +686,7 @@ async function readRuntimeConfig(): Promise<RuntimeConfig> {
     recent_output_dir: "",
     recent_config_path: defaultExtractConfigPath,
     archive_standard_files: false,
+    auto_reveal_manual_result: false,
   };
 
   try {

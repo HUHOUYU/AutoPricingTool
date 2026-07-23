@@ -5,6 +5,7 @@ export type RuntimeConfig = {
   recent_output_dir?: string;
   recent_config_path?: string;
   archive_standard_files?: boolean;
+  auto_reveal_manual_result?: boolean;
 };
 
 export type WindowPreferences = {

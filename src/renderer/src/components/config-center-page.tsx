@@ -227,6 +227,17 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
             <fieldset>
               <legend>界面偏好</legend>
               <div className="config-switch-row">
+                <span><strong>手动处理后定位结果</strong><small>仅手动确认单个文件时，处理完成后跳转到对应状态并定位文件</small></span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="手动处理后定位结果"
+                  aria-checked={Boolean(runtime.auto_reveal_manual_result)}
+                  className="config-switch"
+                  onClick={() => updateField("runtime", "auto_reveal_manual_result", !Boolean(runtime.auto_reveal_manual_result))}
+                ><i /></button>
+              </div>
+              <div className="config-switch-row">
                 <span><strong>记住窗口大小</strong><small>开启后记录当前宽高，下次启动时自动恢复</small></span>
                 <button
                   type="button"

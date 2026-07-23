@@ -68,7 +68,8 @@
     "recent_input_dir": "",
     "recent_output_dir": "",
     "recent_config_path": "",
-    "archive_standard_files": false
+    "archive_standard_files": false,
+    "auto_reveal_manual_result": false
   },
   "fields": {},
   "pricing_fields": {

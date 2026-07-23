@@ -156,6 +156,7 @@ const DETAIL_SIDEBAR_KEYBOARD_STEP = 16;
 const DETAIL_PREVIEW_MIN_WIDTH = 360;
 const DETAIL_CONTENT_HORIZONTAL_PADDING = 28;
 const DETAIL_CONTENT_RESIZER_WIDTH = 12;
+const RESULT_REVEAL_HIGHLIGHT_MS = 1_800;
 
 function detailDrawerBounds(viewportWidth = typeof window === "undefined" ? 1440 : window.innerWidth): { min: number; max: number } {
   const max = Math.max(320, viewportWidth - DETAIL_DRAWER_EDGE_GAP);
@@ -460,6 +461,9 @@ export function App(): React.JSX.Element {
   const [importSourceMode, setImportSourceMode] = useState<ImportSourceMode>("file");
   const [outputDir, setOutputDir] = useState("");
   const [configPath, setConfigPath] = useState("");
+  const [autoRevealManualResult, setAutoRevealManualResult] = useState(false);
+  const [pendingResultRevealPath, setPendingResultRevealPath] = useState<string | null>(null);
+  const [highlightedResultPath, setHighlightedResultPath] = useState<string | null>(null);
   const { activeTab, setActiveTab, activePage, setActivePage, theme, toggleTheme, sidebarCollapsed, toggleSidebar } = useUIStore();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -495,6 +499,7 @@ export function App(): React.JSX.Element {
   const analysesRef = useRef<Record<string, PriceAnalysisFile>>({});
   const mappingsRef = useRef<Record<string, PriceCheckMapping>>({});
   const confirmedPathsRef = useRef<Set<string>>(new Set());
+  const resultRevealHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRunRequestedRef = useRef(false);
   const mappingValidationVersionsRef = useRef<Record<string, number>>({});
   const mappingValidationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -643,12 +648,13 @@ export function App(): React.JSX.Element {
         setInputDir(config.recent_input_dir ?? "");
         setOutputDir(config.recent_output_dir ?? "");
         setConfigPath(config.recent_config_path ?? "");
+        setAutoRevealManualResult(config.auto_reveal_manual_result ?? false);
       })
       .catch((error: unknown) => appendLog("读取运行配置失败：" + String(error), "warning"));
     return () => {
       active = false;
     };
-  }, [appendLog]);
+  }, [activePage, appendLog]);
 
   const handleProcessorEvent = useCallback(
     (event: ProcessorEvent): void => {
@@ -745,8 +751,9 @@ export function App(): React.JSX.Element {
           completedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
         };
         setResults((current) => ({ ...current, [event.path]: result }));
-        if (confirmedPathsRef.current.has(event.path)) {
+        if (autoRevealManualResult && confirmedPathsRef.current.has(event.path)) {
           setActiveTab(event.status === "completed" && (event.exceptionRows ?? 0) === 0 ? "success" : "error");
+          setPendingResultRevealPath(event.path);
         }
         appendLog(
           event.status === "completed"
@@ -833,7 +840,7 @@ export function App(): React.JSX.Element {
         appendLog(event.userMessage ?? event.message, "error");
       }
     },
-    [appendLog, sendMappingValidation],
+    [appendLog, autoRevealManualResult, sendMappingValidation, setActiveTab],
   );
 
   useEffect(() => {
@@ -1536,6 +1543,45 @@ export function App(): React.JSX.Element {
     : tableRows.map((row) => ({ row, virtualRow: null }));
   const hasTableRows = renderedTableRows.length > 0;
 
+  useEffect(() => {
+    if (!pendingResultRevealPath) return undefined;
+    const targetIndex = visibleFiles.indexOf(pendingResultRevealPath);
+    if (targetIndex < 0) return undefined;
+    const targetPageIndex = Math.floor(targetIndex / pageSize);
+    if (pageIndex !== targetPageIndex) {
+      setPageIndex(targetPageIndex);
+      return undefined;
+    }
+
+    const pageRowIndex = targetIndex - targetPageIndex * pageSize;
+    if (shouldVirtualizeRows) rowVirtualizer.scrollToIndex(pageRowIndex, { align: "center" });
+    let retryFrame = 0;
+    const revealRow = (): boolean => {
+      const rows = tableScrollRef.current?.querySelectorAll<HTMLTableRowElement>("tr[data-file-path]") ?? [];
+      const row = Array.from(rows).find((candidate) => candidate.dataset.filePath === pendingResultRevealPath);
+      if (!row) return false;
+      row.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
+      setHighlightedResultPath(pendingResultRevealPath);
+      setPendingResultRevealPath(null);
+      if (resultRevealHighlightTimerRef.current) clearTimeout(resultRevealHighlightTimerRef.current);
+      resultRevealHighlightTimerRef.current = setTimeout(() => {
+        setHighlightedResultPath((current) => current === pendingResultRevealPath ? null : current);
+      }, RESULT_REVEAL_HIGHLIGHT_MS);
+      return true;
+    };
+    const frame = requestAnimationFrame(() => {
+      if (!revealRow()) retryFrame = requestAnimationFrame(revealRow);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      if (retryFrame) cancelAnimationFrame(retryFrame);
+    };
+  }, [pageIndex, pageSize, pendingResultRevealPath, shouldVirtualizeRows, visibleFiles]);
+
+  useEffect(() => () => {
+    if (resultRevealHighlightTimerRef.current) clearTimeout(resultRevealHighlightTimerRef.current);
+  }, []);
+
   const completedDotCount = progressDotCounts.success + progressDotCounts.warning + progressDotCounts.error;
   const progressPercent = progress.total > 0
     ? Math.round(Math.min(1, progress.current / progress.total) * 100)
@@ -2050,7 +2096,7 @@ export function App(): React.JSX.Element {
                     const currentMapping = mappings[path] ?? analysis?.suggestedMapping ?? null;
                     const status = fileStatusByPath[path];
                     return <Fragment key={path}>
-                      <tr ref={virtualRow ? rowVirtualizer.measureElement : undefined} data-index={virtualRow?.index} className={selectedSet.has(path) ? "is-selected" : ""} style={virtualRow ? { position: "absolute", transform: `translateY(${virtualRow.start}px)`, width: "100%", display: "table", tableLayout: "fixed" } : undefined}>
+                      <tr ref={virtualRow ? rowVirtualizer.measureElement : undefined} data-index={virtualRow?.index} data-file-path={path} className={`${selectedSet.has(path) ? "is-selected" : ""}${highlightedResultPath === path ? " is-result-revealed" : ""}`.trim()} style={virtualRow ? { position: "absolute", transform: `translateY(${virtualRow.start}px)`, width: "100%", display: "table", tableLayout: "fixed" } : undefined}>
                         {[...row.getLeftVisibleCells(), ...row.getCenterVisibleCells(), ...row.getRightVisibleCells()].map((cell) => {
                           const pinnedClass = cell.column.getIsPinned() ? " is-pinned-column" : "";
                           const pinnedStyle = filePinnedStyle(cell.column);
