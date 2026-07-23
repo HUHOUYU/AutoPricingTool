@@ -1,4 +1,5 @@
 mod config;
+mod country_catalog;
 mod error_mapper;
 mod excel_engine;
 mod extractor;

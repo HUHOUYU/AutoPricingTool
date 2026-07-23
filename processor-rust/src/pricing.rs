@@ -1,4 +1,5 @@
 use crate::config::{Config, FieldRule, load_config};
+use crate::country_catalog::COUNTRY_ALIASES;
 use crate::excel_engine::{CellValue, SheetData};
 use crate::ipc::{config_path, emit};
 use crate::reader::read_workbook_for_processing;
@@ -2523,47 +2524,6 @@ fn country_lookup(value: &str) -> Option<(&'static str, &'static str, &'static s
         })
 }
 
-const COUNTRY_ALIASES: &[(&str, &str, &str, &[&str])] = &[
-    (
-        "US",
-        "United States",
-        "美国",
-        &["USA", "United States of America"],
-    ),
-    (
-        "GB",
-        "United Kingdom",
-        "英国",
-        &["UK", "Great Britain", "England"],
-    ),
-    ("AU", "Australia", "澳大利亚", &["澳洲"]),
-    ("CA", "Canada", "加拿大", &[]),
-    ("DE", "Germany", "德国", &["Deutschland"]),
-    ("FR", "France", "法国", &[]),
-    ("IT", "Italy", "意大利", &[]),
-    ("ES", "Spain", "西班牙", &[]),
-    ("NL", "Netherlands", "荷兰", &["Holland"]),
-    ("BE", "Belgium", "比利时", &[]),
-    ("AT", "Austria", "奥地利", &[]),
-    ("CH", "Switzerland", "瑞士", &[]),
-    ("SE", "Sweden", "瑞典", &[]),
-    ("NO", "Norway", "挪威", &[]),
-    ("DK", "Denmark", "丹麦", &[]),
-    ("FI", "Finland", "芬兰", &[]),
-    ("IE", "Ireland", "爱尔兰", &[]),
-    ("NZ", "New Zealand", "新西兰", &[]),
-    ("JP", "Japan", "日本", &[]),
-    ("KR", "South Korea", "韩国", &["Korea"]),
-    ("SG", "Singapore", "新加坡", &[]),
-    ("MY", "Malaysia", "马来西亚", &[]),
-    ("TH", "Thailand", "泰国", &[]),
-    ("PH", "Philippines", "菲律宾", &[]),
-    ("VN", "Vietnam", "越南", &[]),
-    ("CN", "China", "中国", &[]),
-    ("MX", "Mexico", "墨西哥", &[]),
-    ("BR", "Brazil", "巴西", &[]),
-];
-
 fn split_country_shipping(value: &str) -> (String, String) {
     let trimmed = value.trim();
     if country_lookup(trimmed).is_some() {
@@ -3274,6 +3234,38 @@ mod tests {
         assert_eq!(country.english, "United States");
         assert_eq!(country.chinese, "美国");
         assert!(!country.conflict);
+    }
+
+    #[test]
+    fn country_catalog_covers_sheet1_countries_and_business_aliases() {
+        assert_eq!(COUNTRY_ALIASES.len(), 244);
+
+        let aruba = normalize_country_fields("", "", "阿鲁巴");
+        assert_eq!(
+            (
+                aruba.code.as_str(),
+                aruba.english.as_str(),
+                aruba.chinese.as_str()
+            ),
+            ("AW", "Aruba", "阿鲁巴")
+        );
+
+        let united_states = normalize_country_fields("", "America", "");
+        assert_eq!(
+            (
+                united_states.code.as_str(),
+                united_states.english.as_str(),
+                united_states.chinese.as_str()
+            ),
+            ("US", "United States", "美国")
+        );
+    }
+
+    #[test]
+    fn country_catalog_rejects_source_placeholders_as_codes() {
+        assert!(country_lookup("160").is_none());
+        assert!(country_lookup("NULL").is_none());
+        assert!(country_lookup("YT_n").is_none());
     }
 
     #[test]
