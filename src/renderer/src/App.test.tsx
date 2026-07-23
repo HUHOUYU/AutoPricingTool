@@ -803,6 +803,13 @@ describe("AutoPricingTool cyber workstation", () => {
     const separator = screen.getByRole("separator", { name: "调整详情抽屉宽度" });
     const initialWidth = Number.parseFloat(dialog.style.width);
     expect(initialWidth).toBe(Math.min(Math.round(window.innerWidth * 0.9), window.innerWidth - 72));
+    const originalViewportWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: originalViewportWidth + 200 });
+    fireEvent(window, new Event("resize"));
+    expect(Number.parseFloat(dialog.style.width)).toBe(Math.round((originalViewportWidth + 200) * 0.9));
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: originalViewportWidth });
+    fireEvent(window, new Event("resize"));
+    expect(Number.parseFloat(dialog.style.width)).toBe(initialWidth);
     fireEvent.keyDown(separator, { key: "ArrowLeft" });
     expect(Number.parseFloat(dialog.style.width)).toBe(initialWidth + 24);
     fireEvent.pointerDown(separator, { clientX: 500 });

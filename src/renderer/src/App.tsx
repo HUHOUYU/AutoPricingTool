@@ -490,6 +490,7 @@ export function App(): React.JSX.Element {
   const [analysisCompletedToken, setAnalysisCompletedToken] = useState(0);
   const detailDrawerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const detailSidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const detailDrawerCustomWidthRef = useRef(false);
   const detailDrawerWidthRef = useRef(detailDrawerWidth);
   const analysesRef = useRef<Record<string, PriceAnalysisFile>>({});
   const mappingsRef = useRef<Record<string, PriceCheckMapping>>({});
@@ -553,7 +554,7 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     const handleWindowResize = (): void => {
       setDetailDrawerViewportWidth(window.innerWidth);
-      setDetailDrawerWidth((current) => clampDetailDrawerWidth(current));
+      setDetailDrawerWidth((current) => detailDrawerCustomWidthRef.current ? clampDetailDrawerWidth(current) : defaultDetailDrawerWidth());
     };
     const handlePointerMove = (event: PointerEvent): void => {
       const drawerResize = detailDrawerResizeRef.current;
@@ -1656,6 +1657,7 @@ export function App(): React.JSX.Element {
 
   const startDetailDrawerResize = (event: React.PointerEvent<HTMLDivElement>): void => {
     event.preventDefault();
+    detailDrawerCustomWidthRef.current = true;
     detailDrawerResizeRef.current = { startX: event.clientX, startWidth: detailDrawerWidth };
   };
 
@@ -1667,7 +1669,14 @@ export function App(): React.JSX.Element {
     if (event.key === "End") nextWidth = currentDetailDrawerBounds.max;
     if (nextWidth === null) return;
     event.preventDefault();
+    detailDrawerCustomWidthRef.current = true;
     setDetailDrawerWidth(clampDetailDrawerWidth(nextWidth));
+  };
+
+  const openDetailDrawer = (path: string): void => {
+    detailDrawerCustomWidthRef.current = false;
+    setDetailDrawerWidth(defaultDetailDrawerWidth());
+    setDetailPath(path);
   };
 
   const startDetailSidebarResize = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -2058,7 +2067,7 @@ export function App(): React.JSX.Element {
                            if (cell.column.id === "issue") { const issue = result?.status === "completed" && (result.exceptionRows ?? 0) > 0 ? `${result.exceptionRows} 行存在异常` : result?.message ?? analysis?.automationDecision.reasons[0] ?? analysis?.issues[0] ?? "—"; return <td key={cell.id} className={`issue-cell${pinnedClass}`} style={pinnedStyle} title={issue}>{issue}</td>; }
                            if (cell.column.id === "rows") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{result ? `${result.matchedRows ?? 0}/${result.totalRows ?? 0}` : "—"}</td>;
                            if (cell.column.id === "completedAt") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{result?.completedAt ?? importedAt[path] ?? "—"}</td>;
-                           return <td key={cell.id} className={`action-column${pinnedClass}`} style={pinnedStyle}><button type="button" onClick={() => setDetailPath(path)}>详情</button>{result?.outputPath ? <button type="button" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}{activeTab === "pending" ? <button type="button" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X /></button> : null}</td>;
+                           return <td key={cell.id} className={`action-column${pinnedClass}`} style={pinnedStyle}><button type="button" onClick={() => openDetailDrawer(path)}>详情</button>{result?.outputPath ? <button type="button" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}{activeTab === "pending" ? <button type="button" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X /></button> : null}</td>;
                         })}
                       </tr>
                     </Fragment>;
