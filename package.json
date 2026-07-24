@@ -10,7 +10,7 @@
     "electron_mirror": "https://npmmirror.com/mirrors/electron/"
   },
   "scripts": {
-    "predev": "pnpm run build:processor && electron --version",
+    "predev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_processor.ps1 -Dev",
     "dev": "electron-vite dev",
     "build:processor:dev": "powershell -ExecutionPolicy Bypass -File scripts/build_processor.ps1 -Dev",
     "build:processor": "powershell -ExecutionPolicy Bypass -File scripts/build_processor.ps1",

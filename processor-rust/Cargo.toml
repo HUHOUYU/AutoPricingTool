@@ -21,6 +21,9 @@ zip = "4.6"
 [build-dependencies]
 winres = "0.1.12"
 
+[profile.dev]
+opt-level = 1
+
 [profile.release]
 opt-level = 3
 lto = "fat"

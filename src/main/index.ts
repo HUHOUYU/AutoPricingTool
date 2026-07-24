@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import { availableParallelism, userInfo } from "node:os";
 import { assertTrustedIpcSender, isTrustedRendererUrl } from "./security";
 import { readExcelPreviewFile } from "./excel-preview-file";
+import { resolveLocalProcessorExecutable } from "./processor-path";
 import {
   initialWindowSize,
   MIN_WINDOW_SIZE,
@@ -946,7 +947,7 @@ function getProcessorExecutable(): string {
     }
   }
 
-  return join(rootDir, "processor-rust", "target", "release", executableName);
+  return resolveLocalProcessorExecutable(rootDir, app.isPackaged, executableName);
 }
 
 function ensureProcessor(): ChildProcessWithoutNullStreams {
