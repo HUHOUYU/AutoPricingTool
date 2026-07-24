@@ -6,7 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const WRITEBACK_HEADERS: [&str; 3] = ["核价[财务]", "金额差", "数量"];
 const WRITEBACK_COLUMN_COUNT: u32 = WRITEBACK_HEADERS.len() as u32;
-const WRITEBACK_BACKGROUND_COLOR: &str = "C6EFCE";
+const WRITEBACK_BACKGROUND_COLOR: &str = "D8EEE0";
+const WRITEBACK_ALERT_BACKGROUND_COLOR: &str = "FFC7CE";
+const WRITEBACK_FONT_COLOR: &str = "FF000000";
 const SUPPORTED_WRITEBACK_EXTENSIONS: [&str; 2] = ["xlsx", "xlsm"];
 const LEGACY_EXCEL_EXTENSIONS: [&str; 2] = ["xls", "xlsb"];
 
@@ -50,18 +52,17 @@ pub(crate) fn write_price_result(
         insert_column,
         WRITEBACK_COLUMN_COUNT,
     );
-    apply_writeback_background(
-        worksheet,
-        insert_column,
-        WRITEBACK_COLUMN_COUNT,
-        u32::try_from(header_row)?,
-    );
-
     for (offset, header) in WRITEBACK_HEADERS.iter().enumerate() {
         let column = insert_column + offset as u32;
         worksheet
             .cell_mut((column, u32::try_from(header_row)?))
             .set_value(*header);
+        apply_writeback_value_style(
+            worksheet,
+            column,
+            u32::try_from(header_row)?,
+            WRITEBACK_BACKGROUND_COLOR,
+        );
     }
     for row in rows {
         let row_number = u32::try_from(row.source_row)?;
@@ -69,15 +70,41 @@ pub(crate) fn write_price_result(
             worksheet
                 .cell_mut((insert_column, row_number))
                 .set_value_number(value);
+            apply_writeback_value_style(
+                worksheet,
+                insert_column,
+                row_number,
+                WRITEBACK_BACKGROUND_COLOR,
+            );
         }
         if let Some(value) = row.price_difference {
             worksheet
                 .cell_mut((insert_column + 1, row_number))
                 .set_value_number(value);
+            apply_writeback_value_style(
+                worksheet,
+                insert_column + 1,
+                row_number,
+                if value > 0.0 {
+                    WRITEBACK_ALERT_BACKGROUND_COLOR
+                } else {
+                    WRITEBACK_BACKGROUND_COLOR
+                },
+            );
         }
         worksheet
             .cell_mut((insert_column + 2, row_number))
             .set_value_number(row.quantity as f64);
+        apply_writeback_value_style(
+            worksheet,
+            insert_column + 2,
+            row_number,
+            if row.quantity_mismatch {
+                WRITEBACK_ALERT_BACKGROUND_COLOR
+            } else {
+                WRITEBACK_BACKGROUND_COLOR
+            },
+        );
     }
 
     let temporary_path = sibling_work_path(output_path, "tmp");
@@ -110,20 +137,18 @@ pub(crate) fn validate_source_format(source_path: &Path) -> Result<()> {
     ))
 }
 
-fn apply_writeback_background(
+fn apply_writeback_value_style(
     worksheet: &mut umya_spreadsheet::Worksheet,
-    first_column: u32,
-    column_count: u32,
-    header_row: u32,
+    column: u32,
+    row: u32,
+    background_color: &str,
 ) {
-    let highest_row = worksheet.highest_row().max(header_row);
-    for row_number in header_row..=highest_row {
-        for column_number in first_column..first_column + column_count {
-            worksheet
-                .style_mut((column_number, row_number))
-                .set_background_color(WRITEBACK_BACKGROUND_COLOR);
-        }
-    }
+    let style = worksheet.style_mut((column, row));
+    style.set_background_color(background_color);
+    style
+        .font_mut()
+        .color_mut()
+        .set_argb_str(WRITEBACK_FONT_COLOR);
 }
 
 fn copy_column_layout(
@@ -143,7 +168,8 @@ fn copy_column_layout(
                 column.style().clone(),
             )
         });
-    if let Some((width, hidden, best_fit, auto_width, style)) = source_dimension {
+    if let Some((width, hidden, best_fit, auto_width, mut style)) = source_dimension {
+        style.remove_fill();
         for column_number in first_target_column..first_target_column + target_count {
             worksheet
                 .column_dimension_by_number_mut(column_number)
@@ -159,6 +185,9 @@ fn copy_column_layout(
     for row_number in 1..=highest_row {
         for column_number in first_target_column..first_target_column + target_count {
             worksheet.copy_cell_styling((source_column, row_number), (column_number, row_number));
+            worksheet
+                .style_mut((column_number, row_number))
+                .remove_fill();
         }
     }
 }
@@ -284,6 +313,7 @@ mod tests {
                     pricing_price: Some(11.0),
                     price_difference: Some(1.0),
                     quantity: 3,
+                    quantity_mismatch: true,
                     matched: true,
                     ..PriceWritebackRow::default()
                 },
@@ -332,14 +362,41 @@ mod tests {
                 .iter()
                 .any(|range| range.range() == "G6:H6")
         );
-        for cell in ["D1", "E1", "F1", "D2", "E2", "F2", "D4", "E4", "F4"] {
+        for cell in ["D1", "E1", "F1", "D2", "E3", "F3", "F4"] {
             assert_eq!(
                 order
                     .style(cell)
                     .background_color()
                     .expect("writeback background")
                     .argb_str(),
-                "FFC6EFCE"
+                "FFD8EEE0"
+            );
+        }
+        for cell in ["D4", "E4"] {
+            assert!(
+                order.style(cell).background_color().is_none(),
+                "{cell} should not have a background"
+            );
+        }
+        for cell in ["E2", "F2"] {
+            assert_eq!(
+                order
+                    .style(cell)
+                    .background_color()
+                    .expect("alert background")
+                    .argb_str(),
+                "FFFFC7CE"
+            );
+        }
+        for cell in ["D1", "E2", "E3", "F2", "F3"] {
+            assert_eq!(
+                order
+                    .style(cell)
+                    .font()
+                    .expect("writeback font")
+                    .color()
+                    .argb_str(),
+                "FF000000"
             );
         }
         assert_eq!(

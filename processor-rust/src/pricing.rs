@@ -122,8 +122,10 @@ const FIXED_PRICE_ALIASES: &[&str] = &["productshippingvattax", "shippingvattax"
 pub(crate) struct SkuQtyPair {
     pub(crate) sku_column: usize,
     pub(crate) qty_column: usize,
+    pub(crate) merged_qty_column: usize,
     pub(crate) sku_header: String,
     pub(crate) qty_header: String,
+    pub(crate) merged_qty_header: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -335,6 +337,7 @@ pub(crate) struct PriceWritebackRow {
     pub(crate) pricing_price: Option<f64>,
     pub(crate) price_difference: Option<f64>,
     pub(crate) quantity: usize,
+    pub(crate) quantity_mismatch: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -614,7 +617,7 @@ fn validate_price_mapping(
         return Err(errors);
     };
     if !mapping_is_complete(mapping) {
-        errors.push("订单号、国家、SKU/数量或核价档位等必需字段不完整".to_string());
+        errors.push("订单号、国家、数量/SKU/合并数量或核价档位等必需字段不完整".to_string());
     }
     if mapping.order_header_row == 0 || mapping.order_header_row > order_sheet.rows.len() {
         errors.push("订单表头行超出有效范围".to_string());
@@ -651,7 +654,7 @@ fn validate_price_mapping(
         mapping
             .sku_qty_pairs
             .iter()
-            .flat_map(|pair| [pair.sku_column, pair.qty_column]),
+            .flat_map(|pair| [pair.qty_column, pair.sku_column, pair.merged_qty_column]),
     )
     .collect::<Vec<_>>();
     for (identity, column) in [
@@ -685,12 +688,29 @@ fn validate_price_mapping(
     {
         errors.push("核价字段列或数量档位超出有效范围".to_string());
     }
-    if mapping
-        .sku_qty_pairs
-        .iter()
-        .any(|pair| pair.sku_column == pair.qty_column)
-    {
-        errors.push("SKU 列与数量列不能相同".to_string());
+    if mapping.sku_qty_pairs.iter().any(|pair| {
+        pair.sku_column == pair.qty_column
+            || pair.sku_column == pair.merged_qty_column
+            || pair.qty_column == pair.merged_qty_column
+    }) {
+        errors.push("原始数量、SKU 与合并数量列不能相同".to_string());
+    }
+    if mapping.sku_qty_pairs.iter().any(|pair| {
+        pair.qty_column + 1 != pair.sku_column || pair.sku_column + 1 != pair.merged_qty_column
+    }) {
+        errors.push("SKU 组必须按“原始数量、SKU、合并数量”三列连续排列".to_string());
+    }
+    let recognized_quantity_columns = configured_matching_columns(
+        order_sheet,
+        mapping.order_header_row.saturating_sub(1),
+        order_field_rule(config, "quantity"),
+        QTY_ALIASES,
+    );
+    if mapping.sku_qty_pairs.iter().any(|pair| {
+        !recognized_quantity_columns.contains(&pair.qty_column.saturating_sub(1))
+            || !recognized_quantity_columns.contains(&pair.merged_qty_column.saturating_sub(1))
+    }) {
+        errors.push("SKU 前后的原始数量列和合并数量列必须为有效数量列".to_string());
     }
     let mut order_unique_columns = HashSet::new();
     if order_mapped_columns
@@ -1131,7 +1151,7 @@ fn decide_automation(
     if mapping.is_none() {
         reasons.push("没有生成可用字段映射".to_string());
     } else if !mapping.is_some_and(mapping_is_complete) {
-        reasons.push("订单号、国家、SKU/数量或核价档位等必需字段不完整".to_string());
+        reasons.push("订单号、国家、数量/SKU/合并数量或核价档位等必需字段不完整".to_string());
     }
     if mapping.is_some_and(|value| value.order_sheet == value.pricing_sheet) {
         reasons.push("订单 Sheet 与核价 Sheet 不能相同".to_string());
@@ -1223,11 +1243,13 @@ fn sku_qty_columns_summary(mapping: &PriceCheckMapping) -> String {
         .iter()
         .map(|pair| {
             format!(
-                "SKU {}{} / 数量 {}{}",
+                "原始数量 {}{} / SKU {}{} / 合并数量 {}{}",
+                excel_column_label(pair.qty_column),
+                header_suffix(&pair.qty_header),
                 excel_column_label(pair.sku_column),
                 header_suffix(&pair.sku_header),
-                excel_column_label(pair.qty_column),
-                header_suffix(&pair.qty_header)
+                excel_column_label(pair.merged_qty_column),
+                header_suffix(&pair.merged_qty_header)
             )
         })
         .collect::<Vec<_>>()
@@ -1558,8 +1580,14 @@ fn match_header_template(
                 mapping.sku_qty_pairs = vec![SkuQtyPair {
                     sku_column: order_fields[2].column,
                     qty_column: order_fields[3].column,
+                    merged_qty_column: order_fields[2].column + 1,
                     sku_header: order_fields[2].header.clone(),
                     qty_header: order_fields[3].header.clone(),
+                    merged_qty_header: sheet_cell_text(
+                        order_sheet,
+                        order.header_row,
+                        order_fields[2].column + 1,
+                    ),
                 }];
                 mapping.pricing_sku_column = pricing_fields[0].column;
                 mapping.pricing_country_column = pricing_fields[1].column;
@@ -1650,15 +1678,16 @@ fn infer_order_candidate_with_config(
             );
             raw_pairs = pair_sku_qty_columns(header, &product_name_columns, &qty_columns);
         }
-        let mut pairs =
+        let mut detected_pairs =
             deduplicate_equivalent_sku_qty_pairs(sheet, header_idx + 1, &raw_pairs, order_col);
-        pairs.sort_by_key(|pair| {
+        detected_pairs.sort_by_key(|pair| {
             (
                 std::cmp::Reverse(pair.sku_column.max(pair.qty_column)),
                 std::cmp::Reverse(pair.sku_column),
             )
         });
-        if order_col.is_none() && pairs.is_empty() {
+        let pairs = highest_sku_quantity_group(header, &detected_pairs, &qty_columns);
+        if order_col.is_none() && detected_pairs.is_empty() {
             continue;
         }
         let (country_code, country_en, country_cn) =
@@ -1682,26 +1711,34 @@ fn infer_order_candidate_with_config(
         let (valid_rows, country_rows) = score_order_rows(
             sheet,
             header_idx + 1,
-            &pairs,
+            &detected_pairs,
             order_col,
             [country_code, country_en, country_cn],
         );
         if valid_rows == 0
             || order_col.is_none()
-            || pairs.is_empty()
+            || detected_pairs.is_empty()
             || country_code.is_none() && country_en.is_none() && country_cn.is_none()
         {
             continue;
         }
         let mut notes = Vec::new();
-        if raw_pairs.len() > pairs.len() {
+        if raw_pairs.len() > detected_pairs.len() {
             notes.push(format!(
-                "忽略 {} 组数据完全重复的 SKU/数量字段",
-                raw_pairs.len() - pairs.len()
+                "忽略 {} 组数据完全重复的数量/SKU/合并数量字段",
+                raw_pairs.len() - detected_pairs.len()
             ));
         }
-        if pairs.len() > 1 {
-            notes.push(format!("识别到 {} 组 SKU/数量字段", pairs.len()));
+        if detected_pairs.len() > 1 {
+            notes.push(format!(
+                "识别到 {} 组数量/SKU/合并数量字段，仅使用最高优先级 SKU 组",
+                detected_pairs.len()
+            ));
+        }
+        if pairs.is_empty() {
+            notes.push(
+                "最高优先级 SKU 未形成“数量 / SKU / 合并数量”三列组，需要人工确认".to_string(),
+            );
         }
         if country_code.is_none() || country_en.is_none() || country_cn.is_none() {
             notes.push("国家三要素未全部识别，运行时会尝试补全并记录冲突".to_string());
@@ -1709,7 +1746,7 @@ fn infer_order_candidate_with_config(
         if using_product_name && !pairs.is_empty() {
             notes.push("未识别到 SKU，使用产品名称作为临时匹配键".to_string());
         }
-        let field_score = (pairs.len() as f64 * 24.0)
+        let field_score = (detected_pairs.len() as f64 * 24.0)
             + if order_col.is_some() { 24.0 } else { 0.0 }
             + if country_code.is_some() { 8.0 } else { 0.0 }
             + if country_en.is_some() { 6.0 } else { 0.0 }
@@ -2396,8 +2433,13 @@ fn pair_sku_qty_columns(
         pairs.push(SkuQtyPair {
             sku_column: sku_column + 1,
             qty_column: qty_column + 1,
+            merged_qty_column: sku_column + 2,
             sku_header: header[sku_column].text(),
             qty_header: header[qty_column].text(),
+            merged_qty_header: header
+                .get(sku_column + 1)
+                .map(CellValue::text)
+                .unwrap_or_default(),
         });
     }
     pairs.sort_by_key(|pair| {
@@ -2407,6 +2449,39 @@ fn pair_sku_qty_columns(
         )
     });
     pairs
+}
+
+fn highest_sku_quantity_group(
+    header: &[CellValue],
+    detected_pairs: &[SkuQtyPair],
+    qty_columns: &[usize],
+) -> Vec<SkuQtyPair> {
+    let Some(highest_sku_column) = detected_pairs
+        .iter()
+        .map(|pair| pair.sku_column.saturating_sub(1))
+        .max()
+    else {
+        return Vec::new();
+    };
+    let Some(qty_column) = qty_columns
+        .iter()
+        .copied()
+        .filter(|column| *column < highest_sku_column)
+        .max()
+    else {
+        return Vec::new();
+    };
+    if !qty_columns.contains(&(highest_sku_column + 1)) {
+        return Vec::new();
+    }
+    vec![SkuQtyPair {
+        sku_column: highest_sku_column + 1,
+        qty_column: qty_column + 1,
+        merged_qty_column: highest_sku_column + 2,
+        sku_header: header[highest_sku_column].text(),
+        qty_header: header[qty_column].text(),
+        merged_qty_header: header[highest_sku_column + 1].text(),
+    }]
 }
 
 fn deduplicate_equivalent_sku_qty_pairs(
@@ -2749,7 +2824,7 @@ fn highest_priority_sku_qty_pair(mapping: &PriceCheckMapping) -> Option<(usize, 
         .sku_qty_pairs
         .iter()
         .enumerate()
-        .max_by_key(|(_, pair)| (pair.sku_column.max(pair.qty_column), pair.sku_column))
+        .max_by_key(|(_, pair)| (pair.merged_qty_column, pair.sku_column))
 }
 
 fn read_order_lines(
@@ -3064,6 +3139,11 @@ fn build_writeback_rows(
                 0
             }
         };
+        let merged_quantity = row
+            .get(pair.merged_qty_column.saturating_sub(1))
+            .and_then(parse_number)
+            .filter(|value| *value >= 0.0 && value.fract() == 0.0)
+            .map(|value| value as usize);
         let original_price = mapping
             .order_price_column
             .and_then(|column| row.get(column.saturating_sub(1)))
@@ -3076,6 +3156,7 @@ fn build_writeback_rows(
             price_difference: candidate
                 .and_then(|value| original_price.map(|original| value.pricing_price - original)),
             quantity,
+            quantity_mismatch: merged_quantity != Some(quantity),
         });
     }
     rows
@@ -3687,7 +3768,7 @@ mod tests {
         let order = infer_order_candidate(&order_sheet).expect("order candidate");
         let pricing = infer_pricing_candidate(&pricing_sheet).expect("pricing candidate");
         assert_eq!(order.sheet_name, "订单数据");
-        assert_eq!(order.sku_qty_pairs.len(), 1);
+        assert!(order.sku_qty_pairs.is_empty());
         assert_eq!(order.country_coverage, 1.0);
         assert_eq!(pricing.sheet_name, "核价表");
         assert_eq!(
@@ -3735,8 +3816,10 @@ mod tests {
             sku_qty_pairs: vec![SkuQtyPair {
                 sku_column: 6,
                 qty_column: 7,
+                merged_qty_column: 8,
                 sku_header: "SKU".to_string(),
                 qty_header: "Qty".to_string(),
+                merged_qty_header: "Merged Qty".to_string(),
             }],
             ..OrderSheetCandidate::default()
         };
@@ -3848,7 +3931,7 @@ mod tests {
         let candidate = infer_order_candidate(&sheet).expect("order candidate");
         assert_eq!(candidate.sku_qty_pairs.len(), 1);
         assert_eq!(candidate.sku_qty_pairs[0].sku_column, 5);
-        assert_eq!(candidate.sku_qty_pairs[0].qty_column, 6);
+        assert_eq!(candidate.sku_qty_pairs[0].qty_column, 4);
         assert!(candidate.notes.iter().any(|note| note.contains("完全重复")));
     }
 
@@ -3880,6 +3963,43 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(3, 2)]
         );
+    }
+
+    #[test]
+    fn highest_sku_group_uses_quantity_before_sku_in_reference_layout() {
+        let header = vec![
+            CellValue::string("SKU"),
+            CellValue::string("Qty"),
+            CellValue::string("SKU"),
+            CellValue::string("Qty"),
+        ];
+
+        let detected_pairs = pair_sku_qty_columns(&header, &[0, 2], &[1, 3]);
+        let pairs = highest_sku_quantity_group(&header, &detected_pairs, &[1, 3]);
+
+        assert_eq!(
+            pairs
+                .iter()
+                .map(|pair| (pair.qty_column, pair.sku_column, pair.merged_qty_column,))
+                .collect::<Vec<_>>(),
+            vec![(2, 3, 4)]
+        );
+    }
+
+    #[test]
+    fn sku_quantity_pairing_does_not_fall_back_to_following_quantity() {
+        let header = vec![CellValue::string("SKU"), CellValue::string("Qty")];
+
+        let detected_pairs = pair_sku_qty_columns(&header, &[0], &[1]);
+        assert!(highest_sku_quantity_group(&header, &detected_pairs, &[1]).is_empty());
+    }
+
+    #[test]
+    fn sku_quantity_group_requires_merged_quantity_after_sku() {
+        let header = vec![CellValue::string("Qty"), CellValue::string("SKU")];
+
+        let detected_pairs = pair_sku_qty_columns(&header, &[1], &[0]);
+        assert!(highest_sku_quantity_group(&header, &detected_pairs, &[0]).is_empty());
     }
 
     #[test]
@@ -3986,7 +4106,7 @@ mod tests {
     }
 
     #[test]
-    fn wide_shopline_order_sheet_keeps_distant_sku_quantity_pair() {
+    fn wide_shopline_order_sheet_requires_quantity_before_sku() {
         let mut header = vec![CellValue::Empty; 126];
         header[0] = CellValue::string("Order number");
         header[9] = CellValue::string("Product's SKU (sales number)");
@@ -4003,13 +4123,12 @@ mod tests {
         };
 
         let order = infer_order_candidate(&sheet).expect("order candidate");
-        assert_eq!(order.sku_qty_pairs[0].sku_column, 10);
-        assert_eq!(order.sku_qty_pairs[0].qty_column, 30);
+        assert!(order.sku_qty_pairs.is_empty());
         assert_eq!(order.country_code_column, Some(93));
     }
 
     #[test]
-    fn order_candidate_uses_product_name_when_sku_is_missing() {
+    fn order_candidate_does_not_pair_product_name_with_following_quantity() {
         let mut header = vec![CellValue::Empty; 100];
         header[0] = CellValue::string("Order number");
         header[8] = CellValue::string("Product name");
@@ -4026,9 +4145,7 @@ mod tests {
         };
 
         let order = infer_order_candidate(&sheet).expect("order candidate");
-        assert_eq!(order.sku_qty_pairs[0].sku_column, 9);
-        assert_eq!(order.sku_qty_pairs[0].qty_column, 30);
-        assert!(order.notes.iter().any(|note| note.contains("产品名称")));
+        assert!(order.sku_qty_pairs.is_empty());
     }
 
     #[test]
@@ -4360,6 +4477,53 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.quantity).collect::<Vec<_>>(),
             vec![3, 0, 0, 2, 0, 1]
+        );
+    }
+
+    #[test]
+    fn writeback_compares_calculated_quantity_with_merged_quantity_after_sku() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("数量"),
+                    CellValue::string("SKU"),
+                    CellValue::string("合并数量"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("2"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            sku_qty_pairs: vec![SkuQtyPair {
+                sku_column: 3,
+                qty_column: 2,
+                merged_qty_column: 4,
+                ..SkuQtyPair::default()
+            }],
+            ..PriceCheckMapping::default()
+        };
+
+        let rows = build_writeback_rows(&sheet, &mapping, &HashMap::new());
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.quantity, row.quantity_mismatch))
+                .collect::<Vec<_>>(),
+            vec![(2, false), (0, true)]
         );
     }
 
@@ -4704,8 +4868,9 @@ mod tests {
             business_order_number_column: Some(1),
             country_code_column: Some(2),
             sku_qty_pairs: vec![SkuQtyPair {
-                sku_column: 3,
-                qty_column: 4,
+                sku_column: 4,
+                qty_column: 3,
+                merged_qty_column: 5,
                 ..SkuQtyPair::default()
             }],
             pricing_sku_column: 1,
@@ -4802,7 +4967,9 @@ mod tests {
         let config = Config::default();
         let best = complete_mapping();
         let mut column_runner_up = best.clone();
+        column_runner_up.sku_qty_pairs[0].qty_column = 4;
         column_runner_up.sku_qty_pairs[0].sku_column = 5;
+        column_runner_up.sku_qty_pairs[0].merged_qty_column = 6;
         assert_eq!(
             classify_candidate_ambiguity(&best, &column_runner_up, 0.0, 0.0, &config),
             Some(CandidateAmbiguity::Column)
@@ -4816,8 +4983,8 @@ mod tests {
         );
         let column_reason =
             candidate_ambiguity_reason(CandidateAmbiguity::Column, &best, &column_runner_up);
-        assert!(column_reason.contains("最优 [SKU C / 数量 D]"));
-        assert!(column_reason.contains("次优 [SKU E / 数量 D]"));
+        assert!(column_reason.contains("最优 [原始数量 C / SKU D / 合并数量 E]"));
+        assert!(column_reason.contains("次优 [原始数量 D / SKU E / 合并数量 F]"));
     }
 
     #[test]
@@ -4827,8 +4994,10 @@ mod tests {
         nested.sku_qty_pairs.push(SkuQtyPair {
             sku_column: 5,
             qty_column: 6,
+            merged_qty_column: 7,
             sku_header: "备用 SKU".to_string(),
             qty_header: "备用数量".to_string(),
+            merged_qty_header: "备用合并数量".to_string(),
         });
         assert!(mapping_is_nested_variant(&best, &nested));
 
@@ -4860,15 +5029,19 @@ mod tests {
         recognized.sku_qty_pairs = vec![SkuQtyPair {
             sku_column: 1,
             qty_column: 2,
+            merged_qty_column: 3,
             sku_header: "SKU".to_string(),
             qty_header: "数量".to_string(),
+            merged_qty_header: "合并数量".to_string(),
         }];
         let mut unrecognized = recognized.clone();
         unrecognized.sku_qty_pairs[0] = SkuQtyPair {
             sku_column: 3,
             qty_column: 4,
+            merged_qty_column: 5,
             sku_header: "备注".to_string(),
             qty_header: "说明".to_string(),
+            merged_qty_header: "其他".to_string(),
         };
 
         assert!(
@@ -4902,13 +5075,23 @@ mod tests {
         {
             let order = workbook.add_worksheet();
             order.set_name("订单")?;
-            for (column, value) in ["订单号", "国家二字码", "SKU", "SKU", "数量", "Total Price"]
-                .iter()
-                .enumerate()
+            for (column, value) in [
+                "订单号",
+                "国家二字码",
+                "数量",
+                "SKU",
+                "合并数量",
+                "数量",
+                "SKU",
+                "合并数量",
+                "Total Price",
+            ]
+            .iter()
+            .enumerate()
             {
                 order.write_string(0, column as u16, *value)?;
             }
-            for (column, value) in ["A-1", "US", "10001", "GOOD-1", "1", "8"]
+            for (column, value) in ["A-1", "US", "1", "10001", "1", "1", "GOOD-1", "1", "8"]
                 .iter()
                 .enumerate()
             {
@@ -4932,12 +5115,14 @@ mod tests {
             order_header_row: 1,
             business_order_number_column: Some(1),
             country_code_column: Some(2),
-            order_price_column: Some(6),
+            order_price_column: Some(9),
             sku_qty_pairs: vec![SkuQtyPair {
-                sku_column: 3,
-                qty_column: 5,
+                sku_column: 4,
+                qty_column: 3,
+                merged_qty_column: 5,
                 sku_header: "SKU".to_string(),
                 qty_header: "数量".to_string(),
+                merged_qty_header: "合并数量".to_string(),
             }],
             pricing_sheet: "核价".to_string(),
             pricing_header_row: 1,
@@ -4957,7 +5142,9 @@ mod tests {
             (1, 0, 0.0)
         );
         assert!(wrong.matched_order_rows.is_empty());
-        mapping.sku_qty_pairs[0].sku_column = 4;
+        mapping.sku_qty_pairs[0].sku_column = 7;
+        mapping.sku_qty_pairs[0].qty_column = 6;
+        mapping.sku_qty_pairs[0].merged_qty_column = 8;
         let corrected =
             validate_price_mapping(&path, &mapping, &Config::default()).expect("valid mapping");
         assert_eq!(
@@ -4977,6 +5164,14 @@ mod tests {
                 price_difference: Some(1.5),
                 quantity: 1,
             }]
+        );
+        mapping.sku_qty_pairs[0].qty_column = 8;
+        let errors = validate_price_mapping(&path, &mapping, &Config::default())
+            .expect_err("following quantity must be rejected");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error == "SKU 组必须按“原始数量、SKU、合并数量”三列连续排列")
         );
         std::fs::remove_file(path)?;
         Ok(())
