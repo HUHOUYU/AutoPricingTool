@@ -3618,7 +3618,7 @@ mod tests {
 
     #[test]
     fn country_catalog_covers_sheet1_countries_and_business_aliases() {
-        assert_eq!(COUNTRY_ALIASES.len(), 244);
+        assert_eq!(COUNTRY_ALIASES.len(), 254);
 
         let aruba = normalize_country_fields("", "", "阿鲁巴");
         assert_eq!(
@@ -3639,6 +3639,57 @@ mod tests {
             ),
             ("US", "United States", "美国")
         );
+    }
+
+    #[test]
+    fn country_catalog_covers_current_iso_codes() {
+        const CURRENT_ISO_CODES: &str = "\
+AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ \
+BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR \
+CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR \
+GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU \
+ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ \
+LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ \
+MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF \
+PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI \
+SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR \
+TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
+
+        for code in CURRENT_ISO_CODES.split_whitespace() {
+            assert!(
+                country_lookup(code).is_some(),
+                "国家维护表缺少当前 ISO 代码: {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn corrected_country_names_keep_legacy_aliases() {
+        let cases = [
+            ("United Arab Emirates", "AE"),
+            ("United Arab Emirates 1", "AE"),
+            ("阿联酋", "AE"),
+            ("American Samoa", "AS"),
+            ("Amercian Samoa", "AS"),
+            ("Bangladesh", "BD"),
+            ("Bengal", "BD"),
+            ("Northern Mariana Islands", "MP"),
+            ("Saipan lsland", "MP"),
+            ("French Southern Territories", "TF"),
+            ("fashunanbulingdi", "TF"),
+            ("British Virgin Islands", "VG"),
+            ("THE BRITISH VRIGIN ISLANDS", "VG"),
+            ("Türkiye", "TR"),
+            ("Turkey", "TR"),
+        ];
+
+        for (name, expected_code) in cases {
+            assert_eq!(
+                country_lookup(name).map(|country| country.0),
+                Some(expected_code),
+                "国家名称或历史别名无法识别: {name}"
+            );
+        }
     }
 
     #[test]
