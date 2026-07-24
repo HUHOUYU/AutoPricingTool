@@ -3598,13 +3598,16 @@ html:not(.dark) .cyber-log-drawer {
 .excel-preview-row { position: absolute; top: 0; left: 0; color: var(--cyber-text); background: var(--cyber-panel); }
 .excel-preview-frozen-header { position: sticky; z-index: 3; top: 30px; left: 0; height: 30px; margin-bottom: -30px; background: var(--cyber-panel); box-shadow: 0 1px 0 var(--cyber-border-soft); }
 .excel-preview-row:nth-child(even) { background: color-mix(in srgb, var(--cyber-panel-soft) 40%, var(--cyber-panel)); }
+.excel-preview-row.is-same-order-group { background: color-mix(in srgb, var(--success) 10%, var(--cyber-panel)); }
 .excel-preview-row:hover { background: color-mix(in srgb, var(--cyber-primary) 5%, var(--cyber-panel)); }
 .excel-preview-header > span.is-pinned-column,
 .excel-preview-row > span.is-pinned-column { position: sticky; z-index: 3; background: var(--cyber-panel); box-shadow: 1px 0 0 var(--cyber-border), 5px 0 10px rgb(0 0 0 / 5%); }
+.excel-preview-row.is-same-order-group > span.is-pinned-column { background: color-mix(in srgb, var(--success) 10%, var(--cyber-panel)); }
 .excel-preview-header > span.is-pinned-column { z-index: 6; background: var(--cyber-panel-soft); }
 .excel-preview-frozen-header > span.is-pinned-column { z-index: 5; }
 .excel-preview-header .excel-preview-corner,
 .excel-preview-row .excel-preview-row-number { position: sticky; z-index: 2; left: 0; color: var(--cyber-dim); background: var(--cyber-panel-soft); font-family: var(--font-code); text-align: center; box-shadow: 1px 0 0 var(--cyber-border-soft); }
+.excel-preview-row.is-same-order-group > .excel-preview-row-number { background: color-mix(in srgb, var(--success) 16%, var(--cyber-panel)); }
 .excel-preview-header .excel-preview-corner { z-index: 8; }
 
 .excel-preview-header > span:not(.excel-preview-corner),

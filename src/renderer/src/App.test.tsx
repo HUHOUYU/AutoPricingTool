@@ -134,6 +134,7 @@ function openFileProcessing(): void {
 
 class FakeExcelPreviewWorker {
   static instances: FakeExcelPreviewWorker[] = [];
+  static orderRows: string[][] | null = null;
 
   onmessage: ((event: MessageEvent<ExcelPreviewWorkerResponse>) => void) | null = null;
   onerror: (() => void) | null = null;
@@ -154,7 +155,7 @@ class FakeExcelPreviewWorker {
           name: candidate.name,
           roles: candidate.roles,
           rows: candidate.roles.includes("order")
-            ? [["订单号", "平台订单号", "备用SKU", "国家", "英文国家", "中文国家", "物流", "SKU", "数量", "价格"], [candidate.name + "-数据", "P-1", "OLD-1", "US", "United States", "美国", "", "GOOD-1", "1", "9.5"]]
+            ? FakeExcelPreviewWorker.orderRows ?? [["订单号", "平台订单号", "备用SKU", "国家", "英文国家", "中文国家", "物流", "SKU", "数量", "价格"], [candidate.name + "-数据", "P-1", "OLD-1", "US", "United States", "美国", "", "GOOD-1", "1", "9.5"]]
             : [["SKU", "Country", "1", "2", "3"], [candidate.name === "核价" ? "GOOD-1" : candidate.name + "-数据", "United States", "9.5", "9", "8.5"]],
           startRow: 0,
           startColumn: 0,
@@ -175,6 +176,7 @@ describe("AutoPricingTool cyber workstation", () => {
   beforeEach(() => {
     useUIStore.setState({ activePage: "workbench", activeTab: "pending", theme: "light", sidebarCollapsed: false });
     FakeExcelPreviewWorker.instances = [];
+    FakeExcelPreviewWorker.orderRows = null;
   });
 
   afterEach(() => {
@@ -1064,8 +1066,8 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
     const analysis = createAnalysis("C:\\orders\\order.xlsx");
     const pairs = [
-      { skuColumn: 8, qtyColumn: 9, skuHeader: "SKU 1", qtyHeader: "Qty 1" },
       { skuColumn: 3, qtyColumn: 10, skuHeader: "SKU 2", qtyHeader: "Qty 2" },
+      { skuColumn: 8, qtyColumn: 9, skuHeader: "SKU 1", qtyHeader: "Qty 1" },
     ];
     analysis.suggestedMapping!.skuQtyPairs = pairs;
     analysis.orderSheetCandidates[0].skuQtyPairs = pairs;
@@ -1088,7 +1090,44 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(shade("H")).toBe(shade("I"));
     expect(shade("C")).toBe(shade("J"));
     expect(shade("H")).not.toBe(shade("C"));
+    expect(Number.parseInt(shade("C"), 10)).toBeGreaterThan(Number.parseInt(shade("H"), 10));
+    const skuBodyCell = screen.getByText("GOOD-1", { selector: ".excel-preview-row > span" });
+    expect(skuBodyCell).not.toHaveClass("is-sku-qty-column");
+    expect(skuBodyCell.style.getPropertyValue("--sku-pair-strength")).toBe("");
     expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("SKU/数量 1SKU/数量 2");
+  });
+
+  it("uses one background for rows with the same order number", async () => {
+    vi.stubGlobal("Worker", FakeExcelPreviewWorker);
+    FakeExcelPreviewWorker.orderRows = [
+      ["订单号", "平台订单号", "备用SKU", "国家", "英文国家", "中文国家", "物流", "SKU", "数量", "价格"],
+      ["ORDER-1", "P-1", "", "US", "United States", "美国", "", "SKU-A", "1", "9.5"],
+      ["ORDER-1", "P-2", "", "US", "United States", "美国", "", "SKU-A", "1", "9.5"],
+      ["ORDER-2", "P-3", "", "US", "United States", "美国", "", "SKU-B", "1", "9.5"],
+    ];
+    const api = createDesktopAPI();
+    vi.mocked(api.readExcelPreviewFile).mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), size: 3, modifiedAt: 1 });
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    dropFiles([new File(["xlsx"], "order.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
+    const analysis = createAnalysis("C:\\orders\\order.xlsx");
+    analysis.requiresConfirmation = true;
+    analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: analysis });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "待确认1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "详情" }));
+    await screen.findByText("ORDER-2");
+
+    const groupedRows = document.querySelectorAll(".excel-preview-row.is-same-order-group");
+    expect(groupedRows).toHaveLength(2);
+    expect(groupedRows[0]).toHaveTextContent("ORDER-1");
+    expect(groupedRows[1]).toHaveTextContent("ORDER-1");
+    expect(screen.getByText("ORDER-2", { selector: ".excel-preview-row > span" }).closest(".excel-preview-row")).not.toHaveClass("is-same-order-group");
   });
 
   it("classifies generated results with issue rows as exceptions", async () => {

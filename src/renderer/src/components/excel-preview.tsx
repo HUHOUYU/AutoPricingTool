@@ -35,7 +35,7 @@ const previewRowNumberWidth = 52;
 const previewColumnWidth = 120;
 const previewColumnMinWidth = 64;
 const previewColumnMaxWidth = 480;
-const skuPairShadeStrengths = [14, 20, 26, 32, 38];
+const skuPairShadeStrengths = [38, 32, 26, 20, 14];
 const searchInputMinimumCharacters = 18;
 const searchInputPlaceholder = "逗号=且，竖线=或";
 
@@ -90,9 +90,17 @@ function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetN
   return "";
 }
 
+function skuQtyPairsByPriority(mapping: PriceCheckMapping): PriceCheckMapping["skuQtyPairs"] {
+  return [...mapping.skuQtyPairs].sort((left, right) => (
+    Math.max(right.skuColumn, right.qtyColumn) - Math.max(left.skuColumn, left.qtyColumn)
+    || right.skuColumn - left.skuColumn
+  ));
+}
+
 function skuPairStyle(mapping: PriceCheckMapping | null | undefined, sheetName: string, column: number): SkuPairStyle | undefined {
   if (!mapping || sheetName !== mapping.orderSheet) return undefined;
-  const pairIndex = mapping.skuQtyPairs.findIndex((pair) => pair.skuColumn === column || pair.qtyColumn === column);
+  const pairIndex = skuQtyPairsByPriority(mapping)
+    .findIndex((pair) => pair.skuColumn === column || pair.qtyColumn === column);
   if (pairIndex < 0) return undefined;
   return { "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(pairIndex, skuPairShadeStrengths.length - 1)]}%` };
 }
@@ -291,6 +299,19 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const frozenHeaderIndex = activeSheet && activeHeaderRow ? activeHeaderRow - activeSheet.startRow - 1 : -1;
   const frozenHeaderRow = activeSheet && frozenHeaderIndex >= 0 && frozenHeaderIndex < activeSheet.rows.length ? activeSheet.rows[frozenHeaderIndex] : null;
   const matchedOrderRowSet = useMemo(() => new Set(matchedOrderRows ?? []), [matchedOrderRows]);
+  const repeatedOrderNumberSet = useMemo(() => {
+    if (!activeSheet || activeSheet.name !== mapping?.orderSheet || !mapping.businessOrderNumberColumn) return new Set<string>();
+    const orderColumnIndex = mapping.businessOrderNumberColumn - activeSheet.startColumn - 1;
+    if (orderColumnIndex < 0 || orderColumnIndex >= activeSheet.displayedColumnCount) return new Set<string>();
+    const counts = new Map<string, number>();
+    activeSheet.rows.forEach((row, rowIndex) => {
+      const absoluteRow = activeSheet.startRow + rowIndex + 1;
+      if (absoluteRow <= mapping.orderHeaderRow) return;
+      const orderNumber = row[orderColumnIndex]?.trim() ?? "";
+      if (orderNumber) counts.set(orderNumber, (counts.get(orderNumber) ?? 0) + 1);
+    });
+    return new Set(Array.from(counts).filter(([, count]) => count > 1).map(([orderNumber]) => orderNumber));
+  }, [activeSheet, mapping?.businessOrderNumberColumn, mapping?.orderHeaderRow, mapping?.orderSheet]);
 
   useEffect(() => {
     const scrollElement = scrollRef.current;
@@ -331,7 +352,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     const countries = Array.from(new Set([mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn]
       .map(valueAt)
       .filter(Boolean)));
-    const skuQuantity = mapping.skuQtyPairs
+    const skuQuantity = skuQtyPairsByPriority(mapping)
       .map((pair) => ({ sku: valueAt(pair.skuColumn), quantity: valueAt(pair.qtyColumn) }))
       .find((item) => item.sku);
     const sku = skuQuantity?.sku ?? "";
@@ -531,9 +552,17 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                   const absoluteRow = activeSheet.startRow + virtualRow.index + 1;
                   const isMatchedOrderRow = activeSheet.name === mapping?.orderSheet && matchedOrderRowSet.has(absoluteRow);
                   const isSearchMatchedRow = searchMatchedRowSet.has(virtualRow.index);
+                  const orderColumnIndex = mapping?.businessOrderNumberColumn
+                    ? mapping.businessOrderNumberColumn - activeSheet.startColumn - 1
+                    : -1;
+                  const orderNumber = orderColumnIndex >= 0 ? row[orderColumnIndex]?.trim() ?? "" : "";
+                  const isSameOrderGroup = absoluteRow > (mapping?.orderHeaderRow ?? 0)
+                    && activeSheet.name === mapping?.orderSheet
+                    && repeatedOrderNumberSet.has(orderNumber);
+                  const isHeaderRow = activeHeaderRow === absoluteRow;
                   return (
                     <div
-                      className={`excel-preview-row${isSearchMatchedRow ? " is-search-matched-row" : ""}`}
+                      className={`excel-preview-row${isSameOrderGroup ? " is-same-order-group" : ""}${isSearchMatchedRow ? " is-search-matched-row" : ""}`}
                       style={{ ...gridStyle, height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
                       key={virtualRow.key}
                     >
@@ -547,8 +576,8 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                         const cell = row[columnIndex] ?? "";
                         const absoluteColumn = activeSheet.startColumn + columnIndex + 1;
                         return <span
-                          className={`${mappedColumnClass(mapping, activeSheet.name, absoluteColumn)}${activeColumn === absoluteColumn ? " is-active-column" : ""}${activeHeaderRow === absoluteRow ? " is-header-cell" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
-                          style={{ ...pinnedColumnStyle(columnIndex), ...skuPairStyle(mapping, activeSheet.name, absoluteColumn) }}
+                          className={`${isHeaderRow ? mappedColumnClass(mapping, activeSheet.name, absoluteColumn) : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
+                          style={{ ...pinnedColumnStyle(columnIndex), ...(isHeaderRow ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
                           title={cell}
                           onMouseEnter={() => selectingColumn && setHoveredColumn(absoluteColumn)}
                           onClick={() => selectingColumn && onColumnSelect?.(absoluteColumn, selectionHeaderRow ? activeSheet.rows[selectionHeaderRow - activeSheet.startRow - 1]?.[columnIndex] ?? "" : "")}
@@ -566,7 +595,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
       {activeSheet ? (
         <footer className="excel-preview-legend" aria-label="字段颜色说明">
           {mapping && activeSheet.name === mapping.orderSheet
-            ? mapping.skuQtyPairs.map((_, index) => <span key={index}><i className="is-sku-qty" style={{ "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(index, skuPairShadeStrengths.length - 1)]}%` } as SkuPairStyle} />SKU/数量 {index + 1}</span>)
+            ? skuQtyPairsByPriority(mapping).map((pair, index) => <span key={`${pair.skuColumn}-${pair.qtyColumn}`}><i className="is-sku-qty" style={{ "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(index, skuPairShadeStrengths.length - 1)]}%` } as SkuPairStyle} />SKU/数量 {index + 1}</span>)
             : <span><i className="is-sku" />SKU 字段</span>}
           <span><i className="is-price" />价格字段</span>
           <span><i className="is-mapped" />常规匹配字段</span>
