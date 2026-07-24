@@ -215,6 +215,7 @@ pub(crate) struct PriceAnalysisFile {
     pub(crate) suggested_mapping: Option<PriceCheckMapping>,
     pub(crate) coverage: f64,
     pub(crate) matched_order_rows: Vec<usize>,
+    pub(crate) writeback_rows: Vec<PricePreviewWritebackRow>,
     pub(crate) requires_confirmation: bool,
     pub(crate) automation_decision: AutomationDecision,
     pub(crate) issues: Vec<String>,
@@ -367,7 +368,17 @@ struct MappingValidationResult {
     matched_rows: usize,
     coverage: f64,
     matched_order_rows: Vec<usize>,
+    writeback_rows: Vec<PricePreviewWritebackRow>,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PricePreviewWritebackRow {
+    source_row: usize,
+    pricing_price: Option<f64>,
+    price_difference: Option<f64>,
+    quantity: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -554,6 +565,7 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
             "matchedRows": validation.matched_rows,
             "coverage": validation.coverage,
             "matchedOrderRows": validation.matched_order_rows,
+            "writebackRows": validation.writeback_rows,
             "errors": [],
             "warnings": validation.warnings,
         })),
@@ -565,6 +577,7 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
             "matchedRows": 0,
             "coverage": 0.0,
             "matchedOrderRows": [],
+            "writebackRows": [],
             "errors": errors,
             "warnings": [],
         })),
@@ -709,6 +722,7 @@ fn validate_price_mapping(
     let lines = read_order_lines(order_sheet, mapping, config).0;
     let evaluated_rows = lines.len();
     let (matched_rows, matched_order_rows) = evaluate_matches(&index, &lines);
+    let writeback_rows = calculate_preview_writeback_rows(order_sheet, mapping, &index, &lines);
     let coverage = ratio(matched_rows, evaluated_rows);
     let mut warnings = Vec::new();
     if evaluated_rows == 0 {
@@ -729,6 +743,7 @@ fn validate_price_mapping(
         matched_rows,
         coverage,
         matched_order_rows,
+        writeback_rows,
         warnings,
     })
 }
@@ -758,6 +773,37 @@ fn evaluate_matches(index: &PriceIndex, lines: &[OrderLine]) -> (usize, Vec<usiz
         .collect::<Vec<_>>();
     matched_order_rows.sort_unstable();
     (matched_rows, matched_order_rows)
+}
+
+fn calculate_preview_writeback_rows(
+    order_sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    index: &PriceIndex,
+    lines: &[OrderLine],
+) -> Vec<PricePreviewWritebackRow> {
+    let mut matched_candidates = HashMap::new();
+    for item in aggregate_lines(lines) {
+        let lookup = index.lookup(
+            &item.country_code,
+            &item.matched_sku,
+            &item.shipping_method,
+            item.total_quantity.round() as i64,
+        );
+        if lookup.status == "matched"
+            && let Some(pricing_price) = lookup.price
+        {
+            record_matched_candidates(&mut matched_candidates, &item, pricing_price);
+        }
+    }
+    build_writeback_rows(order_sheet, mapping, &matched_candidates)
+        .into_iter()
+        .map(|row| PricePreviewWritebackRow {
+            source_row: row.source_row,
+            pricing_price: row.pricing_price,
+            price_difference: row.price_difference,
+            quantity: row.quantity,
+        })
+        .collect()
 }
 
 fn command_files(command: &Value) -> Result<Vec<PathBuf>> {
@@ -1012,6 +1058,27 @@ fn analyze_path_with_templates(
             coverage * 100.0
         ));
     }
+    let writeback_rows = suggested_mapping
+        .as_ref()
+        .and_then(|mapping| {
+            let order_sheet = workbook
+                .sheets
+                .iter()
+                .find(|sheet| sheet.name == mapping.order_sheet)?;
+            let pricing_sheet = workbook
+                .sheets
+                .iter()
+                .find(|sheet| sheet.name == mapping.pricing_sheet)?;
+            let index = build_price_index(pricing_sheet, mapping);
+            let lines = read_order_lines(order_sheet, mapping, config).0;
+            Some(calculate_preview_writeback_rows(
+                order_sheet,
+                mapping,
+                &index,
+                &lines,
+            ))
+        })
+        .unwrap_or_default();
     Ok(PriceAnalysisFile {
         input_path: path.display().to_string(),
         file_name: path
@@ -1024,6 +1091,7 @@ fn analyze_path_with_templates(
         suggested_mapping,
         coverage,
         matched_order_rows,
+        writeback_rows,
         requires_confirmation,
         automation_decision,
         issues,
@@ -4834,13 +4902,16 @@ mod tests {
         {
             let order = workbook.add_worksheet();
             order.set_name("订单")?;
-            for (column, value) in ["订单号", "国家二字码", "SKU", "SKU", "数量"]
+            for (column, value) in ["订单号", "国家二字码", "SKU", "SKU", "数量", "Total Price"]
                 .iter()
                 .enumerate()
             {
                 order.write_string(0, column as u16, *value)?;
             }
-            for (column, value) in ["A-1", "US", "10001", "GOOD-1", "1"].iter().enumerate() {
+            for (column, value) in ["A-1", "US", "10001", "GOOD-1", "1", "8"]
+                .iter()
+                .enumerate()
+            {
                 order.write_string(1, column as u16, *value)?;
             }
         }
@@ -4861,6 +4932,7 @@ mod tests {
             order_header_row: 1,
             business_order_number_column: Some(1),
             country_code_column: Some(2),
+            order_price_column: Some(6),
             sku_qty_pairs: vec![SkuQtyPair {
                 sku_column: 3,
                 qty_column: 5,
@@ -4897,6 +4969,15 @@ mod tests {
             (1, 1, 1.0)
         );
         assert_eq!(corrected.matched_order_rows, vec![2]);
+        assert_eq!(
+            corrected.writeback_rows,
+            vec![PricePreviewWritebackRow {
+                source_row: 2,
+                pricing_price: Some(9.5),
+                price_difference: Some(1.5),
+                quantity: 1,
+            }]
+        );
         std::fs::remove_file(path)?;
         Ok(())
     }

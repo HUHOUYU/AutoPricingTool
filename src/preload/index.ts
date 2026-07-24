@@ -126,6 +126,7 @@ export type PriceAnalysisFile = {
   suggestedMapping?: PriceCheckMapping | null;
   coverage: number;
   matchedOrderRows?: number[];
+  writebackRows?: PricePreviewWritebackRow[];
   requiresConfirmation: boolean;
   automationDecision: {
     status: "eligible" | "confirm" | "error";
@@ -149,8 +150,16 @@ export type PriceMappingValidation = {
   matchedRows: number;
   coverage: number;
   matchedOrderRows?: number[];
+  writebackRows?: PricePreviewWritebackRow[];
   errors: string[];
   warnings: string[];
+};
+
+export type PricePreviewWritebackRow = {
+  sourceRow: number;
+  pricingPrice?: number | null;
+  priceDifference?: number | null;
+  quantity: number;
 };
 
 export type ProcessorEvent =

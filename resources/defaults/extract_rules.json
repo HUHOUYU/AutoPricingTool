@@ -190,6 +190,8 @@
       },
       "price": {
         "header_aliases": [
+          "TOTAL Price",
+          "Total price",
           "Price",
           "Cost",
           "价格",
