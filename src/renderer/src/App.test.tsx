@@ -787,11 +787,16 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(screen.getByRole("button", { name: "待确认1" }));
     fireEvent.click(await screen.findByRole("button", { name: "详情" }));
     fireEvent.click(await screen.findByRole("button", { name: "确认并处理此文件" }));
+    await waitFor(() => expect(api.runPriceCheck).toHaveBeenCalledTimes(1));
     await act(async () => {
-      api.emit({ type: "price-file-result", path: "C:\\orders\\manual.xlsx", status: "completed", totalRows: 7, matchedRows: 7, exceptionRows: 0 });
-      api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ totalRows: 7, matchedRows: 7, exceptionRows: 0 }] });
+      api.emit({ type: "price-file-result", path: "C:\\orders\\manual.xlsx", status: "completed", outputPath: "C:\\output\\manual-priced.xlsx", totalRows: 7, matchedRows: 5, exceptionRows: 2 });
+      api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ path: "C:\\orders\\manual.xlsx", totalRows: 7, matchedRows: 5, exceptionRows: 2 }] });
     });
     await waitFor(() => expect(useUIStore.getState().activeTab).toBe("confirm"));
+    expect(screen.getByRole("button", { name: "完成1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "异常0" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "完成1" }));
+    expect(await screen.findByRole("button", { name: "打开" })).toBeInTheDocument();
   });
 
   it("shows automation reasons in the file detail drawer", async () => {
@@ -1267,12 +1272,72 @@ describe("AutoPricingTool cyber workstation", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "异常1" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "异常1" }));
     expect(await screen.findByText("2 行存在异常")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "打开" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "详情" }));
+    expect(screen.queryByRole("button", { name: "打开结果文件" })).not.toBeInTheDocument();
     const retry = await screen.findByRole("button", { name: "重新分析此文件" });
     fireEvent.click(retry);
     await waitFor(() => expect(api.analyzePriceFiles).toHaveBeenCalledWith(expect.objectContaining({ files: ["C:\\orders\\order.xlsx"] })));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "文件处理详情" })).not.toBeInTheDocument());
+  });
+
+  it("moves a manually confirmed exception file to completed", async () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    dropFiles([new File(["xlsx"], "order.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
+    const analysis = createAnalysis("C:\\orders\\order.xlsx");
+    analysis.requiresConfirmation = true;
+    analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["存在异常，需人工确认"] };
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: analysis });
+      api.emit({
+        type: "price-file-result",
+        path: "C:\\orders\\order.xlsx",
+        status: "completed",
+        outputPath: "C:\\output\\order-priced.xlsx",
+        totalRows: 20,
+        matchedRows: 18,
+        exceptionRows: 2,
+        coverage: 0.9,
+        message: "2 行未匹配",
+      });
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "异常1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认并处理此文件" }));
+    await waitFor(() => expect(api.runPriceCheck).toHaveBeenCalledWith(expect.objectContaining({ files: ["C:\\orders\\order.xlsx"] })));
+
+    await act(async () => {
+      api.emit({
+        type: "price-file-result",
+        path: "C:\\orders\\order.xlsx",
+        status: "completed",
+        outputPath: "C:\\output\\order-priced.xlsx",
+        totalRows: 20,
+        matchedRows: 18,
+        exceptionRows: 2,
+        coverage: 0.9,
+        message: "已人工确认，保留 2 行异常",
+      });
+      api.emit({
+        type: "price-done",
+        mode: "run",
+        stopped: false,
+        files: [{ path: "C:\\orders\\order.xlsx", totalRows: 20, matchedRows: 18, exceptionRows: 2 }],
+      });
+    });
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "完成1" })).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "异常0" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "完成1" }));
+    expect(await screen.findByRole("button", { name: "打开" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "详情" }));
+    expect(await screen.findByRole("button", { name: "打开结果文件" })).toBeInTheDocument();
   });
 
   it("pauses, resumes, stops, and exposes four status tabs", async () => {

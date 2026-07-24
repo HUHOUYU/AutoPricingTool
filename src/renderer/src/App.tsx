@@ -315,9 +315,10 @@ function statusForFile(
   result: FileResult | undefined,
   activePath: string,
   isBusy: boolean,
+  manuallyConfirmed: boolean,
 ): FileStatus {
   if (result?.status === "failed") return "error";
-  if (result?.status === "completed") return (result.exceptionRows ?? 0) > 0 ? "warning" : "success";
+  if (result?.status === "completed") return manuallyConfirmed || (result.exceptionRows ?? 0) === 0 ? "success" : "warning";
   if (isBusy && activePath === path) return "running";
   if (analysis) return isAnalysisError(analysis) || analysis.automationDecision.status === "error" ? "error" : "ready";
   return "pending";
@@ -770,7 +771,7 @@ export function App(): React.JSX.Element {
         };
         setResults((current) => ({ ...current, [event.path]: result }));
         if (autoRevealManualResult && confirmedPathsRef.current.has(event.path)) {
-          setActiveTab(event.status === "completed" && (event.exceptionRows ?? 0) === 0 ? "success" : "error");
+          setActiveTab(event.status === "completed" ? "success" : "error");
           setPendingResultRevealPath(event.path);
         }
         appendLog(
@@ -802,8 +803,14 @@ export function App(): React.JSX.Element {
             : { ...current, current: current.total, phase: "run", path: "" });
           appendLog(event.stopped ? "核价已停止" : "核价完成", event.stopped ? "warning" : "success");
           if (!event.stopped) {
-            const completedCount = event.files.filter((item) => Number(item.exceptionRows ?? 0) === 0).length;
-            const exceptionCount = event.files.filter((item) => Number(item.exceptionRows ?? 0) > 0).length + (event.failures?.length ?? 0);
+            const completedCount = event.files.filter((item) => (
+              Number(item.exceptionRows ?? 0) === 0 ||
+              (typeof item.path === "string" && confirmedPathsRef.current.has(item.path))
+            )).length;
+            const exceptionCount = event.files.filter((item) => (
+              Number(item.exceptionRows ?? 0) > 0 &&
+              !(typeof item.path === "string" && confirmedPathsRef.current.has(item.path))
+            )).length + (event.failures?.length ?? 0);
             const confirmCount = Object.values(analysesRef.current).filter((analysis) => analysis.automationDecision.status === "confirm").length;
             toast.success(`批次完成：完成 ${completedCount}，待确认 ${confirmCount}，异常 ${exceptionCount}`);
           }
@@ -1344,7 +1351,14 @@ export function App(): React.JSX.Element {
 
   const toggleAllSelected = (): void => {
     const visiblePaths = files.filter((path) => {
-      const status = statusForFile(path, analyses[path], results[path], activePath, isAnalyzing || isRunning);
+      const status = statusForFile(
+        path,
+        analyses[path],
+        results[path],
+        activePath,
+        isAnalyzing || isRunning,
+        confirmedPathsRef.current.has(path),
+      );
       return tabForStatus(status) === activeTab;
     });
     const allSelected = visiblePaths.length > 0 && visiblePaths.every((path) => selectedSet.has(path));
@@ -1445,7 +1459,17 @@ export function App(): React.JSX.Element {
   const fileStatusByPath = useMemo<Record<string, FileStatus>>(
     () =>
       Object.fromEntries(
-        files.map((path) => [path, statusForFile(path, analyses[path], results[path], activePath, isAnalyzing || isRunning)]),
+        files.map((path) => [
+          path,
+          statusForFile(
+            path,
+            analyses[path],
+            results[path],
+            activePath,
+            isAnalyzing || isRunning,
+            confirmedPathsRef.current.has(path),
+          ),
+        ]),
       ),
     [activePath, analyses, files, isAnalyzing, isRunning, results],
   );
@@ -1978,7 +2002,7 @@ export function App(): React.JSX.Element {
                 <div className="issue-detail-column">
                   <section><h3>自动化判定</h3>{detailAnalysis ? <><div className={"decision-card is-" + detailAnalysis.automationDecision.status}><strong>{detailAnalysis.automationDecision.status === "eligible" ? "可自动处理" : detailAnalysis.automationDecision.status === "confirm" ? "需要人工确认" : "分析异常"}</strong><span>试算 {detailAnalysis.automationDecision.matchedRows}/{detailAnalysis.automationDecision.evaluatedRows} 行 · {formatCoverage(detailAnalysis.automationDecision.coverage)}</span></div><ul className="decision-reasons">{detailAnalysis.automationDecision.reasons.map((reason) => <DecisionReason reason={reason} bestScore={detailAnalysis.automationDecision.candidateScore} runnerUpScore={detailAnalysis.automationDecision.runnerUpScore} scoreKind={detailAnalysis.automationDecision.scoreKind} key={reason} />)}</ul></> : <p>文件尚未分析。</p>}</section>
                   {detailAnalysis && detailMapping ? <MappingEditor analysis={detailAnalysis} mapping={detailMapping} workbook={detailPreviewWorkbook} activeSheetName={detailPreviewSheetName} activeTarget={activeMappingTarget} validation={detailValidation} onActiveTargetChange={selectMappingTarget} onMappingChange={(mapping) => commitMapping(detailPath, mapping)} onColumnChange={(target, column, header) => changeMappingColumn(target, column, header)} onSheetChange={(orderSheet, pricingSheet, previewSheet) => { updateMapping(detailPath, orderSheet, pricingSheet); setDetailPreviewSheetName(previewSheet); }} onPreviewSheetChange={setDetailPreviewSheetName} onRevalidate={() => revalidateMapping(detailPath)} onConfirm={() => void confirmAndContinue(detailPath)} /> : null}
-                  {detailResult ? <section><h3>处理结果</h3><div className="result-summary"><span>总行数<strong>{detailResult.totalRows ?? 0}</strong></span><span>已匹配<strong>{detailResult.matchedRows ?? 0}</strong></span><span>异常行<strong>{detailResult.exceptionRows ?? 0}</strong></span></div>{detailResult.message ? <p>{detailResult.message}</p> : null}{detailResult.outputPath ? <Button variant="outline" onClick={() => void getDesktopAPI()?.openPath(detailResult.outputPath ?? "")}>打开结果文件</Button> : null}</section> : null}
+                  {detailResult ? <section><h3>处理结果</h3><div className="result-summary"><span>总行数<strong>{detailResult.totalRows ?? 0}</strong></span><span>已匹配<strong>{detailResult.matchedRows ?? 0}</strong></span><span>异常行<strong>{detailResult.exceptionRows ?? 0}</strong></span></div>{detailResult.message ? <p>{detailResult.message}</p> : null}{detailResult.outputPath && detailPath && tabForStatus(fileStatusByPath[detailPath]) === "success" ? <Button variant="outline" onClick={() => void getDesktopAPI()?.openPath(detailResult.outputPath ?? "")}>打开结果文件</Button> : null}</section> : null}
                   {detailPath && fileStatusByPath[detailPath] && tabForStatus(fileStatusByPath[detailPath]) === "error" ? <section><h3>异常处理</h3><p>调整源文件或配置后，可以重新分析当前文件。</p><Button type="button" variant="outline" onClick={() => void retryAnalysis(detailPath)}><RefreshCw />重新分析此文件</Button></section> : null}
                 </div>
               </div>
@@ -2138,7 +2162,7 @@ export function App(): React.JSX.Element {
                            if (cell.column.id === "issue") { const issue = result?.status === "completed" && (result.exceptionRows ?? 0) > 0 ? `${result.exceptionRows} 行存在异常` : result?.message ?? analysis?.automationDecision.reasons[0] ?? analysis?.issues[0] ?? "—"; return <td key={cell.id} className={`issue-cell${pinnedClass}`} style={pinnedStyle} title={issue}>{issue}</td>; }
                            if (cell.column.id === "rows") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{result ? `${result.matchedRows ?? 0}/${result.totalRows ?? 0}` : "—"}</td>;
                            if (cell.column.id === "completedAt") return <td key={cell.id} className={pinnedClass.trim() || undefined} style={pinnedStyle}>{result?.completedAt ?? importedAt[path] ?? "—"}</td>;
-                           return <td key={cell.id} className={`action-column${pinnedClass}`} style={pinnedStyle}><button type="button" onClick={() => openDetailDrawer(path)}>详情</button>{result?.outputPath ? <button type="button" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}{activeTab === "pending" ? <button type="button" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X /></button> : null}</td>;
+                           return <td key={cell.id} className={`action-column${pinnedClass}`} style={pinnedStyle}><button type="button" onClick={() => openDetailDrawer(path)}>详情</button>{activeTab === "success" && result?.outputPath ? <button type="button" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}{activeTab === "pending" ? <button type="button" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X /></button> : null}</td>;
                         })}
                       </tr>
                     </Fragment>;
@@ -2362,7 +2386,7 @@ export function App(): React.JSX.Element {
                           if (cell.column.id === "pricingSheet") return <td key={cell.id}>{currentMapping?.pricingSheet ?? "—"}</td>;
                           if (cell.column.id === "coverage") return <td key={cell.id}><span className={analysis && analysis.coverage >= 0.95 ? "coverage-label is-good" : analysis ? "coverage-label is-warning" : "coverage-label"}>{analysis ? "覆盖率 " + formatCoverage(analysis.coverage) : "—"}</span></td>;
                           if (cell.column.id === "status") return <td key={cell.id}><Badge variant="outline" className={"table-status is-" + statusMeta[status].tone}><span className="status-dot" />{statusMeta[status].label}</Badge>{result?.status === "completed" ? <small className="status-count">{result.matchedRows ?? 0}/{result.totalRows ?? 0} 行已核价</small> : null}</td>;
-                          return <td key={cell.id} className="action-column"><button type="button" className="row-action" onClick={() => setExpandedPath(isExpanded ? null : path)}>{isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}字段</button>{result?.outputPath ? <button type="button" className="row-link" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}<button type="button" className="row-remove" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X size={15} /></button></td>;
+                           return <td key={cell.id} className="action-column"><button type="button" className="row-action" onClick={() => setExpandedPath(isExpanded ? null : path)}>{isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}字段</button>{activeTab === "success" && result?.outputPath ? <button type="button" className="row-link" onClick={() => void getDesktopAPI()?.openPath(result.outputPath ?? "")}>打开</button> : null}<button type="button" className="row-remove" disabled={isAnalyzing || isRunning} onClick={() => removeFile(path)} aria-label={"移除 " + fileNameFromPath(path)}><X size={15} /></button></td>;
                         })}
                       </tr>
                       {isExpanded ? (
