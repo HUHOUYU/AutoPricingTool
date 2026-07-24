@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import type { DesktopAPI, PriceAnalysisFile, ProcessorEvent } from "../../preload";
 import type { ExcelPreviewWorkerRequest, ExcelPreviewWorkerResponse } from "./lib/excel-preview";
@@ -179,6 +180,19 @@ describe("AutoPricingTool cyber workstation", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete (HTMLElement.prototype as { scrollIntoView?: HTMLElement["scrollIntoView"] }).scrollIntoView;
+  });
+
+  it("places toast notifications in the top-left corner", async () => {
+    installAPI(createDesktopAPI());
+    render(<App />);
+    act(() => toast.success("位置测试"));
+
+    await waitFor(() => {
+      const toaster = document.querySelector("[data-sonner-toaster]");
+      expect(toaster).toHaveAttribute("data-x-position", "left");
+      expect(toaster).toHaveAttribute("data-y-position", "top");
+    });
+    toast.dismiss();
   });
 
   it("imports a dropped workbook and starts analysis", async () => {

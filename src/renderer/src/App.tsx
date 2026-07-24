@@ -1801,7 +1801,7 @@ export function App(): React.JSX.Element {
       <main className={"cyber-app" + (sidebarCollapsed ? " is-sidebar-collapsed" : "")} ref={shellRef}>
         <Toaster
           className="cyber-toaster"
-          position="top-right"
+          position="top-left"
           closeButton
           expand
           visibleToasts={5}
@@ -2155,7 +2155,7 @@ export function App(): React.JSX.Element {
     <main className="app-shell" ref={shellRef}>
       <Toaster
         className="cyber-toaster"
-        position="top-right"
+        position="top-left"
         closeButton
         expand
         visibleToasts={5}
