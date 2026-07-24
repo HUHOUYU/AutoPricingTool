@@ -194,8 +194,13 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchMatchIndex, setActiveSearchMatchIndex] = useState(0);
   const [searchPreferredColumns, setSearchPreferredColumns] = useState<number[]>([]);
+  const [selectedRow, setSelectedRow] = useState<number | null>(null);
   const [loadAll, setLoadAll] = useState(false);
   const [pendingOrderReturnRow, setPendingOrderReturnRow] = useState<number | null>(null);
+
+  useEffect(() => {
+    setSelectedRow(null);
+  }, [filePath, activeSheetName]);
 
   useEffect(() => {
     setColumnWidthsBySheet({});
@@ -216,6 +221,11 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     const selectedCandidates = candidates.filter((candidate) => selectedSheetNames.has(candidate.name));
     return selectedCandidates.length > 0 ? selectedCandidates : candidates;
   }, [candidates, loadAll, mapping?.orderSheet, mapping?.pricingSheet]);
+
+  const selectRow = (row: number): void => {
+    setSelectedRow(row);
+    onRowSelect?.(row);
+  };
 
   useEffect(() => {
     setWorkbook(null);
@@ -649,8 +659,8 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                   );
                 })}
               </div>
-              {frozenHeaderRow ? <div className={`excel-preview-row excel-preview-frozen-header${searchMatchedRowSet.has(frozenHeaderIndex) ? " is-search-matched-row" : ""}`} style={gridStyle} aria-label={`冻结表头，第 ${activeHeaderRow} 行`}>
-                <span className="excel-preview-row-number is-header-row" onClick={() => onRowSelect?.(activeHeaderRow ?? 1)}>{activeHeaderRow}</span>
+              {frozenHeaderRow ? <div className={`excel-preview-row excel-preview-frozen-header${searchMatchedRowSet.has(frozenHeaderIndex) ? " is-search-matched-row" : ""}${selectedRow === activeHeaderRow ? " is-selected-row" : ""}`} style={gridStyle} aria-label={`冻结表头，第 ${activeHeaderRow} 行`}>
+                <span className="excel-preview-row-number is-header-row" onClick={() => selectRow(activeHeaderRow ?? 1)}>{activeHeaderRow}</span>
                 {orderedColumnIndexes.map((columnIndex) => {
                   const cell = cellValue(frozenHeaderRow, columnIndex, activeHeaderRow ?? 0);
                   const absoluteColumn = activeSheet.startColumn + columnIndex + 1;
@@ -680,13 +690,13 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                   const isHeaderRow = activeHeaderRow === absoluteRow;
                   return (
                     <div
-                      className={`excel-preview-row${isSearchMatchedRow ? " is-search-matched-row" : ""}`}
+                      className={`excel-preview-row${isSearchMatchedRow ? " is-search-matched-row" : ""}${selectedRow === absoluteRow ? " is-selected-row" : ""}`}
                       style={{ ...gridStyle, height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
                       key={virtualRow.key}
                     >
                       <span
                         className={`excel-preview-row-number${activeHeaderRow === absoluteRow ? " is-header-row" : ""}${isMatchedOrderRow ? " is-matched-row" : ""}`}
-                        onClick={() => onRowSelect?.(absoluteRow)}
+                        onClick={() => selectRow(absoluteRow)}
                         onDoubleClick={() => searchPricingForOrderRow(row, absoluteRow)}
                         title={activeSheet.name === mapping?.orderSheet && absoluteRow > mapping.orderHeaderRow ? "双击在核价 Sheet 中联合查询" : undefined}
                       >{absoluteRow}</span>

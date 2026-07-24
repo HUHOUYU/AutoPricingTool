@@ -3647,6 +3647,9 @@ html:not(.dark) .cyber-log-drawer {
 .excel-preview-row.is-search-matched-row > span { color: var(--cyber-text); background: color-mix(in srgb, var(--cyber-status-info) 10%, var(--cyber-panel)); }
 .excel-preview-row.is-search-matched-row > .excel-preview-row-number { color: var(--cyber-status-info); background: color-mix(in srgb, var(--cyber-status-info) 18%, var(--cyber-panel)); font-weight: 800; }
 .excel-preview-row > span.is-search-match { position: relative; z-index: 1; color: var(--cyber-text); background: color-mix(in srgb, var(--cyber-amber) 22%, var(--cyber-panel)); box-shadow: inset 0 0 0 2px var(--cyber-amber); }
+.excel-preview-row.is-selected-row { background: color-mix(in srgb, var(--cyber-status-info) 10%, var(--cyber-panel)); }
+.excel-preview-row.is-selected-row::after { position: absolute; z-index: 8; inset: 0; border: 2px solid var(--cyber-status-info); content: ""; pointer-events: none; }
+.excel-preview-row.is-selected-row > .excel-preview-row-number { color: var(--cyber-text); background: color-mix(in srgb, var(--cyber-status-info) 28%, var(--cyber-panel)); font-weight: 800; }
 
 .excel-preview-panel > footer {
   display: flex;

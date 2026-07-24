@@ -919,6 +919,8 @@ describe("AutoPricingTool cyber workstation", () => {
       .find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "2");
     expect(initialPreviewDataRow?.querySelectorAll(".is-writeback-column")).toHaveLength(3);
     expect(initialPreviewDataRow).toHaveTextContent("9");
+    fireEvent.click(initialPreviewDataRow?.querySelector(".excel-preview-row-number") as HTMLElement);
+    expect(initialPreviewDataRow).toHaveClass("is-selected-row");
     const previewHeaderCells = Array.from(dialog.querySelectorAll(".excel-preview-frozen-header > span:not(.excel-preview-row-number)"))
       .map((cell) => cell.textContent);
     expect(previewHeaderCells.slice(9)).toEqual(["价格", "核价[财务]", "金额差", "数量", "Name", "Address"]);
