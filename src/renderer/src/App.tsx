@@ -683,6 +683,7 @@ export function App(): React.JSX.Element {
                 matchedRows: analysis.automationDecision.matchedRows,
                 coverage: analysis.automationDecision.coverage,
                 matchedOrderRows: analysis.matchedOrderRows ?? [],
+                writebackRows: analysis.writebackRows ?? [],
                 errors: [],
                 warnings: analysis.automationDecision.reasons,
               },
@@ -1610,7 +1611,12 @@ export function App(): React.JSX.Element {
   const detailResult = detailPath ? results[detailPath] : undefined;
   const detailMapping = detailPath ? mappings[detailPath] ?? detailAnalysis?.suggestedMapping ?? null : null;
   const detailValidation: MappingValidationState = detailPath ? mappingValidations[detailPath] ?? { status: "idle", result: null } : { status: "idle", result: null };
-  const detailMatchedOrderRows = detailPath && detailMapping ? matchedOrderRowsBySheet[detailPath]?.[detailMapping.orderSheet] ?? [] : [];
+  const detailMatchedOrderRows = detailPath && detailMapping && detailValidation.status === "ready"
+    ? matchedOrderRowsBySheet[detailPath]?.[detailMapping.orderSheet] ?? []
+    : [];
+  const detailWritebackRows = detailValidation.status === "ready"
+    ? detailValidation.result?.writebackRows ?? []
+    : [];
   const detailPreviewCandidates = useMemo<ExcelPreviewCandidate[]>(() => {
     if (!detailAnalysis) return [];
     const rolesBySheet = new Map<string, Set<ExcelPreviewCandidate["roles"][number]>>();
@@ -1931,6 +1937,7 @@ export function App(): React.JSX.Element {
                   activeSheetName={detailPreviewSheetName}
                   mapping={detailMapping}
                   matchedOrderRows={detailMatchedOrderRows}
+                  writebackRows={detailWritebackRows}
                   activeTarget={activeMappingTarget}
                   selectionPrompt={activeMappingTarget ? `正在选择“${mappingTargetLabel(activeMappingTarget)}”` : undefined}
                   onActiveSheetChange={setDetailPreviewSheetName}

@@ -3598,16 +3598,13 @@ html:not(.dark) .cyber-log-drawer {
 .excel-preview-row { position: absolute; top: 0; left: 0; color: var(--cyber-text); background: var(--cyber-panel); }
 .excel-preview-frozen-header { position: sticky; z-index: 3; top: 30px; left: 0; height: 30px; margin-bottom: -30px; background: var(--cyber-panel); box-shadow: 0 1px 0 var(--cyber-border-soft); }
 .excel-preview-row:nth-child(even) { background: color-mix(in srgb, var(--cyber-panel-soft) 40%, var(--cyber-panel)); }
-.excel-preview-row.is-same-order-group { background: color-mix(in srgb, var(--success) 10%, var(--cyber-panel)); }
 .excel-preview-row:hover { background: color-mix(in srgb, var(--cyber-primary) 5%, var(--cyber-panel)); }
 .excel-preview-header > span.is-pinned-column,
 .excel-preview-row > span.is-pinned-column { position: sticky; z-index: 3; background: var(--cyber-panel); box-shadow: 1px 0 0 var(--cyber-border), 5px 0 10px rgb(0 0 0 / 5%); }
-.excel-preview-row.is-same-order-group > span.is-pinned-column { background: color-mix(in srgb, var(--success) 10%, var(--cyber-panel)); }
 .excel-preview-header > span.is-pinned-column { z-index: 6; background: var(--cyber-panel-soft); }
 .excel-preview-frozen-header > span.is-pinned-column { z-index: 5; }
 .excel-preview-header .excel-preview-corner,
 .excel-preview-row .excel-preview-row-number { position: sticky; z-index: 2; left: 0; color: var(--cyber-dim); background: var(--cyber-panel-soft); font-family: var(--font-code); text-align: center; box-shadow: 1px 0 0 var(--cyber-border-soft); }
-.excel-preview-row.is-same-order-group > .excel-preview-row-number { background: color-mix(in srgb, var(--success) 16%, var(--cyber-panel)); }
 .excel-preview-header .excel-preview-corner { z-index: 8; }
 
 .excel-preview-header > span:not(.excel-preview-corner),
@@ -3620,6 +3617,11 @@ html:not(.dark) .cyber-log-drawer {
 .excel-preview-row > span.is-sku-column { color: color-mix(in srgb, var(--cyber-primary) 86%, var(--cyber-text)); background: color-mix(in srgb, var(--cyber-primary) 16%, transparent); }
 .excel-preview-header > span.is-sku-qty-column,
 .excel-preview-row > span.is-sku-qty-column { color: color-mix(in srgb, var(--cyber-primary) 86%, var(--cyber-text)); background: color-mix(in srgb, var(--cyber-primary) var(--sku-pair-strength, 14%), transparent); }
+.excel-preview-header > span.is-writeback-column,
+.excel-preview-row > span.is-writeback-column { background: color-mix(in srgb, var(--success) 13%, transparent); }
+.excel-preview-row > span.is-positive-difference { color: var(--error); font-weight: 700; }
+.excel-preview-row > span.is-negative-difference { color: var(--success); font-weight: 700; }
+.excel-preview-row > span.is-mismatched-quantity { color: var(--error); font-weight: 700; }
 .excel-preview-header > span.is-pinned-column.is-mapped-column,
 .excel-preview-row > span.is-pinned-column.is-mapped-column { background: color-mix(in srgb, #4d9fd8 9%, var(--cyber-panel)); }
 .excel-preview-header > span.is-pinned-column.is-price-column,
@@ -3628,6 +3630,8 @@ html:not(.dark) .cyber-log-drawer {
 .excel-preview-row > span.is-pinned-column.is-sku-column { background: color-mix(in srgb, var(--cyber-primary) 16%, var(--cyber-panel)); }
 .excel-preview-header > span.is-pinned-column.is-sku-qty-column,
 .excel-preview-row > span.is-pinned-column.is-sku-qty-column { background: color-mix(in srgb, var(--cyber-primary) var(--sku-pair-strength, 14%), var(--cyber-panel)); }
+.excel-preview-header > span.is-pinned-column.is-writeback-column,
+.excel-preview-row > span.is-pinned-column.is-writeback-column { background: color-mix(in srgb, var(--success) 13%, var(--cyber-panel)); }
 .excel-preview-header > span.is-active-column,
 .excel-preview-row > span.is-active-column { box-shadow: inset 2px 0 var(--cyber-primary), inset -2px 0 var(--cyber-primary); }
 .excel-preview-header > span.is-hover-column,

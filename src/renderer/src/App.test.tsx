@@ -59,6 +59,7 @@ function createAnalysis(path: string): PriceAnalysisFile {
     suggestedMapping: mapping,
     coverage: 1,
     matchedOrderRows: [2],
+    writebackRows: [{ sourceRow: 2, pricingPrice: 9.5, priceDifference: 0, quantity: 1 }],
     requiresConfirmation: false,
     automationDecision: {
       status: "eligible",
@@ -151,21 +152,25 @@ class FakeExcelPreviewWorker {
       requestId: request.requestId,
       ok: true,
       workbook: {
-        sheets: request.candidates.map((candidate) => ({
-          name: candidate.name,
-          roles: candidate.roles,
-          rows: candidate.roles.includes("order")
+        sheets: request.candidates.map((candidate) => {
+          const rows = candidate.roles.includes("order")
             ? FakeExcelPreviewWorker.orderRows ?? [["订单号", "平台订单号", "备用SKU", "国家", "英文国家", "中文国家", "物流", "SKU", "数量", "价格"], [candidate.name + "-数据", "P-1", "OLD-1", "US", "United States", "美国", "", "GOOD-1", "1", "9.5"]]
-            : [["SKU", "Country", "1", "2", "3"], [candidate.name === "核价" ? "GOOD-1" : candidate.name + "-数据", "United States", "9.5", "9", "8.5"]],
-          startRow: 0,
-          startColumn: 0,
-          rowCount: 2,
-          columnCount: candidate.roles.includes("order") ? 10 : 5,
-          displayedRowCount: 2,
-          displayedColumnCount: candidate.roles.includes("order") ? 10 : 5,
-          truncatedRows: false,
-          truncatedColumns: false,
-        })),
+            : [["SKU", "Country", "1", "2", "3"], [candidate.name === "核价" ? "GOOD-1" : candidate.name + "-数据", "United States", "9.5", "9", "8.5"]];
+          const columnCount = Math.max(0, ...rows.map((row) => row.length));
+          return {
+            name: candidate.name,
+            roles: candidate.roles,
+            rows,
+            startRow: 0,
+            startColumn: 0,
+            rowCount: rows.length,
+            columnCount,
+            displayedRowCount: rows.length,
+            displayedColumnCount: columnCount,
+            truncatedRows: false,
+            truncatedColumns: false,
+          };
+        }),
       },
     };
     queueMicrotask(() => this.onmessage?.({ data: response } as MessageEvent<ExcelPreviewWorkerResponse>));
@@ -826,6 +831,14 @@ describe("AutoPricingTool cyber workstation", () => {
 
   it("previews candidate sheets and resizes the detail drawer", async () => {
     vi.stubGlobal("Worker", FakeExcelPreviewWorker);
+    FakeExcelPreviewWorker.orderRows = [
+      ["订单号", "平台订单号", "备用SKU", "国家", "英文国家", "中文国家", "物流", "SKU", "数量", "价格", "Name", "Address"],
+      ["订单-数据", "P-1", "OLD-1", "US", "United States", "美国", "", "OTHER-1", "1", "9.5", "Buyer", "Street"],
+      ...Array.from({ length: 15 }, (_, index) => [
+        `ROW-${index + 3}`, `P-${index + 2}`, "OLD-1", "US", "United States", "美国", "", "OTHER-1", "1", "9.5", "Buyer", "Street",
+      ]),
+      ["TARGET-ROW", "P-18", "OLD-1", "US", "United States", "美国", "", "GOOD-1*2", "1", "9.5", "Buyer", "Street"],
+    ];
     const api = createDesktopAPI();
     vi.mocked(api.readExcelPreviewFile).mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), size: 3, modifiedAt: 1 });
     installAPI(api);
@@ -836,6 +849,12 @@ describe("AutoPricingTool cyber workstation", () => {
     const analysis = createAnalysis("C:\\orders\\order.xlsx");
     analysis.requiresConfirmation = true;
     analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
+    analysis.writebackRows = [
+      { sourceRow: 2, pricingPrice: 9.5, priceDifference: 0, quantity: 1 },
+      { sourceRow: 18, pricingPrice: 9, priceDifference: -0.5, quantity: 2 },
+    ];
+    analysis.suggestedMapping!.quantityTierColumns.push({ quantity: 2, column: 4, header: "2" });
+    analysis.pricingSheetCandidates[0].tierColumns = analysis.suggestedMapping!.quantityTierColumns;
     analysis.pricingSheetCandidates.push({ ...analysis.pricingSheetCandidates[0], sheetName: "报价二", score: 80 });
     await act(async () => {
       api.emit({ type: "price-analysis", file: analysis });
@@ -883,6 +902,14 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByText("订单 90.0 分")).toBeInTheDocument();
     expect(screen.getByText("核价 90.0 分")).toBeInTheDocument();
     expect(screen.getByText("核价 80.0 分")).toBeInTheDocument();
+    expect(screen.getAllByText("核价[财务]").length).toBeGreaterThan(0);
+    const initialPreviewDataRow = Array.from(dialog.querySelectorAll(".excel-preview-rows .excel-preview-row"))
+      .find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "2");
+    expect(initialPreviewDataRow?.querySelectorAll(".is-writeback-column")).toHaveLength(3);
+    expect(initialPreviewDataRow).toHaveTextContent("9");
+    const previewHeaderCells = Array.from(dialog.querySelectorAll(".excel-preview-frozen-header > span:not(.excel-preview-row-number)"))
+      .map((cell) => cell.textContent);
+    expect(previewHeaderCells.slice(9)).toEqual(["价格", "核价[财务]", "金额差", "数量", "Name", "Address"]);
     fireEvent.keyDown(document, { key: "f", ctrlKey: true });
     const previewSearch = screen.getByRole("searchbox", { name: "搜索表格数据" });
     await waitFor(() => expect(previewSearch).toHaveFocus());
@@ -953,7 +980,7 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(previewColumnOrder().slice(0, 4)).toEqual(["C", "A", "B", "D"]);
     fireEvent.click(screen.getByRole("button", { name: "取消冻结 C 列" }));
     expect(previewColumnOrder().slice(0, 4)).toEqual(["A", "B", "C", "D"]);
-    const orderDataRowNumber = Array.from(dialog.querySelectorAll(".excel-preview-rows .excel-preview-row-number")).find((element) => element.textContent === "2");
+    const orderDataRowNumber = Array.from(dialog.querySelectorAll(".excel-preview-rows .excel-preview-row-number")).find((element) => element.textContent === "18");
     expect(orderDataRowNumber).toBeDefined();
     fireEvent.doubleClick(orderDataRowNumber!);
     const automaticSearch = await screen.findByRole("searchbox", { name: "搜索表格数据" });
@@ -962,9 +989,19 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByText("GOOD-1")).toBeInTheDocument();
     expect(screen.getByText("1/1")).toBeInTheDocument();
     expect(dialog.querySelector(".excel-preview-row.is-search-matched-row")).toHaveTextContent("GOOD-1");
-    expect(dialog.querySelector(".excel-preview-rows .is-search-match")).toHaveTextContent("9.5");
-    fireEvent.keyDown(automaticSearch, { key: "f", ctrlKey: true });
+    expect(dialog.querySelector(".excel-preview-rows .is-search-match")).toHaveTextContent("9");
+    const returnedPreviewScroll = dialog.querySelector(".excel-preview-scroll") as HTMLDivElement;
+    returnedPreviewScroll.scrollTop = 0;
+    fireEvent.click(screen.getByText("订单", { selector: ".excel-preview-tabs button strong" }));
+    const expectedReturnScrollTop = Math.max(0, 17 * 30 - returnedPreviewScroll.clientHeight / 2);
+    await waitFor(() => expect(returnedPreviewScroll.scrollTop).toBe(expectedReturnScrollTop));
+    expect(returnedPreviewScroll.scrollTop).toBeGreaterThan(0);
     expect(screen.queryByRole("searchbox", { name: "搜索表格数据" })).not.toBeInTheDocument();
+    expect(screen.getByText("订单", { selector: ".excel-preview-tabs button strong" }).closest("button")).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(document, { key: "f", ctrlKey: true });
+    const returnedOrderSearch = screen.getByRole("searchbox", { name: "搜索表格数据" });
+    expect(returnedOrderSearch).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
     const pricingSheetSelect = screen.getAllByLabelText("核价 Sheet").find((element) => element.tagName === "SELECT");
     expect(pricingSheetSelect).toBeDefined();
     fireEvent.change(pricingSheetSelect!, { target: { value: "报价二" } });
@@ -1002,11 +1039,11 @@ describe("AutoPricingTool cyber workstation", () => {
     await waitFor(() => expect(vi.mocked(api.validatePriceMapping).mock.calls.some(([payload]) => (
       payload.mapping.businessOrderNumberColumn === 2
     ))).toBe(true));
-    expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
+    expect(document.querySelector(".excel-preview-row-number.is-matched-row")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("核价", { selector: ".excel-preview-tabs button strong" }));
     expect(document.querySelector(".excel-preview-row-number.is-matched-row")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("订单", { selector: ".excel-preview-tabs button strong" }));
-    expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
+    expect(document.querySelector(".excel-preview-row-number.is-matched-row")).not.toBeInTheDocument();
     expect(document.querySelectorAll(".excel-preview-header .is-sku-qty-column").length).toBeGreaterThan(0);
     expect(document.querySelectorAll(".excel-preview-header .is-price-column").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("冻结表头，第 1 行")).toHaveTextContent("订单号");
@@ -1037,10 +1074,31 @@ describe("AutoPricingTool cyber workstation", () => {
     }
     expect(request.mapping.skuQtyPairs[0].skuColumn).toBe(3);
 
-    await act(async () => api.emit({ type: "price-validation", inputPath: request.inputPath, requestVersion: request.requestVersion, evaluatedRows: 1, matchedRows: 1, coverage: 1, matchedOrderRows: [2], errors: [], warnings: [] }));
+    await act(async () => api.emit({
+      type: "price-validation",
+      inputPath: request.inputPath,
+      requestVersion: request.requestVersion,
+      evaluatedRows: 1,
+      matchedRows: 1,
+      coverage: 1,
+      matchedOrderRows: [2],
+      writebackRows: [{ sourceRow: 2, pricingPrice: 12.5, priceDifference: 3, quantity: 2 }],
+      errors: [],
+      warnings: [],
+    }));
     expect(await screen.findByText(/试算 1\/1 行/)).toBeInTheDocument();
     expect(confirm).toBeEnabled();
     expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
+    expect(screen.getAllByText("核价[财务]").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("金额差").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("数量").length).toBeGreaterThan(0);
+    const previewDataRow = Array.from(document.querySelectorAll(".excel-preview-rows .excel-preview-row"))
+      .find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "2");
+    expect(previewDataRow).toHaveTextContent("12.5");
+    expect(previewDataRow).toHaveTextContent("3");
+    expect(previewDataRow).toHaveTextContent("2");
+    expect(previewDataRow?.querySelectorAll(".is-writeback-column")).toHaveLength(3);
+    expect(previewDataRow?.querySelectorAll(".is-writeback-column")[2]).toHaveClass("is-mismatched-quantity");
     const callsBeforeManualValidation = vi.mocked(api.validatePriceMapping).mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "重新试算" }));
     await waitFor(() => expect(api.validatePriceMapping).toHaveBeenCalledTimes(callsBeforeManualValidation + 1));
@@ -1053,7 +1111,16 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
     await act(async () => api.emit({ type: "price-validation", inputPath: request.inputPath, requestVersion: 0, evaluatedRows: 1, matchedRows: 0, coverage: 0, errors: [], warnings: ["过期结果"] }));
     expect(screen.queryByText("过期结果")).not.toBeInTheDocument();
-  }, 10_000);
+    const quantitySelect = screen.getByLabelText("数量 1");
+    fireEvent.change(quantitySelect, { target: { value: "1" } });
+    await waitFor(() => expect(vi.mocked(api.validatePriceMapping).mock.calls.some(([payload]) => (
+      payload.mapping.skuQtyPairs[0].qtyColumn === 1
+    ))).toBe(true));
+    expect(document.querySelector(".excel-preview-row-number.is-matched-row")).not.toBeInTheDocument();
+    const staleWritebackCells = document.querySelectorAll(".excel-preview-rows .is-writeback-column:not(.is-header-cell)");
+    expect(staleWritebackCells).toHaveLength(3);
+    staleWritebackCells.forEach((cell) => expect(cell).toHaveTextContent(""));
+  }, 15_000);
 
   it("uses one shade for each SKU and quantity pair and different shades between pairs", async () => {
     vi.stubGlobal("Worker", FakeExcelPreviewWorker);
@@ -1097,13 +1164,14 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("SKU/数量 1SKU/数量 2");
   });
 
-  it("uses one background for rows with the same order number", async () => {
+  it("highlights only contiguous duplicate order numbers", async () => {
     vi.stubGlobal("Worker", FakeExcelPreviewWorker);
     FakeExcelPreviewWorker.orderRows = [
-      ["订单号", "平台订单号", "备用SKU", "国家", "英文国家", "中文国家", "物流", "SKU", "数量", "价格"],
-      ["ORDER-1", "P-1", "", "US", "United States", "美国", "", "SKU-A", "1", "9.5"],
-      ["ORDER-1", "P-2", "", "US", "United States", "美国", "", "SKU-A", "1", "9.5"],
-      ["ORDER-2", "P-3", "", "US", "United States", "美国", "", "SKU-B", "1", "9.5"],
+      ["订单号", "平台订单号", "SKU 2", "国家", "英文国家", "中文国家", "物流", "SKU 1", "数量", "价格"],
+      ["ORDER-1", "P-1", "SKU-X", "US", "United States", "美国", "", "SKU-A", "1", "9.5"],
+      ["ORDER-1", "P-2", "SKU-X", "US", "United States", "美国", "", "SKU-A", "1", "9.5"],
+      ["ORDER-2", "P-3", "SKU-X", "US", "United States", "美国", "", "SKU-B", "1", "9.5"],
+      ["ORDER-1", "P-4", "SKU-X", "US", "United States", "美国", "", "SKU-A", "1", "9.5"],
     ];
     const api = createDesktopAPI();
     vi.mocked(api.readExcelPreviewFile).mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), size: 3, modifiedAt: 1 });
@@ -1113,6 +1181,17 @@ describe("AutoPricingTool cyber workstation", () => {
     dropFiles([new File(["xlsx"], "order.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
     expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
     const analysis = createAnalysis("C:\\orders\\order.xlsx");
+    const skuPairs = [
+      { skuColumn: 3, qtyColumn: 2, skuHeader: "SKU 2", qtyHeader: "平台订单号" },
+      { skuColumn: 8, qtyColumn: 9, skuHeader: "SKU 1", qtyHeader: "数量" },
+    ];
+    analysis.suggestedMapping!.skuQtyPairs = skuPairs;
+    analysis.orderSheetCandidates[0].skuQtyPairs = skuPairs;
+    analysis.writebackRows = [
+      { sourceRow: 2, pricingPrice: 10, priceDifference: 1.5, quantity: 1 },
+      { sourceRow: 3, pricingPrice: 8, priceDifference: -2, quantity: 2 },
+      { sourceRow: 4, pricingPrice: 9.5, priceDifference: 0, quantity: 1 },
+    ];
     analysis.requiresConfirmation = true;
     analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
     await act(async () => {
@@ -1123,11 +1202,28 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "详情" }));
     await screen.findByText("ORDER-2");
 
-    const groupedRows = document.querySelectorAll(".excel-preview-row.is-same-order-group");
-    expect(groupedRows).toHaveLength(2);
-    expect(groupedRows[0]).toHaveTextContent("ORDER-1");
-    expect(groupedRows[1]).toHaveTextContent("ORDER-1");
-    expect(screen.getByText("ORDER-2", { selector: ".excel-preview-row > span" }).closest(".excel-preview-row")).not.toHaveClass("is-same-order-group");
+    const duplicateOrderCells = document.querySelectorAll(".excel-preview-row > .is-duplicate-order");
+    expect(duplicateOrderCells).toHaveLength(2);
+    duplicateOrderCells.forEach((cell) => {
+      expect(cell).toHaveTextContent("ORDER-1");
+      expect(cell).toHaveClass("is-mapped-column");
+    });
+    const repeatedOrderCells = screen.getAllByText("ORDER-1", { selector: ".excel-preview-row > span" });
+    expect(repeatedOrderCells).toHaveLength(3);
+    expect(repeatedOrderCells.filter((cell) => cell.classList.contains("is-duplicate-order"))).toHaveLength(2);
+    expect(repeatedOrderCells.filter((cell) => !cell.classList.contains("is-duplicate-order"))).toHaveLength(1);
+    expect(document.querySelector(".excel-preview-row > .is-duplicate-sku")).not.toBeInTheDocument();
+    expect(document.querySelector(".excel-preview-row > .is-sku-qty-column:not(.is-header-cell)")).not.toBeInTheDocument();
+    expect(document.querySelector(".excel-preview-row.is-same-order-group")).not.toBeInTheDocument();
+    expect(screen.getByText("ORDER-2", { selector: ".excel-preview-row > span" })).not.toHaveClass("is-duplicate-order");
+    expect(screen.getByText("1.5", { selector: ".is-positive-difference" })).toBeInTheDocument();
+    expect(screen.getByText("-2", { selector: ".is-negative-difference" })).toBeInTheDocument();
+    expect(screen.getByText("0", { selector: ".is-writeback-column" })).not.toHaveClass("is-positive-difference", "is-negative-difference");
+    const previewRows = Array.from(document.querySelectorAll(".excel-preview-rows .excel-preview-row"));
+    const matchingQuantityRow = previewRows.find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "2");
+    const mismatchedQuantityRow = previewRows.find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "3");
+    expect(matchingQuantityRow?.querySelectorAll(".is-writeback-column")[2]).not.toHaveClass("is-mismatched-quantity");
+    expect(mismatchedQuantityRow?.querySelectorAll(".is-writeback-column")[2]).toHaveClass("is-mismatched-quantity");
   });
 
   it("classifies generated results with issue rows as exceptions", async () => {
