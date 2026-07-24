@@ -357,6 +357,11 @@ function mappingIsComplete(mapping: PriceCheckMapping | null | undefined): boole
     mapping.businessOrderNumberColumn &&
     (mapping.countryCodeColumn || mapping.countryEnglishColumn || mapping.countryChineseColumn) &&
     mapping.skuQtyPairs.length > 0 &&
+    mapping.skuQtyPairs.every((pair) => (
+      pair.qtyColumn > 0
+      && pair.qtyColumn + 1 === pair.skuColumn
+      && pair.skuColumn + 1 === pair.mergedQtyColumn
+    )) &&
     mapping.pricingSkuColumn > 0 &&
     mapping.pricingCountryColumn > 0 &&
     mapping.quantityTierColumns.length > 0 &&
@@ -365,11 +370,15 @@ function mappingIsComplete(mapping: PriceCheckMapping | null | undefined): boole
 }
 
 function applyMappingColumn(mapping: PriceCheckMapping, target: MappingFieldTarget, column: number | null, header: string): PriceCheckMapping {
-  const pairMatch = /^skuQtyPairs\.(\d+)\.(skuColumn|qtyColumn)$/.exec(target);
+  const pairMatch = /^skuQtyPairs\.(\d+)\.(skuColumn|qtyColumn|mergedQtyColumn)$/.exec(target);
   if (pairMatch) {
     const pairIndex = Number(pairMatch[1]);
-    const field = pairMatch[2] as "skuColumn" | "qtyColumn";
-    const headerField = field === "skuColumn" ? "skuHeader" : "qtyHeader";
+    const field = pairMatch[2] as "skuColumn" | "qtyColumn" | "mergedQtyColumn";
+    const headerField = field === "skuColumn"
+      ? "skuHeader"
+      : field === "qtyColumn"
+        ? "qtyHeader"
+        : "mergedQtyHeader";
     return {
       ...mapping,
       skuQtyPairs: mapping.skuQtyPairs.map((pair, index) => index === pairIndex ? { ...pair, [field]: column ?? 0, [headerField]: header } : pair),
@@ -405,8 +414,15 @@ function mappingTargetLabel(target: MappingFieldTarget | null): string {
     pricingShippingMethodColumn: "核价物流",
   };
   if (labels[target]) return labels[target];
-  const pair = /^skuQtyPairs\.(\d+)\.(skuColumn|qtyColumn)$/.exec(target);
-  if (pair) return `${pair[2] === "skuColumn" ? "SKU" : "数量"} ${Number(pair[1]) + 1}`;
+  const pair = /^skuQtyPairs\.(\d+)\.(skuColumn|qtyColumn|mergedQtyColumn)$/.exec(target);
+  if (pair) {
+    const label = pair[2] === "skuColumn"
+      ? "SKU"
+      : pair[2] === "qtyColumn"
+        ? "原始数量"
+        : "合并数量";
+    return `${label} ${Number(pair[1]) + 1}`;
+  }
   const tier = /^quantityTierColumns\.(\d+)\.column$/.exec(target);
   return tier ? `价格列 ${Number(tier[1]) + 1}` : "字段";
 }
@@ -430,6 +446,7 @@ function mappingColumnConflict(mapping: PriceCheckMapping, target: MappingFieldT
         ...mapping.skuQtyPairs.flatMap((pair, index) => [
           [`skuQtyPairs.${index}.skuColumn` as MappingFieldTarget, pair.skuColumn] as [MappingFieldTarget, number],
           [`skuQtyPairs.${index}.qtyColumn` as MappingFieldTarget, pair.qtyColumn] as [MappingFieldTarget, number],
+          [`skuQtyPairs.${index}.mergedQtyColumn` as MappingFieldTarget, pair.mergedQtyColumn] as [MappingFieldTarget, number],
         ]),
       ];
   const conflict = entries.find(([entryTarget, entryColumn]) => entryTarget !== target && entryColumn === column);
@@ -1674,9 +1691,10 @@ export function App(): React.JSX.Element {
       return;
     }
     commitMapping(detailPath, applyMappingColumn(detailMapping, target, column, header));
-    const pairMatch = column === null ? null : /^skuQtyPairs\.(\d+)\.skuColumn$/.exec(target);
+    const pairMatch = column === null ? null : /^skuQtyPairs\.(\d+)\.(qtyColumn|skuColumn)$/.exec(target);
     if (pairMatch && fromPreview) {
-      setActiveMappingTarget(`skuQtyPairs.${Number(pairMatch[1])}.qtyColumn`);
+      const nextField = pairMatch[2] === "qtyColumn" ? "skuColumn" : "mergedQtyColumn";
+      setActiveMappingTarget(`skuQtyPairs.${Number(pairMatch[1])}.${nextField}`);
     } else {
       setActiveMappingTarget(null);
     }
@@ -2355,7 +2373,7 @@ export function App(): React.JSX.Element {
                                 <label>订单 Sheet<select value={currentMapping?.orderSheet ?? ""} onChange={(event) => updateMapping(path, event.currentTarget.value, currentMapping?.pricingSheet ?? "")}>{analysis.orderSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.validOrderRows ?? 0} 行</option>)}</select></label>
                                 <label>核价 Sheet<select value={currentMapping?.pricingSheet ?? ""} onChange={(event) => updateMapping(path, currentMapping?.orderSheet ?? "", event.currentTarget.value)}>{analysis.pricingSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.validPriceRows ?? 0} 行</option>)}</select></label>
                               </div>
-                              {currentMapping ? <div className="mapping-line"><span>表头：订单第 {currentMapping.orderHeaderRow} 行 / 核价第 {currentMapping.pricingHeaderRow} 行</span><span>订单号：{columnLabel(currentMapping.businessOrderNumberColumn)}</span><span>国家：{columnLabel(currentMapping.countryCodeColumn)} + {columnLabel(currentMapping.countryEnglishColumn)} + {columnLabel(currentMapping.countryChineseColumn)}</span><span>SKU/数量：{currentMapping.skuQtyPairs.map((pair) => pair.skuColumn + "/" + pair.qtyColumn).join("、") || "未识别"}</span><span>数量档位：{currentMapping.quantityTierColumns.map((tier) => tier.quantity).join("、") || "未识别"}</span></div> : null}
+                              {currentMapping ? <div className="mapping-line"><span>表头：订单第 {currentMapping.orderHeaderRow} 行 / 核价第 {currentMapping.pricingHeaderRow} 行</span><span>订单号：{columnLabel(currentMapping.businessOrderNumberColumn)}</span><span>国家：{columnLabel(currentMapping.countryCodeColumn)} + {columnLabel(currentMapping.countryEnglishColumn)} + {columnLabel(currentMapping.countryChineseColumn)}</span><span>数量/SKU/合并数量：{currentMapping.skuQtyPairs.map((pair) => pair.qtyColumn + "/" + pair.skuColumn + "/" + pair.mergedQtyColumn).join("、") || "未识别"}</span><span>数量档位：{currentMapping.quantityTierColumns.map((tier) => tier.quantity).join("、") || "未识别"}</span></div> : null}
                               {analysis.issues.length > 0 ? <ul className="detail-issues">{analysis.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}
                             </>
                           ) : <div className="detail-empty">尚未分析此文件</div>}

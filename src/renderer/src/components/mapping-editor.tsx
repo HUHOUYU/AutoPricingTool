@@ -18,6 +18,7 @@ export type MappingFieldTarget =
   | "pricingShippingMethodColumn"
   | `skuQtyPairs.${number}.skuColumn`
   | `skuQtyPairs.${number}.qtyColumn`
+  | `skuQtyPairs.${number}.mergedQtyColumn`
   | `quantityTierColumns.${number}.column`;
 
 export type MappingValidationState = {
@@ -171,12 +172,13 @@ export function MappingEditor({
         </div>
         <div className="mapping-repeat-list">
           {mapping.skuQtyPairs.map((pair, index) => <div className="mapping-repeat-row" key={index}>
-            <b>SKU/数量 {index + 1}</b>
+            <b>数量/SKU/合并数量 {index + 1}</b>
+            <FieldSelect label={`原始数量 ${index + 1}`} value={pair.qtyColumn || null} options={orderOptions} target={`skuQtyPairs.${index}.qtyColumn`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange(`skuQtyPairs.${index}.qtyColumn`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
             <FieldSelect label={`SKU ${index + 1}`} value={pair.skuColumn || null} options={orderOptions} target={`skuQtyPairs.${index}.skuColumn`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange(`skuQtyPairs.${index}.skuColumn`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
-            <FieldSelect label={`数量 ${index + 1}`} value={pair.qtyColumn || null} options={orderOptions} target={`skuQtyPairs.${index}.qtyColumn`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange(`skuQtyPairs.${index}.qtyColumn`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
-            <button type="button" aria-label={`删除 SKU/数量 ${index + 1}`} disabled={mapping.skuQtyPairs.length === 1} onClick={() => update({ skuQtyPairs: mapping.skuQtyPairs.filter((_, pairIndex) => pairIndex !== index) })}><Trash2 /></button>
+            <FieldSelect label={`合并数量 ${index + 1}`} value={pair.mergedQtyColumn || null} options={orderOptions} target={`skuQtyPairs.${index}.mergedQtyColumn`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange(`skuQtyPairs.${index}.mergedQtyColumn`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
+            <button type="button" aria-label={`删除数量/SKU/合并数量 ${index + 1}`} disabled={mapping.skuQtyPairs.length === 1} onClick={() => update({ skuQtyPairs: mapping.skuQtyPairs.filter((_, pairIndex) => pairIndex !== index) })}><Trash2 /></button>
           </div>)}
-          <Button type="button" variant="outline" size="sm" onClick={() => update({ skuQtyPairs: [...mapping.skuQtyPairs, { skuColumn: 0, qtyColumn: 0, skuHeader: "", qtyHeader: "" }] })}><Plus />添加 SKU/数量</Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => update({ skuQtyPairs: [...mapping.skuQtyPairs, { skuColumn: 0, qtyColumn: 0, mergedQtyColumn: 0, skuHeader: "", qtyHeader: "", mergedQtyHeader: "" }] })}><Plus />添加数量/SKU/合并数量</Button>
         </div>
       </details>
 

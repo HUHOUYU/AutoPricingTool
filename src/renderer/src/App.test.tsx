@@ -15,7 +15,14 @@ function createAnalysis(path: string): PriceAnalysisFile {
     countryCodeColumn: 4,
     countryEnglishColumn: 5,
     countryChineseColumn: 6,
-    skuQtyPairs: [{ skuColumn: 8, qtyColumn: 9, skuHeader: "SKU", qtyHeader: "Qty" }],
+    skuQtyPairs: [{
+      skuColumn: 8,
+      qtyColumn: 7,
+      mergedQtyColumn: 9,
+      skuHeader: "SKU",
+      qtyHeader: "Qty",
+      mergedQtyHeader: "Merged Qty",
+    }],
     shippingMethodColumn: 7,
     orderPriceColumn: 10,
     pricingSheet: "核价",
@@ -1022,6 +1029,8 @@ describe("AutoPricingTool cyber workstation", () => {
     dropFiles([new File(["xlsx"], "order.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
     expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
     const analysis = createAnalysis("C:\\orders\\order.xlsx");
+    analysis.suggestedMapping!.shippingMethodColumn = null;
+    analysis.orderSheetCandidates[0].shippingMethodColumn = null;
     analysis.requiresConfirmation = true;
     analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
     await act(async () => {
@@ -1047,32 +1056,29 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(document.querySelectorAll(".excel-preview-header .is-sku-qty-column").length).toBeGreaterThan(0);
     expect(document.querySelectorAll(".excel-preview-header .is-price-column").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("冻结表头，第 1 行")).toHaveTextContent("订单号");
-    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("SKU/数量 1价格字段常规匹配字段");
+    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("数量/SKU/合并数量 1价格字段常规匹配字段");
     expect(screen.queryByText(/已显示全部数据范围/)).not.toBeInTheDocument();
     expect(document.querySelector(".cyber-footer")).not.toBeInTheDocument();
-    const skuSelect = screen.getByLabelText("SKU 1");
-    await waitFor(() => expect((skuSelect as HTMLSelectElement).options.length).toBeGreaterThan(1));
-    fireEvent.click(screen.getByText("SKU 1", { selector: ".mapping-field > span" }));
-    await waitFor(() => expect(skuSelect.closest(".mapping-field")).toHaveClass("is-active"));
-    expect(screen.getByText("正在选择“SKU 1”")).toBeInTheDocument();
-    expect(screen.getByText("点击目标列中的任意单元格")).toBeInTheDocument();
-    const skuDataCell = screen.getByText("OLD-1", { selector: ".excel-preview-row > span" });
-    fireEvent.mouseEnter(skuDataCell);
-    expect(document.querySelectorAll(".is-hover-column").length).toBeGreaterThan(1);
-    fireEvent.click(skuDataCell);
-    expect(screen.getByText("正在选择“数量 1”")).toBeInTheDocument();
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByText("正在选择“数量 1”")).not.toBeInTheDocument();
+    const rawQuantitySelect = screen.getByLabelText("原始数量 1");
+    await waitFor(() => expect((rawQuantitySelect as HTMLSelectElement).options.length).toBeGreaterThan(1));
+    expect(screen.getByLabelText("SKU 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("合并数量 1")).toBeInTheDocument();
     const confirm = screen.getByRole("button", { name: "确认并处理此文件" });
     expect(confirm).toBeDisabled();
     await waitFor(() => expect(api.validatePriceMapping).toHaveBeenCalled());
-    let request = vi.mocked(api.validatePriceMapping).mock.calls.at(-1)![0];
-    if (request.mapping.skuQtyPairs[0].skuColumn !== 3) {
-      await act(async () => api.emit({ type: "price-validation", inputPath: request.inputPath, requestVersion: request.requestVersion, evaluatedRows: 1, matchedRows: 0, coverage: 0, errors: [], warnings: [] }));
-      await waitFor(() => expect(vi.mocked(api.validatePriceMapping).mock.calls.some(([payload]) => payload.mapping.skuQtyPairs[0].skuColumn === 3)).toBe(true));
-      request = vi.mocked(api.validatePriceMapping).mock.calls.filter(([payload]) => payload.mapping.skuQtyPairs[0].skuColumn === 3).at(-1)![0];
-    }
-    expect(request.mapping.skuQtyPairs[0].skuColumn).toBe(3);
+    await waitFor(() => expect(vi.mocked(api.validatePriceMapping).mock.calls.some(([payload]) => (
+      payload.mapping.businessOrderNumberColumn === 2
+      && payload.mapping.skuQtyPairs[0].qtyColumn === 7
+      && payload.mapping.skuQtyPairs[0].skuColumn === 8
+      && payload.mapping.skuQtyPairs[0].mergedQtyColumn === 9
+    ))).toBe(true));
+    const request = vi.mocked(api.validatePriceMapping).mock.calls.filter(([payload]) => (
+      payload.mapping.businessOrderNumberColumn === 2
+      && payload.mapping.skuQtyPairs[0].qtyColumn === 7
+      && payload.mapping.skuQtyPairs[0].skuColumn === 8
+      && payload.mapping.skuQtyPairs[0].mergedQtyColumn === 9
+    )).at(-1)![0];
+    expect(request.mapping.skuQtyPairs[0]).toMatchObject({ qtyColumn: 7, skuColumn: 8, mergedQtyColumn: 9 });
 
     await act(async () => api.emit({
       type: "price-validation",
@@ -1111,7 +1117,7 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
     await act(async () => api.emit({ type: "price-validation", inputPath: request.inputPath, requestVersion: 0, evaluatedRows: 1, matchedRows: 0, coverage: 0, errors: [], warnings: ["过期结果"] }));
     expect(screen.queryByText("过期结果")).not.toBeInTheDocument();
-    const quantitySelect = screen.getByLabelText("数量 1");
+    const quantitySelect = screen.getByLabelText("原始数量 1");
     fireEvent.change(quantitySelect, { target: { value: "1" } });
     await waitFor(() => expect(vi.mocked(api.validatePriceMapping).mock.calls.some(([payload]) => (
       payload.mapping.skuQtyPairs[0].qtyColumn === 1
@@ -1133,8 +1139,8 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
     const analysis = createAnalysis("C:\\orders\\order.xlsx");
     const pairs = [
-      { skuColumn: 3, qtyColumn: 10, skuHeader: "SKU 2", qtyHeader: "Qty 2" },
-      { skuColumn: 8, qtyColumn: 9, skuHeader: "SKU 1", qtyHeader: "Qty 1" },
+      { skuColumn: 3, qtyColumn: 2, mergedQtyColumn: 4, skuHeader: "SKU 2", qtyHeader: "Qty 2", mergedQtyHeader: "Merged Qty 2" },
+      { skuColumn: 8, qtyColumn: 7, mergedQtyColumn: 9, skuHeader: "SKU 1", qtyHeader: "Qty 1", mergedQtyHeader: "Merged Qty 1" },
     ];
     analysis.suggestedMapping!.skuQtyPairs = pairs;
     analysis.orderSheetCandidates[0].skuQtyPairs = pairs;
@@ -1153,25 +1159,25 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(column("H")).toHaveClass("is-sku-qty-column");
     expect(column("I")).toHaveClass("is-sku-qty-column");
     expect(column("C")).toHaveClass("is-sku-qty-column");
-    expect(column("J")).toHaveClass("is-sku-qty-column");
+    expect(column("D")).toHaveClass("is-sku-qty-column");
     expect(shade("H")).toBe(shade("I"));
-    expect(shade("C")).toBe(shade("J"));
+    expect(shade("C")).toBe(shade("D"));
     expect(shade("H")).not.toBe(shade("C"));
-    expect(Number.parseInt(shade("C"), 10)).toBeGreaterThan(Number.parseInt(shade("H"), 10));
+    expect(Number.parseInt(shade("H"), 10)).toBeGreaterThan(Number.parseInt(shade("C"), 10));
     const skuBodyCell = screen.getByText("GOOD-1", { selector: ".excel-preview-row > span" });
     expect(skuBodyCell).not.toHaveClass("is-sku-qty-column");
     expect(skuBodyCell.style.getPropertyValue("--sku-pair-strength")).toBe("");
-    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("SKU/数量 1SKU/数量 2");
+    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("数量/SKU/合并数量 1数量/SKU/合并数量 2");
   });
 
   it("highlights only contiguous duplicate order numbers", async () => {
     vi.stubGlobal("Worker", FakeExcelPreviewWorker);
     FakeExcelPreviewWorker.orderRows = [
-      ["订单号", "平台订单号", "SKU 2", "国家", "英文国家", "中文国家", "物流", "SKU 1", "数量", "价格"],
-      ["ORDER-1", "P-1", "SKU-X", "US", "United States", "美国", "", "SKU-A", "1", "9.5"],
-      ["ORDER-1", "P-2", "SKU-X", "US", "United States", "美国", "", "SKU-A", "1", "9.5"],
-      ["ORDER-2", "P-3", "SKU-X", "US", "United States", "美国", "", "SKU-B", "1", "9.5"],
-      ["ORDER-1", "P-4", "SKU-X", "US", "United States", "美国", "", "SKU-A", "1", "9.5"],
+      ["订单号", "平台订单号", "SKU 2", "国家", "英文国家", "中文国家", "数量", "SKU 1", "合并数量", "价格"],
+      ["ORDER-1", "P-1", "SKU-X", "US", "United States", "美国", "1", "SKU-A", "2", "9.5"],
+      ["ORDER-1", "P-2", "SKU-X", "US", "United States", "美国", "1", "SKU-A", "1", "9.5"],
+      ["ORDER-2", "P-3", "SKU-X", "US", "United States", "美国", "1", "SKU-B", "1", "9.5"],
+      ["ORDER-1", "P-4", "SKU-X", "US", "United States", "美国", "1", "SKU-A", "1", "9.5"],
     ];
     const api = createDesktopAPI();
     vi.mocked(api.readExcelPreviewFile).mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), size: 3, modifiedAt: 1 });
@@ -1182,14 +1188,14 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
     const analysis = createAnalysis("C:\\orders\\order.xlsx");
     const skuPairs = [
-      { skuColumn: 3, qtyColumn: 2, skuHeader: "SKU 2", qtyHeader: "平台订单号" },
-      { skuColumn: 8, qtyColumn: 9, skuHeader: "SKU 1", qtyHeader: "数量" },
+      { skuColumn: 3, qtyColumn: 2, mergedQtyColumn: 4, skuHeader: "SKU 2", qtyHeader: "平台订单号", mergedQtyHeader: "国家" },
+      { skuColumn: 8, qtyColumn: 7, mergedQtyColumn: 9, skuHeader: "SKU 1", qtyHeader: "数量", mergedQtyHeader: "合并数量" },
     ];
     analysis.suggestedMapping!.skuQtyPairs = skuPairs;
     analysis.orderSheetCandidates[0].skuQtyPairs = skuPairs;
     analysis.writebackRows = [
-      { sourceRow: 2, pricingPrice: 10, priceDifference: 1.5, quantity: 1 },
-      { sourceRow: 3, pricingPrice: 8, priceDifference: -2, quantity: 2 },
+      { sourceRow: 2, pricingPrice: 10, priceDifference: 1.5, quantity: 2 },
+      { sourceRow: 3, pricingPrice: 8, priceDifference: -2, quantity: 0 },
       { sourceRow: 4, pricingPrice: 9.5, priceDifference: 0, quantity: 1 },
     ];
     analysis.requiresConfirmation = true;
@@ -1216,14 +1222,25 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(document.querySelector(".excel-preview-row > .is-sku-qty-column:not(.is-header-cell)")).not.toBeInTheDocument();
     expect(document.querySelector(".excel-preview-row.is-same-order-group")).not.toBeInTheDocument();
     expect(screen.getByText("ORDER-2", { selector: ".excel-preview-row > span" })).not.toHaveClass("is-duplicate-order");
-    expect(screen.getByText("1.5", { selector: ".is-positive-difference" })).toBeInTheDocument();
+    const positiveDifferenceCell = screen.getByText("1.5", { selector: ".is-positive-difference" });
+    expect(positiveDifferenceCell).toBeInTheDocument();
     expect(screen.getByText("-2", { selector: ".is-negative-difference" })).toBeInTheDocument();
-    expect(screen.getByText("0", { selector: ".is-writeback-column" })).not.toHaveClass("is-positive-difference", "is-negative-difference");
+    screen.getAllByText("0", { selector: ".is-writeback-column" }).forEach((cell) => {
+      expect(cell).not.toHaveClass("is-positive-difference", "is-negative-difference");
+    });
     const previewRows = Array.from(document.querySelectorAll(".excel-preview-rows .excel-preview-row"));
     const matchingQuantityRow = previewRows.find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "2");
     const mismatchedQuantityRow = previewRows.find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "3");
+    const blankWritebackRow = previewRows.find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "5");
     expect(matchingQuantityRow?.querySelectorAll(".is-writeback-column")[2]).not.toHaveClass("is-mismatched-quantity");
-    expect(mismatchedQuantityRow?.querySelectorAll(".is-writeback-column")[2]).toHaveClass("is-mismatched-quantity");
+    const mismatchedQuantityCell = mismatchedQuantityRow?.querySelectorAll(".is-writeback-column")[2];
+    expect(mismatchedQuantityCell).toHaveClass("is-mismatched-quantity");
+    matchingQuantityRow?.querySelectorAll(".is-writeback-column").forEach((cell) => {
+      expect(cell).toHaveClass("has-writeback-value");
+    });
+    blankWritebackRow?.querySelectorAll(".is-writeback-column").forEach((cell) => {
+      expect(cell).not.toHaveClass("has-writeback-value");
+    });
   });
 
   it("classifies generated results with issue rows as exceptions", async () => {

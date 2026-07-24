@@ -3618,10 +3618,10 @@ html:not(.dark) .cyber-log-drawer {
 .excel-preview-header > span.is-sku-qty-column,
 .excel-preview-row > span.is-sku-qty-column { color: color-mix(in srgb, var(--cyber-primary) 86%, var(--cyber-text)); background: color-mix(in srgb, var(--cyber-primary) var(--sku-pair-strength, 14%), transparent); }
 .excel-preview-header > span.is-writeback-column,
-.excel-preview-row > span.is-writeback-column { background: color-mix(in srgb, var(--success) 13%, transparent); }
-.excel-preview-row > span.is-positive-difference { color: var(--error); font-weight: 700; }
-.excel-preview-row > span.is-negative-difference { color: var(--success); font-weight: 700; }
-.excel-preview-row > span.is-mismatched-quantity { color: var(--error); font-weight: 700; }
+.excel-preview-row > span.is-writeback-column.has-writeback-value { color: #000; background: #d8eee0; }
+.excel-preview-row > span.is-writeback-column.is-positive-difference,
+.excel-preview-row > span.is-writeback-column.is-mismatched-quantity { color: #000; background: #ffc7ce; }
+.excel-preview-row > span.is-writeback-column.is-negative-difference { color: #000; background: #d8eee0; }
 .excel-preview-header > span.is-pinned-column.is-mapped-column,
 .excel-preview-row > span.is-pinned-column.is-mapped-column { background: color-mix(in srgb, #4d9fd8 9%, var(--cyber-panel)); }
 .excel-preview-header > span.is-pinned-column.is-price-column,
@@ -3631,7 +3631,9 @@ html:not(.dark) .cyber-log-drawer {
 .excel-preview-header > span.is-pinned-column.is-sku-qty-column,
 .excel-preview-row > span.is-pinned-column.is-sku-qty-column { background: color-mix(in srgb, var(--cyber-primary) var(--sku-pair-strength, 14%), var(--cyber-panel)); }
 .excel-preview-header > span.is-pinned-column.is-writeback-column,
-.excel-preview-row > span.is-pinned-column.is-writeback-column { background: color-mix(in srgb, var(--success) 13%, var(--cyber-panel)); }
+.excel-preview-row > span.is-pinned-column.is-writeback-column.has-writeback-value { background: #d8eee0; }
+.excel-preview-row > span.is-pinned-column.is-writeback-column.is-positive-difference,
+.excel-preview-row > span.is-pinned-column.is-writeback-column.is-mismatched-quantity { background: #ffc7ce; }
 .excel-preview-header > span.is-active-column,
 .excel-preview-row > span.is-active-column { box-shadow: inset 2px 0 var(--cyber-primary), inset -2px 0 var(--cyber-primary); }
 .excel-preview-header > span.is-hover-column,
@@ -3640,7 +3642,7 @@ html:not(.dark) .cyber-log-drawer {
 .excel-preview-row > span.is-selectable-column { cursor: crosshair; }
 .excel-preview-row > span.is-header-cell { font-weight: 700; cursor: pointer; box-shadow: inset 0 1px color-mix(in srgb, var(--cyber-primary) 42%, transparent), inset 0 -1px color-mix(in srgb, var(--cyber-primary) 42%, transparent); }
 .excel-preview-row .excel-preview-row-number { cursor: pointer; }
-.excel-preview-row .excel-preview-row-number.is-matched-row:not(.is-header-row) { color: color-mix(in srgb, var(--success) 82%, var(--cyber-text)); background: color-mix(in srgb, var(--success) 18%, var(--cyber-panel)); font-weight: 700; }
+.excel-preview-row .excel-preview-row-number.is-matched-row:not(.is-header-row) { color: color-mix(in srgb, var(--success) 82%, var(--cyber-text)); background: #d8eee0; font-weight: 700; }
 .excel-preview-row .excel-preview-row-number.is-header-row { color: #ffffff; background: var(--cyber-primary); font-weight: 800; }
 .excel-preview-row.is-search-matched-row > span { color: var(--cyber-text); background: color-mix(in srgb, var(--cyber-status-info) 10%, var(--cyber-panel)); }
 .excel-preview-row.is-search-matched-row > .excel-preview-row-number { color: var(--cyber-status-info); background: color-mix(in srgb, var(--cyber-status-info) 18%, var(--cyber-panel)); font-weight: 800; }
@@ -3707,9 +3709,9 @@ html:not(.dark) .cyber-log-drawer {
 .mapping-field-fallback svg { width: 13px; height: 13px; pointer-events: none; }
 .mapping-editor .mapping-field-fallback select { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; padding: 0; opacity: 0; cursor: pointer; }
 .mapping-repeat-list { display: grid; gap: 7px; padding: 0 8px 8px; }
-.mapping-repeat-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr) 26px; align-items: end; gap: 5px; border-radius: 8px; padding: 6px; background: var(--cyber-panel-soft); }
+.mapping-repeat-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 26px; align-items: end; gap: 5px; border-radius: 8px; padding: 6px; background: var(--cyber-panel-soft); }
 .mapping-repeat-row.is-tier { grid-template-columns: 80px minmax(0, 1fr) 26px; }
-.mapping-repeat-row > b { align-self: center; color: var(--cyber-primary); font-size: 9px; }
+.mapping-repeat-row > b { grid-column: 1 / -1; align-self: center; color: var(--cyber-primary); font-size: 9px; }
 .mapping-repeat-row > button { display: grid; width: 26px; height: 31px; place-items: center; border: 0; border-radius: 7px; color: var(--cyber-muted); background: transparent; }
 .mapping-repeat-row > button:hover:not(:disabled) { color: var(--cyber-red); background: color-mix(in srgb, var(--cyber-red) 9%, transparent); }
 .mapping-repeat-row > button:disabled { opacity: .35; }

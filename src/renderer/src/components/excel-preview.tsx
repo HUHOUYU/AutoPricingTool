@@ -80,7 +80,11 @@ function loadErrorMessage(error: unknown): string {
 function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetName: string, column: number): string {
   if (!mapping) return "";
   if (sheetName === mapping.orderSheet) {
-    if (mapping.skuQtyPairs.some((pair) => pair.skuColumn === column || pair.qtyColumn === column)) return " is-sku-qty-column";
+    if (mapping.skuQtyPairs.some((pair) => (
+      pair.skuColumn === column
+      || pair.qtyColumn === column
+      || pair.mergedQtyColumn === column
+    ))) return " is-sku-qty-column";
     if (mapping.orderPriceColumn === column) return " is-price-column";
     if ([mapping.businessOrderNumberColumn, mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn, mapping.shippingMethodColumn].includes(column)) return " is-mapped-column";
   }
@@ -114,7 +118,7 @@ function parsePreviewQuantity(value: string): number | null {
 
 function skuQtyPairsByPriority(mapping: PriceCheckMapping): PriceCheckMapping["skuQtyPairs"] {
   return [...mapping.skuQtyPairs].sort((left, right) => (
-    Math.max(right.skuColumn, right.qtyColumn) - Math.max(left.skuColumn, left.qtyColumn)
+    right.mergedQtyColumn - left.mergedQtyColumn
     || right.skuColumn - left.skuColumn
   ));
 }
@@ -141,15 +145,22 @@ function isAdjacentDuplicate(
 function skuPairStyle(mapping: PriceCheckMapping | null | undefined, sheetName: string, column: number): SkuPairStyle | undefined {
   if (!mapping || sheetName !== mapping.orderSheet) return undefined;
   const pairIndex = skuQtyPairsByPriority(mapping)
-    .findIndex((pair) => pair.skuColumn === column || pair.qtyColumn === column);
+    .findIndex((pair) => (
+      pair.skuColumn === column
+      || pair.qtyColumn === column
+      || pair.mergedQtyColumn === column
+    ));
   if (pairIndex < 0) return undefined;
   return { "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(pairIndex, skuPairShadeStrengths.length - 1)]}%` };
 }
 
 function targetColumn(mapping: PriceCheckMapping | null | undefined, target: MappingFieldTarget | null | undefined): number | null {
   if (!mapping || !target || target.endsWith("HeaderRow")) return null;
-  const pairMatch = /^skuQtyPairs\.(\d+)\.(skuColumn|qtyColumn)$/.exec(target);
-  if (pairMatch) return mapping.skuQtyPairs[Number(pairMatch[1])]?.[pairMatch[2] as "skuColumn" | "qtyColumn"] ?? null;
+  const pairMatch = /^skuQtyPairs\.(\d+)\.(skuColumn|qtyColumn|mergedQtyColumn)$/.exec(target);
+  if (pairMatch) {
+    return mapping.skuQtyPairs[Number(pairMatch[1])]
+      ?.[pairMatch[2] as "skuColumn" | "qtyColumn" | "mergedQtyColumn"] ?? null;
+  }
   const tierMatch = /^quantityTierColumns\.(\d+)\.column$/.exec(target);
   if (tierMatch) return mapping.quantityTierColumns[Number(tierMatch[1])]?.column ?? null;
   return (mapping[target as keyof PriceCheckMapping] as number | null | undefined) ?? null;
@@ -702,7 +713,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           : "";
                         const isWritebackQuantityColumn = derived && columnIndex - sourceColumnCount === 2;
                         const sourceQuantity = isWritebackQuantityColumn && highestPrioritySkuQtyPair
-                          ? parsePreviewQuantity(row[highestPrioritySkuQtyPair.qtyColumn - activeSheet.startColumn - 1] ?? "")
+                          ? parsePreviewQuantity(row[highestPrioritySkuQtyPair.mergedQtyColumn - activeSheet.startColumn - 1] ?? "")
                           : null;
                         const writebackQuantity = writebackBySourceRow.get(absoluteRow)?.quantity;
                         const quantityMismatchClass = isWritebackQuantityColumn
@@ -711,8 +722,11 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           && sourceQuantity !== writebackQuantity
                           ? " is-mismatched-quantity"
                           : "";
+                        const writebackValueClass = derived && cell.trim() !== ""
+                          ? " has-writeback-value"
+                          : "";
                         return <span
-                          className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedColumnClass(mapping, activeSheet.name, absoluteColumn) : duplicateMappedClass}${differenceClass}${quantityMismatchClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
+                          className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedColumnClass(mapping, activeSheet.name, absoluteColumn) : duplicateMappedClass}${writebackValueClass}${differenceClass}${quantityMismatchClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
                           style={{ ...pinnedColumnStyle(columnIndex), ...(!derived && isHeaderRow ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
                           title={cell}
                           onMouseEnter={() => selectingColumn && !derived && setHoveredColumn(absoluteColumn)}
@@ -731,7 +745,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
       {activeSheet ? (
         <footer className="excel-preview-legend" aria-label="字段颜色说明">
           {mapping && activeSheet.name === mapping.orderSheet
-            ? skuQtyPairsByPriority(mapping).map((pair, index) => <span key={`${pair.skuColumn}-${pair.qtyColumn}`}><i className="is-sku-qty" style={{ "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(index, skuPairShadeStrengths.length - 1)]}%` } as SkuPairStyle} />SKU/数量 {index + 1}</span>)
+            ? skuQtyPairsByPriority(mapping).map((pair, index) => <span key={`${pair.qtyColumn}-${pair.skuColumn}-${pair.mergedQtyColumn}`}><i className="is-sku-qty" style={{ "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(index, skuPairShadeStrengths.length - 1)]}%` } as SkuPairStyle} />数量/SKU/合并数量 {index + 1}</span>)
             : <span><i className="is-sku" />SKU 字段</span>}
           <span><i className="is-price" />价格字段</span>
           <span><i className="is-mapped" />常规匹配字段</span>

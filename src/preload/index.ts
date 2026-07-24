@@ -78,8 +78,10 @@ export type PriceCheckMapping = {
   skuQtyPairs: Array<{
     skuColumn: number;
     qtyColumn: number;
+    mergedQtyColumn: number;
     skuHeader: string;
     qtyHeader: string;
+    mergedQtyHeader: string;
   }>;
   shippingMethodColumn?: number | null;
   orderPriceColumn?: number | null;
