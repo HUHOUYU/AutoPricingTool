@@ -4,8 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const WRITEBACK_HEADERS: [&str; 3] = ["核价价格", "价格差异", "订单行数"];
+const WRITEBACK_HEADERS: [&str; 3] = ["核价[财务]", "金额差", "数量"];
 const WRITEBACK_COLUMN_COUNT: u32 = WRITEBACK_HEADERS.len() as u32;
+const WRITEBACK_BACKGROUND_COLOR: &str = "C6EFCE";
 const SUPPORTED_WRITEBACK_EXTENSIONS: [&str; 2] = ["xlsx", "xlsm"];
 const LEGACY_EXCEL_EXTENSIONS: [&str; 2] = ["xls", "xlsb"];
 
@@ -49,6 +50,12 @@ pub(crate) fn write_price_result(
         insert_column,
         WRITEBACK_COLUMN_COUNT,
     );
+    apply_writeback_background(
+        worksheet,
+        insert_column,
+        WRITEBACK_COLUMN_COUNT,
+        u32::try_from(header_row)?,
+    );
 
     for (offset, header) in WRITEBACK_HEADERS.iter().enumerate() {
         let column = insert_column + offset as u32;
@@ -70,7 +77,7 @@ pub(crate) fn write_price_result(
         }
         worksheet
             .cell_mut((insert_column + 2, row_number))
-            .set_value_number(row.order_row_count as f64);
+            .set_value_number(row.quantity as f64);
     }
 
     let temporary_path = sibling_work_path(output_path, "tmp");
@@ -101,6 +108,22 @@ pub(crate) fn validate_source_format(source_path: &Path) -> Result<()> {
     Err(anyhow!(
         "原表回写仅支持 .xlsx/.xlsm，请先将源文件另存为 .xlsx 后重试"
     ))
+}
+
+fn apply_writeback_background(
+    worksheet: &mut umya_spreadsheet::Worksheet,
+    first_column: u32,
+    column_count: u32,
+    header_row: u32,
+) {
+    let highest_row = worksheet.highest_row().max(header_row);
+    for row_number in header_row..=highest_row {
+        for column_number in first_column..first_column + column_count {
+            worksheet
+                .style_mut((column_number, row_number))
+                .set_background_color(WRITEBACK_BACKGROUND_COLOR);
+        }
+    }
 }
 
 fn copy_column_layout(
@@ -260,7 +283,7 @@ mod tests {
                     source_row: 2,
                     pricing_price: Some(11.0),
                     price_difference: Some(1.0),
-                    order_row_count: 3,
+                    quantity: 3,
                     matched: true,
                     ..PriceWritebackRow::default()
                 },
@@ -268,13 +291,13 @@ mod tests {
                     source_row: 3,
                     pricing_price: Some(9.0),
                     price_difference: Some(-3.0),
-                    order_row_count: 0,
+                    quantity: 0,
                     matched: true,
                     ..PriceWritebackRow::default()
                 },
                 PriceWritebackRow {
                     source_row: 4,
-                    order_row_count: 0,
+                    quantity: 0,
                     ..PriceWritebackRow::default()
                 },
             ],
@@ -288,9 +311,9 @@ mod tests {
         let output = umya_spreadsheet::reader::xlsx::read(&output_path)?;
         assert_eq!(output.sheet_count(), 2);
         let order = output.sheet_by_name("订单")?;
-        assert_eq!(order.value("D1"), "核价价格");
-        assert_eq!(order.value("E1"), "价格差异");
-        assert_eq!(order.value("F1"), "订单行数");
+        assert_eq!(order.value("D1"), "核价[财务]");
+        assert_eq!(order.value("E1"), "金额差");
+        assert_eq!(order.value("F1"), "数量");
         assert_eq!(order.value("G1"), "Name");
         assert_eq!(order.value("H1"), "Address");
         assert_eq!(order.value("D2"), "11");
@@ -309,9 +332,27 @@ mod tests {
                 .iter()
                 .any(|range| range.range() == "G6:H6")
         );
-        assert_eq!(order.style("C2"), order.style("D2"));
-        assert_eq!(order.style("C2"), order.style("E2"));
-        assert_eq!(order.style("C2"), order.style("F2"));
+        for cell in ["D1", "E1", "F1", "D2", "E2", "F2", "D4", "E4", "F4"] {
+            assert_eq!(
+                order
+                    .style(cell)
+                    .background_color()
+                    .expect("writeback background")
+                    .argb_str(),
+                "FFC6EFCE"
+            );
+        }
+        assert_eq!(
+            order
+                .style("C2")
+                .numbering_format()
+                .map(|format| format.format_code()),
+            order
+                .style("D2")
+                .numbering_format()
+                .map(|format| format.format_code())
+        );
+        assert_eq!(order.style("C2").borders(), order.style("D2").borders());
         assert_eq!(output.sheet_by_name("核价")?.value("A1"), "保留内容");
         assert_eq!(
             output

@@ -333,7 +333,7 @@ pub(crate) struct PriceWritebackRow {
     pub(crate) matched: bool,
     pub(crate) pricing_price: Option<f64>,
     pub(crate) price_difference: Option<f64>,
-    pub(crate) order_row_count: usize,
+    pub(crate) quantity: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1227,17 +1227,60 @@ fn mapping_variants(
     order: &OrderSheetCandidate,
     pricing: &PricingSheetCandidate,
 ) -> Vec<PriceCheckMapping> {
-    let all = mapping_from_candidates(order, pricing);
-    if order.sku_qty_pairs.len() <= 1 {
-        return vec![all];
-    }
-    let mut variants = vec![all.clone()];
-    for pair in &order.sku_qty_pairs {
-        let mut variant = all.clone();
-        variant.sku_qty_pairs = vec![pair.clone()];
-        variants.push(variant);
-    }
-    variants
+    vec![mapping_from_candidates(order, pricing)]
+}
+
+fn sku_qty_pair_score(
+    order_sheet: &SheetData,
+    data_start: usize,
+    pair: &SkuQtyPair,
+    config: &Config,
+) -> f64 {
+    let Some(header) = order_sheet.rows.get(data_start.saturating_sub(1)) else {
+        return 0.0;
+    };
+    let sku_column = pair.sku_column.saturating_sub(1);
+    let qty_column = pair.qty_column.saturating_sub(1);
+    let sku_header = header
+        .get(sku_column)
+        .map(CellValue::text)
+        .unwrap_or_default();
+    let qty_header = header
+        .get(qty_column)
+        .map(CellValue::text)
+        .unwrap_or_default();
+    let sku_rule = order_field_rule(config, "sku");
+    let product_rule = order_field_rule(config, "product_name");
+    let sku_rule_confidence = field_header_confidence(&sku_header, sku_rule, SKU_ALIASES);
+    let product_rule_confidence =
+        field_header_confidence(&sku_header, product_rule, PRODUCT_NAME_ALIASES);
+    let sku_header_confidence = sku_rule_confidence.max(product_rule_confidence);
+    let sku_sample_confidence = field_sample_confidence(
+        order_sheet,
+        data_start,
+        sku_column,
+        if sku_rule_confidence >= product_rule_confidence {
+            sku_rule
+        } else {
+            product_rule
+        },
+    );
+    let qty_header_confidence = field_header_confidence(
+        &qty_header,
+        order_field_rule(config, "quantity"),
+        QTY_ALIASES,
+    );
+    let qty_sample_confidence = numeric_column_confidence(order_sheet, data_start, qty_column);
+    let distance = pair.sku_column.abs_diff(pair.qty_column);
+    let proximity_confidence = (1.0 - distance.saturating_sub(1) as f64 * 0.12).clamp(0.4, 1.0);
+    let completeness = pair_completeness(order_sheet, data_start, sku_column, qty_column);
+    100.0
+        * (sku_header_confidence * 0.40
+            + sku_sample_confidence * 0.15
+            + qty_header_confidence * 0.20
+            + qty_sample_confidence * 0.10
+            + proximity_confidence * 0.10
+            + completeness * 0.05)
 }
 
 fn sku_qty_field_score(
@@ -1245,69 +1288,15 @@ fn sku_qty_field_score(
     mapping: &PriceCheckMapping,
     config: &Config,
 ) -> f64 {
-    let Some(header) = order_sheet
-        .rows
-        .get(mapping.order_header_row.saturating_sub(1))
-    else {
-        return 0.0;
-    };
-    let data_start = mapping.order_header_row;
-    let pair_scores = mapping
+    let scores = mapping
         .sku_qty_pairs
         .iter()
-        .map(|pair| {
-            let sku_column = pair.sku_column.saturating_sub(1);
-            let qty_column = pair.qty_column.saturating_sub(1);
-            let sku_header = header
-                .get(sku_column)
-                .map(CellValue::text)
-                .unwrap_or_default();
-            let qty_header = header
-                .get(qty_column)
-                .map(CellValue::text)
-                .unwrap_or_default();
-            let sku_rule = order_field_rule(config, "sku");
-            let product_rule = order_field_rule(config, "product_name");
-            let sku_header_confidence =
-                field_header_confidence(&sku_header, sku_rule, SKU_ALIASES).max(
-                    field_header_confidence(&sku_header, product_rule, PRODUCT_NAME_ALIASES),
-                );
-            let sku_sample_confidence = field_sample_confidence(
-                order_sheet,
-                data_start,
-                sku_column,
-                if field_header_confidence(&sku_header, sku_rule, SKU_ALIASES)
-                    >= field_header_confidence(&sku_header, product_rule, PRODUCT_NAME_ALIASES)
-                {
-                    sku_rule
-                } else {
-                    product_rule
-                },
-            );
-            let qty_header_confidence = field_header_confidence(
-                &qty_header,
-                order_field_rule(config, "quantity"),
-                QTY_ALIASES,
-            );
-            let qty_sample_confidence =
-                numeric_column_confidence(order_sheet, data_start, qty_column);
-            let distance = pair.sku_column.abs_diff(pair.qty_column);
-            let proximity_confidence =
-                (1.0 - distance.saturating_sub(1) as f64 * 0.12).clamp(0.4, 1.0);
-            let completeness = pair_completeness(order_sheet, data_start, sku_column, qty_column);
-            100.0
-                * (sku_header_confidence * 0.40
-                    + sku_sample_confidence * 0.15
-                    + qty_header_confidence * 0.20
-                    + qty_sample_confidence * 0.10
-                    + proximity_confidence * 0.10
-                    + completeness * 0.05)
-        })
+        .map(|pair| sku_qty_pair_score(order_sheet, mapping.order_header_row, pair, config))
         .collect::<Vec<_>>();
-    if pair_scores.is_empty() {
+    if scores.is_empty() {
         0.0
     } else {
-        pair_scores.iter().sum::<f64>() / pair_scores.len() as f64
+        scores.iter().sum::<f64>() / scores.len() as f64
     }
 }
 
@@ -1593,8 +1582,14 @@ fn infer_order_candidate_with_config(
             );
             raw_pairs = pair_sku_qty_columns(header, &product_name_columns, &qty_columns);
         }
-        let pairs =
+        let mut pairs =
             deduplicate_equivalent_sku_qty_pairs(sheet, header_idx + 1, &raw_pairs, order_col);
+        pairs.sort_by_key(|pair| {
+            (
+                std::cmp::Reverse(pair.sku_column.max(pair.qty_column)),
+                std::cmp::Reverse(pair.sku_column),
+            )
+        });
         if order_col.is_none() && pairs.is_empty() {
             continue;
         }
@@ -2305,28 +2300,44 @@ fn pair_sku_qty_columns(
     sku_columns: &[usize],
     qty_columns: &[usize],
 ) -> Vec<SkuQtyPair> {
+    let mut candidates = Vec::new();
+    for &sku_column in sku_columns {
+        for &qty_column in qty_columns {
+            if sku_column == qty_column {
+                continue;
+            }
+            candidates.push((
+                sku_column.abs_diff(qty_column),
+                std::cmp::Reverse(sku_column.max(qty_column)),
+                std::cmp::Reverse(sku_column),
+                sku_column,
+                qty_column,
+            ));
+        }
+    }
+    candidates.sort_by_key(|candidate| (candidate.0, candidate.1, candidate.2));
+
     let mut pairs = Vec::new();
-    let mut used_qty = HashSet::new();
-    for sku_column in sku_columns {
-        let Some((qty_column, _distance)) = qty_columns
-            .iter()
-            .map(|column| (*column, column.abs_diff(*sku_column)))
-            .filter(|(column, distance)| {
-                !used_qty.contains(column)
-                    && (*distance <= 5 || (sku_columns.len() == 1 && qty_columns.len() == 1))
-            })
-            .min_by_key(|(_, distance)| *distance)
-        else {
+    let mut used_columns = HashSet::new();
+    for (_, _, _, sku_column, qty_column) in candidates {
+        if used_columns.contains(&sku_column) || used_columns.contains(&qty_column) {
             continue;
-        };
-        used_qty.insert(qty_column);
+        }
+        used_columns.insert(sku_column);
+        used_columns.insert(qty_column);
         pairs.push(SkuQtyPair {
-            sku_column: *sku_column + 1,
+            sku_column: sku_column + 1,
             qty_column: qty_column + 1,
-            sku_header: header[*sku_column].text(),
+            sku_header: header[sku_column].text(),
             qty_header: header[qty_column].text(),
         });
     }
+    pairs.sort_by_key(|pair| {
+        (
+            std::cmp::Reverse(pair.sku_column.max(pair.qty_column)),
+            std::cmp::Reverse(pair.sku_column),
+        )
+    });
     pairs
 }
 
@@ -2503,10 +2514,22 @@ fn parse_price(cell: &CellValue) -> Option<f64> {
 }
 
 fn normalize_sku(value: &str) -> String {
-    value
+    normalize_sku_and_multiplier(value).0
+}
+
+fn normalize_sku_and_multiplier(value: &str) -> (String, usize) {
+    let normalized = value
         .trim()
         .replace([' ', '\u{3000}', '\t', '\r', '\n'], "")
-        .to_ascii_uppercase()
+        .to_ascii_uppercase();
+    let Some((sku, multiplier)) = normalized.rsplit_once('*') else {
+        return (normalized, 1);
+    };
+    let multiplier = multiplier.parse::<usize>().ok().filter(|value| *value > 0);
+    match multiplier {
+        Some(multiplier) if !sku.is_empty() => (sku.to_string(), multiplier),
+        _ => (normalized, 1),
+    }
 }
 
 fn base_sku(value: &str) -> String {
@@ -2653,6 +2676,14 @@ fn normalize_order_country_fields(
     )
 }
 
+fn highest_priority_sku_qty_pair(mapping: &PriceCheckMapping) -> Option<(usize, &SkuQtyPair)> {
+    mapping
+        .sku_qty_pairs
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, pair)| (pair.sku_column.max(pair.qty_column), pair.sku_column))
+}
+
 fn read_order_lines(
     sheet: &SheetData,
     mapping: &PriceCheckMapping,
@@ -2678,7 +2709,7 @@ fn read_order_lines(
             continue;
         }
         let mut row_has_sku = false;
-        for (sku_pair_priority, pair) in mapping.sku_qty_pairs.iter().enumerate() {
+        if let Some((sku_pair_priority, pair)) = highest_priority_sku_qty_pair(mapping) {
             let raw_sku = cell_text(row, Some(pair.sku_column));
             if raw_sku.is_empty() {
                 continue;
@@ -2717,14 +2748,14 @@ fn read_order_lines(
                 });
                 continue;
             }
-            let matched_sku = normalize_sku(&raw_sku);
+            let (matched_sku, sku_multiplier) = normalize_sku_and_multiplier(&raw_sku);
             lines.push(OrderLine {
                 business_order_number: business.clone(),
                 country: country.clone(),
                 shipping_method: shipping.clone(),
                 original_sku: raw_sku,
                 matched_sku,
-                quantity,
+                quantity: quantity * sku_multiplier as f64,
                 original_price: mapping
                     .order_price_column
                     .and_then(|column| row.get(column.saturating_sub(1)))
@@ -2893,10 +2924,19 @@ fn record_matched_candidates(
     item: &AggregatedOrderSku,
     pricing_price: f64,
 ) {
+    let first_source_row = item
+        .source_assignments
+        .iter()
+        .map(|assignment| assignment.source_row)
+        .min();
     for assignment in &item.source_assignments {
         let candidate = MatchedRowCandidate {
             sku_pair_priority: assignment.sku_pair_priority,
-            pricing_price,
+            pricing_price: if Some(assignment.source_row) == first_source_row {
+                pricing_price
+            } else {
+                0.0
+            },
         };
         candidates
             .entry(assignment.source_row)
@@ -2914,15 +2954,29 @@ fn build_writeback_rows(
     mapping: &PriceCheckMapping,
     candidates: &HashMap<usize, MatchedRowCandidate>,
 ) -> Vec<PriceWritebackRow> {
-    let mut order_counts: HashMap<String, usize> = HashMap::new();
+    let Some((_, pair)) = highest_priority_sku_qty_pair(mapping) else {
+        return Vec::new();
+    };
+    let mut group_quantities: HashMap<(String, String), usize> = HashMap::new();
     for row in sheet.rows.iter().skip(mapping.order_header_row) {
         let order_number = cell_text(row, mapping.business_order_number_column);
-        if !order_number.is_empty() {
-            *order_counts.entry(order_number).or_default() += 1;
+        if order_number.is_empty() {
+            continue;
+        }
+        let (sku, sku_multiplier) =
+            normalize_sku_and_multiplier(&cell_text(row, Some(pair.sku_column)));
+        let row_quantity = row
+            .get(pair.qty_column.saturating_sub(1))
+            .and_then(parse_number)
+            .filter(|value| *value >= 0.0 && value.fract() == 0.0)
+            .map(|value| value as usize * sku_multiplier);
+        if !sku.is_empty() {
+            *group_quantities.entry((order_number, sku)).or_default() +=
+                row_quantity.unwrap_or_default();
         }
     }
 
-    let mut seen_orders = HashSet::new();
+    let mut seen_groups = HashSet::new();
     let mut rows = Vec::new();
     for (row_index, row) in sheet.rows.iter().enumerate().skip(mapping.order_header_row) {
         let order_number = cell_text(row, mapping.business_order_number_column);
@@ -2930,16 +2984,22 @@ fn build_writeback_rows(
             continue;
         }
         let source_row = row_index + 1;
-        let order_row_count = if seen_orders.insert(order_number.clone()) {
-            order_counts.get(&order_number).copied().unwrap_or_default()
-        } else {
+        let candidate = candidates.get(&source_row);
+        let sku = normalize_sku(&cell_text(row, Some(pair.sku_column)));
+        let quantity = if sku.is_empty() {
             0
+        } else {
+            let group = (order_number, sku);
+            if seen_groups.insert(group.clone()) {
+                group_quantities.get(&group).copied().unwrap_or_default()
+            } else {
+                0
+            }
         };
         let original_price = mapping
             .order_price_column
             .and_then(|column| row.get(column.saturating_sub(1)))
             .and_then(parse_price);
-        let candidate = candidates.get(&source_row);
         rows.push(PriceWritebackRow {
             source_row,
             sku_pair_priority: candidate.map(|value| value.sku_pair_priority),
@@ -2947,7 +3007,7 @@ fn build_writeback_rows(
             pricing_price: candidate.map(|value| value.pricing_price),
             price_difference: candidate
                 .and_then(|value| original_price.map(|original| value.pricing_price - original)),
-            order_row_count,
+            quantity,
         });
     }
     rows
@@ -3719,9 +3779,39 @@ mod tests {
 
         let candidate = infer_order_candidate(&sheet).expect("order candidate");
         assert_eq!(candidate.sku_qty_pairs.len(), 1);
-        assert_eq!(candidate.sku_qty_pairs[0].sku_column, 3);
-        assert_eq!(candidate.sku_qty_pairs[0].qty_column, 4);
+        assert_eq!(candidate.sku_qty_pairs[0].sku_column, 5);
+        assert_eq!(candidate.sku_qty_pairs[0].qty_column, 6);
         assert!(candidate.notes.iter().any(|note| note.contains("完全重复")));
+    }
+
+    #[test]
+    fn sku_quantity_pairing_uses_nearest_columns_locks_both_headers_and_prefers_right() {
+        let header = vec![
+            CellValue::string("SKU 1"),
+            CellValue::string("Qty 1"),
+            CellValue::string("备用"),
+            CellValue::string("Qty 2"),
+            CellValue::string("SKU 2"),
+        ];
+
+        let pairs = pair_sku_qty_columns(&header, &[0, 4], &[1, 3]);
+
+        assert_eq!(
+            pairs
+                .iter()
+                .map(|pair| (pair.sku_column, pair.qty_column))
+                .collect::<Vec<_>>(),
+            vec![(5, 4), (1, 2)]
+        );
+
+        let overlapping_roles = pair_sku_qty_columns(&header, &[0, 2], &[1, 2]);
+        assert_eq!(
+            overlapping_roles
+                .iter()
+                .map(|pair| (pair.sku_column, pair.qty_column))
+                .collect::<Vec<_>>(),
+            vec![(3, 2)]
+        );
     }
 
     #[test]
@@ -3958,6 +4048,57 @@ mod tests {
     }
 
     #[test]
+    fn order_lines_use_only_the_highest_scoring_pair_and_apply_sku_multiplier() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("Country"),
+                    CellValue::string("低分 SKU"),
+                    CellValue::string("低分 Qty"),
+                    CellValue::string("高分 SKU"),
+                    CellValue::string("高分 Qty"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("US"),
+                    CellValue::string("SKU-B"),
+                    CellValue::string("9"),
+                    CellValue::string("SKU-A*2"),
+                    CellValue::string("1"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            country_code_column: Some(2),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 3,
+                    qty_column: 4,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 5,
+                    qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+
+        let (lines, exceptions) = read_order_lines(&sheet, &mapping, &Config::default());
+
+        assert!(exceptions.is_empty());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].matched_sku, "SKU-A");
+        assert_eq!(lines[0].quantity, 2.0);
+        assert_eq!(lines[0].sku_pair_priority, 1);
+    }
+
+    #[test]
     fn writeback_uses_the_highest_priority_successful_sku_group() {
         let mut candidates = HashMap::new();
         let item = |priority| AggregatedOrderSku {
@@ -3978,7 +4119,36 @@ mod tests {
     }
 
     #[test]
-    fn writeback_falls_back_to_later_success_and_counts_all_order_rows() {
+    fn matched_group_writes_group_price_once_and_zero_to_merged_rows() {
+        let item = AggregatedOrderSku {
+            source_assignments: vec![
+                SourceAssignment {
+                    source_row: 3,
+                    sku_pair_priority: 0,
+                },
+                SourceAssignment {
+                    source_row: 2,
+                    sku_pair_priority: 0,
+                },
+            ],
+            ..AggregatedOrderSku::default()
+        };
+        let mut candidates = HashMap::new();
+
+        record_matched_candidates(&mut candidates, &item, 25.0);
+
+        assert_eq!(
+            candidates.get(&2).map(|value| value.pricing_price),
+            Some(25.0)
+        );
+        assert_eq!(
+            candidates.get(&3).map(|value| value.pricing_price),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn writeback_uses_paired_quantity_and_calculates_amount_difference() {
         let sheet = SheetData {
             name: "订单".to_string(),
             rows: vec![
@@ -3986,31 +4156,37 @@ mod tests {
                     CellValue::string("订单号"),
                     CellValue::string("SKU"),
                     CellValue::string("TOTAL Price"),
+                    CellValue::string("Qty"),
                 ],
                 vec![
                     CellValue::string(" ORDER-1 "),
                     CellValue::string("INVALID"),
                     CellValue::string("12"),
+                    CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string("ORDER-2"),
                     CellValue::string(""),
                     CellValue::string("8"),
+                    CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("SKU-2"),
                     CellValue::string("20"),
+                    CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string(""),
                     CellValue::string("SKU-3"),
                     CellValue::string("6"),
+                    CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("SKU-4"),
                     CellValue::string("9"),
+                    CellValue::string("1"),
                 ],
             ],
         };
@@ -4018,6 +4194,11 @@ mod tests {
             order_header_row: 1,
             business_order_number_column: Some(1),
             order_price_column: Some(3),
+            sku_qty_pairs: vec![SkuQtyPair {
+                sku_column: 2,
+                qty_column: 4,
+                ..SkuQtyPair::default()
+            }],
             ..PriceCheckMapping::default()
         };
         let candidates = HashMap::from([(
@@ -4032,9 +4213,9 @@ mod tests {
 
         assert_eq!(
             rows.iter()
-                .map(|row| (row.source_row, row.order_row_count))
+                .map(|row| (row.source_row, row.quantity))
                 .collect::<Vec<_>>(),
-            vec![(2, 3), (3, 1), (4, 0), (6, 0)]
+            vec![(2, 1), (3, 0), (4, 1), (6, 1)]
         );
         assert!(!rows[0].matched);
         assert_eq!(rows[2].sku_pair_priority, Some(1));
@@ -4043,6 +4224,284 @@ mod tests {
         assert!(!rows[3].matched);
         assert_eq!(rows[3].pricing_price, None);
         assert_eq!(rows[3].price_difference, None);
+    }
+
+    #[test]
+    fn writeback_groups_quantity_by_order_number_and_sku() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("SKU"),
+                    CellValue::string("TOTAL Price"),
+                    CellValue::string("Qty"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("10"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("10"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("10"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-2"),
+                    CellValue::string("SKU-B"),
+                    CellValue::string("10"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-2"),
+                    CellValue::string("SKU-B"),
+                    CellValue::string("10"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-2"),
+                    CellValue::string("SKU-C"),
+                    CellValue::string("10"),
+                    CellValue::string("1"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            order_price_column: Some(3),
+            sku_qty_pairs: vec![SkuQtyPair {
+                sku_column: 2,
+                qty_column: 4,
+                ..SkuQtyPair::default()
+            }],
+            ..PriceCheckMapping::default()
+        };
+
+        let rows = build_writeback_rows(&sheet, &mapping, &HashMap::new());
+
+        assert_eq!(
+            rows.iter().map(|row| row.quantity).collect::<Vec<_>>(),
+            vec![3, 0, 0, 2, 0, 1]
+        );
+    }
+
+    #[test]
+    fn writeback_groups_only_by_the_highest_scoring_sku_pair() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("低分 SKU"),
+                    CellValue::string("低分 Qty"),
+                    CellValue::string("高分 SKU"),
+                    CellValue::string("高分 Qty"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("OTHER-A"),
+                    CellValue::string("9"),
+                    CellValue::string("PRICED-SKU"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("OTHER-B"),
+                    CellValue::string("9"),
+                    CellValue::string("PRICED-SKU"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("OTHER-C"),
+                    CellValue::string("9"),
+                    CellValue::string("PRICED-SKU"),
+                    CellValue::string("1"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 5,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+        let candidates = HashMap::from_iter((2..=4).map(|source_row| {
+            (
+                source_row,
+                MatchedRowCandidate {
+                    sku_pair_priority: 1,
+                    pricing_price: 10.0,
+                },
+            )
+        }));
+
+        let rows = build_writeback_rows(&sheet, &mapping, &candidates);
+
+        assert_eq!(
+            rows.iter().map(|row| row.quantity).collect::<Vec<_>>(),
+            vec![3, 0, 0]
+        );
+    }
+
+    #[test]
+    fn sku_multiplier_is_added_to_repeated_base_sku_quantity() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("SKU"),
+                    CellValue::string("Qty"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A*2"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            sku_qty_pairs: vec![SkuQtyPair {
+                sku_column: 2,
+                qty_column: 3,
+                ..SkuQtyPair::default()
+            }],
+            ..PriceCheckMapping::default()
+        };
+
+        let rows = build_writeback_rows(&sheet, &mapping, &HashMap::new());
+
+        assert_eq!(
+            rows.iter().map(|row| row.quantity).collect::<Vec<_>>(),
+            vec![3, 0]
+        );
+        assert_eq!(
+            normalize_sku_and_multiplier(" sku-a * 2 "),
+            ("SKU-A".to_string(), 2)
+        );
+    }
+
+    #[test]
+    fn financial_price_uses_grouped_quantity_and_difference_uses_total_price() {
+        let order_sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("Country"),
+                    CellValue::string("SKU"),
+                    CellValue::string("Qty"),
+                    CellValue::string("TOTAL Price"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("US"),
+                    CellValue::string("SKU-A*2"),
+                    CellValue::string("1"),
+                    CellValue::string("18"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("US"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
+                    CellValue::string("0"),
+                ],
+            ],
+        };
+        let pricing_sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                    CellValue::string("3"),
+                ],
+                vec![
+                    CellValue::string("SKU-A"),
+                    CellValue::string("US"),
+                    CellValue::string("10"),
+                    CellValue::string("25"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            country_code_column: Some(2),
+            order_price_column: Some(5),
+            sku_qty_pairs: vec![SkuQtyPair {
+                sku_column: 3,
+                qty_column: 4,
+                ..SkuQtyPair::default()
+            }],
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![
+                PriceTierColumn {
+                    quantity: 1,
+                    column: 3,
+                    header: "1".to_string(),
+                },
+                PriceTierColumn {
+                    quantity: 3,
+                    column: 4,
+                    header: "3".to_string(),
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+        let lines = read_order_lines(&order_sheet, &mapping, &Config::default()).0;
+        let aggregated = aggregate_lines(&lines);
+        let index = build_price_index(&pricing_sheet, &mapping);
+        let lookup = index.lookup("US", "SKU-A", "", 3);
+        let mut candidates = HashMap::new();
+        record_matched_candidates(
+            &mut candidates,
+            &aggregated[0],
+            lookup.price.expect("grouped quantity price"),
+        );
+
+        let rows = build_writeback_rows(&order_sheet, &mapping, &candidates);
+
+        assert_eq!(aggregated[0].total_quantity, 3.0);
+        assert_eq!(rows[0].quantity, 3);
+        assert_eq!(rows[0].pricing_price, Some(25.0));
+        assert_eq!(rows[0].price_difference, Some(7.0));
+        assert_eq!(rows[1].quantity, 0);
+        assert_eq!(rows[1].pricing_price, Some(0.0));
+        assert_eq!(rows[1].price_difference, Some(0.0));
     }
 
     #[test]
@@ -4137,7 +4596,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_pair_mapping_tries_each_pair() {
+    fn multi_pair_mapping_preserves_all_pairs_in_score_order() {
         let order = OrderSheetCandidate {
             sheet_name: "订单".to_string(),
             sku_qty_pairs: vec![
@@ -4166,9 +4625,8 @@ mod tests {
             ..PricingSheetCandidate::default()
         };
         let variants = mapping_variants(&order, &pricing);
-        assert_eq!(variants.len(), 3);
-        assert_eq!(variants[1].sku_qty_pairs.len(), 1);
-        assert_eq!(variants[2].sku_qty_pairs.len(), 1);
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].sku_qty_pairs.len(), 2);
     }
 
     fn complete_mapping() -> PriceCheckMapping {
