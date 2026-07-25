@@ -44,6 +44,11 @@
     "quantity_policy": "nearest",
     "multiply_quantity_by_price": true,
     "zero_price_is_valid": true,
+    "single_shipment_price_marker_aliases": [
+      "单独发货价格",
+      "单独发货价",
+      "单独发货报价"
+    ],
     "unavailable_price_tokens": [
       "/",
       "未核价",

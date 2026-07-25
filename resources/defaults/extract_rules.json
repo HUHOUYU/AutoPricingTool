@@ -48,6 +48,11 @@
       "english",
       "chinese"
     ],
+    "single_shipment_price_marker_aliases": [
+      "单独发货价格",
+      "单独发货价",
+      "单独发货报价"
+    ],
     "sku_qty_pair_selection": "max_match_coverage",
     "quantity_policy": "nearest",
     "multiply_quantity_by_price": true,

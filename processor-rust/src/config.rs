@@ -49,6 +49,8 @@ pub(crate) enum CountryIdentity {
 pub(crate) struct PricingRules {
     #[serde(default = "default_country_identity")]
     pub(crate) country_identity: Vec<CountryIdentity>,
+    #[serde(default = "default_single_shipment_price_marker_aliases")]
+    pub(crate) single_shipment_price_marker_aliases: Vec<String>,
 }
 
 impl PricingRules {
@@ -61,6 +63,7 @@ impl Default for PricingRules {
     fn default() -> Self {
         Self {
             country_identity: default_country_identity(),
+            single_shipment_price_marker_aliases: default_single_shipment_price_marker_aliases(),
         }
     }
 }
@@ -320,6 +323,13 @@ fn default_country_identity() -> Vec<CountryIdentity> {
         CountryIdentity::English,
         CountryIdentity::Chinese,
     ]
+}
+
+fn default_single_shipment_price_marker_aliases() -> Vec<String> {
+    ["单独发货价格", "单独发货价", "单独发货报价"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 fn default_auto_run() -> bool {
@@ -620,6 +630,30 @@ mod tests {
             config
                 .pricing
                 .uses_country_identity(CountryIdentity::Chinese)
+        );
+    }
+
+    #[test]
+    fn single_shipment_price_marker_aliases_use_defaults_when_missing() {
+        let config: Config = serde_json::from_str("{}").expect("old config must use defaults");
+
+        assert_eq!(
+            config.pricing.single_shipment_price_marker_aliases,
+            ["单独发货价格", "单独发货价", "单独发货报价"]
+        );
+    }
+
+    #[test]
+    fn single_shipment_price_marker_aliases_can_be_disabled() {
+        let config: Config =
+            serde_json::from_str(r#"{"pricing":{"single_shipment_price_marker_aliases":[]}}"#)
+                .expect("empty marker alias list must parse");
+
+        assert!(
+            config
+                .pricing
+                .single_shipment_price_marker_aliases
+                .is_empty()
         );
     }
 

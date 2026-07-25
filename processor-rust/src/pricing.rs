@@ -3746,6 +3746,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
     fn order_country_identity_uses_only_enabled_fields() {
         let english_only = PricingRules {
             country_identity: vec![CountryIdentity::English],
+            ..PricingRules::default()
         };
         let country = normalize_order_country_fields("US", "Canada", "美国", &english_only);
         assert_eq!(country.code, "CA");
@@ -3753,6 +3754,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
 
         let iso2_only = PricingRules {
             country_identity: vec![CountryIdentity::Iso2],
+            ..PricingRules::default()
         };
         let country = normalize_order_country_fields("US", "Canada", "加拿大", &iso2_only);
         assert_eq!(country.code, "US");
@@ -3760,6 +3762,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
 
         let chinese_only = PricingRules {
             country_identity: vec![CountryIdentity::Chinese],
+            ..PricingRules::default()
         };
         let country = normalize_order_country_fields("US", "Canada", "加拿大", &chinese_only);
         assert_eq!(country.code, "CA");
