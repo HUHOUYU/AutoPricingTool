@@ -1,6 +1,6 @@
 use crate::config::{Config, CountryIdentity, FieldRule, PricingRules, load_config};
 use crate::country_catalog::COUNTRY_ALIASES;
-use crate::excel_engine::{CellValue, SheetData};
+use crate::excel_engine::{CellValue, SheetData, WorkbookData};
 use crate::ipc::{config_path, emit};
 use crate::reader::read_workbook_for_processing;
 use crate::state::RuntimeState;
@@ -118,7 +118,6 @@ const PRICE_ALIASES: &[&str] = &[
 const FIXED_PRICE_ALIASES: &[&str] = &["productshippingvattax", "shippingvattax"];
 const SINGLE_SHIPMENT_FIELD_ALIASES: &[&str] =
     &["name", "收件人", "收货人", "收件人姓名", "收货人姓名"];
-const SINGLE_SHIPMENT_PRICE_MARKER: &str = "单独发货价格";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
@@ -389,6 +388,23 @@ pub(crate) struct PricePreviewWritebackRow {
     quantity: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PriceCellEdit {
+    pub(crate) sheet_name: String,
+    pub(crate) row: usize,
+    pub(crate) column: usize,
+    pub(crate) value: String,
+    pub(crate) numeric: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PriceRunMapping {
+    mapping: PriceCheckMapping,
+    writeback_rows: Vec<PricePreviewWritebackRow>,
+    cell_edits: Vec<PriceCellEdit>,
+}
+
 #[derive(Debug, Clone)]
 struct MappingCandidateEvaluation {
     coverage: f64,
@@ -491,15 +507,20 @@ pub(crate) fn run_price_check(command: &Value, state: &RuntimeState) -> Result<(
             "total": files.len(),
             "path": path,
         }));
-        let mapping = mappings
+        let run_mapping = mappings
             .get(&path.display().to_string())
             .cloned()
             .or_else(|| {
                 analyze_path_with_templates(path, &config, &header_templates)
                     .ok()
                     .and_then(|item| item.suggested_mapping)
+                    .map(|mapping| PriceRunMapping {
+                        mapping,
+                        writeback_rows: Vec::new(),
+                        cell_edits: Vec::new(),
+                    })
             });
-        let Some(mapping) = mapping else {
+        let Some(run_mapping) = run_mapping else {
             let message = "没有可以执行的字段映射".to_string();
             failures.push(json!({"path": path, "message": message}));
             emit(
@@ -508,7 +529,15 @@ pub(crate) fn run_price_check(command: &Value, state: &RuntimeState) -> Result<(
             continue;
         };
 
-        match process_price_file(path, &output_dir, &mapping, &config, state) {
+        match process_price_file(
+            path,
+            &output_dir,
+            &run_mapping.mapping,
+            &run_mapping.writeback_rows,
+            &run_mapping.cell_edits,
+            &config,
+            state,
+        ) {
             Ok(report) => {
                 let output_path = report.output_path.clone();
                 emit(json!({
@@ -562,8 +591,15 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
             .ok_or_else(|| anyhow!("缺少 mapping 参数"))?,
     )
     .map_err(|error| anyhow!("字段映射格式错误: {error}"))?;
+    let cell_edits: Vec<PriceCellEdit> = command
+        .get("cellEdits")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| anyhow!("单元格编辑格式错误: {error}"))?
+        .unwrap_or_default();
     let config = load_config(&config_path(command))?;
-    let result = validate_price_mapping(Path::new(input_path), &mapping, &config);
+    let result = validate_price_mapping(Path::new(input_path), &mapping, &cell_edits, &config);
     match result {
         Ok(validation) => emit(json!({
             "type": "price-validation",
@@ -596,10 +632,23 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
 fn validate_price_mapping(
     path: &Path,
     mapping: &PriceCheckMapping,
+    cell_edits: &[PriceCellEdit],
     config: &Config,
 ) -> std::result::Result<MappingValidationResult, Vec<String>> {
-    let workbook = read_workbook_for_processing(path, config)
+    let mut workbook = read_workbook_for_processing(path, config)
         .map_err(|error| vec![format!("读取文件失败: {error:#}")])?;
+    let data_edits = cell_edits
+        .iter()
+        .filter(|edit| {
+            !((edit.sheet_name == mapping.order_sheet && edit.row == mapping.order_header_row)
+                || (edit.sheet_name == mapping.pricing_sheet
+                    && (edit.row == mapping.pricing_header_row
+                        || Some(edit.row) == mapping.pricing_quantity_header_row)))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    apply_cell_edits(&mut workbook, &data_edits)
+        .map_err(|error| vec![format!("应用单元格编辑失败: {error:#}")])?;
     let mut errors = Vec::new();
     if mapping.order_sheet == mapping.pricing_sheet {
         errors.push("订单 Sheet 与核价 Sheet 不能相同".to_string());
@@ -744,7 +793,7 @@ fn validate_price_mapping(
         return Err(errors);
     }
 
-    let index = build_price_index(pricing_sheet, mapping);
+    let index = build_price_index(pricing_sheet, mapping, &config.pricing);
     let lines = read_order_lines(order_sheet, mapping, config).0;
     let evaluated_rows = lines.len();
     let (matched_rows, matched_order_rows) = evaluate_matches(&index, &lines);
@@ -852,7 +901,7 @@ fn command_files(command: &Value) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn command_mappings(command: &Value) -> Result<HashMap<String, PriceCheckMapping>> {
+fn command_mappings(command: &Value) -> Result<HashMap<String, PriceRunMapping>> {
     let Some(values) = command.get("mappings") else {
         return Ok(HashMap::new());
     };
@@ -869,7 +918,28 @@ fn command_mappings(command: &Value) -> Result<HashMap<String, PriceCheckMapping
         let mapping_value = item.get("mapping").unwrap_or(item);
         let mapping: PriceCheckMapping = serde_json::from_value(mapping_value.clone())
             .map_err(|error| anyhow!("字段映射格式错误: {error}"))?;
-        result.insert(path.to_string(), mapping);
+        let writeback_rows = item
+            .get("writebackRows")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| anyhow!("核价写回编辑格式错误: {error}"))?
+            .unwrap_or_default();
+        let cell_edits = item
+            .get("cellEdits")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| anyhow!("单元格编辑格式错误: {error}"))?
+            .unwrap_or_default();
+        result.insert(
+            path.to_string(),
+            PriceRunMapping {
+                mapping,
+                writeback_rows,
+                cell_edits,
+            },
+        );
     }
     Ok(result)
 }
@@ -943,7 +1013,7 @@ fn analyze_path_with_templates(
                 .iter()
                 .find(|sheet| sheet.name == mapping.pricing_sheet),
         ) {
-            let index = build_price_index(pricing_sheet, &mapping);
+            let index = build_price_index(pricing_sheet, &mapping, &config.pricing);
             let lines = read_order_lines(order_sheet, &mapping, config).0;
             evaluated_rows = lines.len();
             let evaluated = evaluate_matches(&index, &lines);
@@ -971,7 +1041,7 @@ fn analyze_path_with_templates(
                         .iter()
                         .find(|sheet| sheet.name == mapping.pricing_sheet);
                     if let (Some(order_sheet), Some(pricing_sheet)) = (order_sheet, pricing_sheet) {
-                        let index = build_price_index(pricing_sheet, &mapping);
+                        let index = build_price_index(pricing_sheet, &mapping, &config.pricing);
                         let lines = read_order_lines(order_sheet, &mapping, config).0;
                         let total = lines.len();
                         let (matched, matched_rows) = evaluate_matches(&index, &lines);
@@ -1097,7 +1167,7 @@ fn analyze_path_with_templates(
                 .sheets
                 .iter()
                 .find(|sheet| sheet.name == mapping.pricing_sheet)?;
-            let index = build_price_index(pricing_sheet, mapping);
+            let index = build_price_index(pricing_sheet, mapping, &config.pricing);
             let lines = read_order_lines(order_sheet, mapping, config).0;
             Some(calculate_preview_writeback_rows(
                 order_sheet,
@@ -2998,7 +3068,11 @@ fn read_order_lines(
     (lines, exceptions)
 }
 
-fn build_price_index(sheet: &SheetData, mapping: &PriceCheckMapping) -> PriceIndex {
+fn build_price_index(
+    sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    pricing_rules: &PricingRules,
+) -> PriceIndex {
     let mut index = PriceIndex::default();
     let mut single_shipment_index = PriceIndex::default();
     let data_start = mapping
@@ -3013,8 +3087,11 @@ fn build_price_index(sheet: &SheetData, mapping: &PriceCheckMapping) -> PriceInd
             .find_map(|(row_index, row)| {
                 row.iter()
                     .any(|cell| {
-                        normalize_header(&cell.text())
-                            == normalize_header(SINGLE_SHIPMENT_PRICE_MARKER)
+                        let normalized = normalize_header(&cell.text());
+                        pricing_rules
+                            .single_shipment_price_marker_aliases
+                            .iter()
+                            .any(|alias| normalized == normalize_header(alias))
                     })
                     .then_some(row_index)
             });
@@ -3245,6 +3322,8 @@ fn process_price_file(
     input_path: &Path,
     output_dir: &Path,
     mapping: &PriceCheckMapping,
+    writeback_overrides: &[PricePreviewWritebackRow],
+    cell_edits: &[PriceCellEdit],
     config: &Config,
     state: &RuntimeState,
 ) -> Result<PriceCheckReport> {
@@ -3252,7 +3331,8 @@ fn process_price_file(
     let order_price_column = mapping
         .order_price_column
         .ok_or_else(|| anyhow!("订单 Sheet 找不到 TOTAL Price/原始价格列，未生成结果文件"))?;
-    let workbook = read_workbook_for_processing(input_path, config)?;
+    let mut workbook = read_workbook_for_processing(input_path, config)?;
+    apply_cell_edits(&mut workbook, cell_edits)?;
     let order_sheet = workbook
         .sheets
         .iter()
@@ -3268,7 +3348,7 @@ fn process_price_file(
         exception.file_path = input_path.display().to_string();
     }
     let aggregated = aggregate_lines(&lines);
-    let index = build_price_index(pricing_sheet, mapping);
+    let index = build_price_index(pricing_sheet, mapping, &config.pricing);
     let mut rows = Vec::new();
     let mut matched_rows = 0;
     let mut matched_candidates = HashMap::new();
@@ -3341,7 +3421,8 @@ fn process_price_file(
     }
     let total_rows = rows.len();
     let output_path = output_path_for(input_path, output_dir);
-    let writeback_rows = build_writeback_rows(order_sheet, mapping, &matched_candidates);
+    let mut writeback_rows = build_writeback_rows(order_sheet, mapping, &matched_candidates);
+    apply_writeback_overrides(&mut writeback_rows, writeback_overrides);
     let mut report = PriceCheckReport {
         input_path: input_path.display().to_string(),
         output_path: output_path.display().to_string(),
@@ -3360,9 +3441,63 @@ fn process_price_file(
         mapping.order_header_row,
         order_price_column,
         &writeback_rows,
+        cell_edits,
     )?;
     report.output_path = output_path.display().to_string();
     Ok(report)
+}
+
+fn apply_cell_edits(workbook: &mut WorkbookData, edits: &[PriceCellEdit]) -> Result<()> {
+    for edit in edits {
+        if edit.row == 0 || edit.column == 0 {
+            return Err(anyhow!("单元格行列必须从 1 开始"));
+        }
+        let sheet = workbook
+            .sheets
+            .iter_mut()
+            .find(|sheet| sheet.name == edit.sheet_name)
+            .ok_or_else(|| anyhow!("找不到编辑目标 Sheet: {}", edit.sheet_name))?;
+        let row = sheet
+            .rows
+            .get_mut(edit.row - 1)
+            .ok_or_else(|| anyhow!("编辑目标行超出范围: {}!{}", edit.sheet_name, edit.row))?;
+        if row.len() < edit.column {
+            row.resize(edit.column, CellValue::Empty);
+        }
+        row[edit.column - 1] = if edit.numeric {
+            if edit.value.trim().is_empty() {
+                CellValue::Empty
+            } else {
+                CellValue::Float(
+                    edit.value
+                        .replace(',', "")
+                        .parse()
+                        .map_err(|_| anyhow!("数字单元格编辑值无效: {}", edit.value))?,
+                )
+            }
+        } else {
+            CellValue::string(edit.value.trim())
+        };
+    }
+    Ok(())
+}
+
+fn apply_writeback_overrides(
+    rows: &mut [PriceWritebackRow],
+    overrides: &[PricePreviewWritebackRow],
+) {
+    let overrides = overrides
+        .iter()
+        .map(|row| (row.source_row, row))
+        .collect::<HashMap<_, _>>();
+    for row in rows {
+        let Some(edited) = overrides.get(&row.source_row) else {
+            continue;
+        };
+        row.pricing_price = edited.pricing_price;
+        row.price_difference = edited.price_difference;
+        row.quantity = edited.quantity;
+    }
 }
 
 impl PriceIndex {
@@ -4268,7 +4403,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             ..PriceCheckMapping::default()
         };
 
-        let index = build_price_index(&sheet, &mapping);
+        let index = build_price_index(&sheet, &mapping, &PricingRules::default());
         let lookup = index.lookup("US", "CORDLESSSNOWBLOWER", "", 1);
         assert_eq!(lookup.status, "SKU或国家无法匹配");
         assert_eq!(index.lookup("US", "QY2600223", "", 1).price, Some(112.0));
@@ -4303,7 +4438,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             ..PriceCheckMapping::default()
         };
 
-        let index = build_price_index(&sheet, &mapping);
+        let index = build_price_index(&sheet, &mapping, &PricingRules::default());
         assert_eq!(
             index.lookup("US", "ABC123", "", 1).status,
             "SKU或国家无法匹配"
@@ -4844,7 +4979,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         };
         let lines = read_order_lines(&order_sheet, &mapping, &Config::default()).0;
         let aggregated = aggregate_lines(&lines);
-        let index = build_price_index(&pricing_sheet, &mapping);
+        let index = build_price_index(&pricing_sheet, &mapping, &PricingRules::default());
         let lookup = index.lookup("US", "SKU-A", "", 3);
         let mut candidates = HashMap::new();
         record_matched_candidates(
@@ -4911,7 +5046,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             ],
             ..PriceCheckMapping::default()
         };
-        let index = build_price_index(&sheet, &mapping);
+        let index = build_price_index(&sheet, &mapping, &PricingRules::default());
         assert_eq!(index.lookup("US", "ABC123", "", 0).status, "matched");
         assert_eq!(index.lookup("US", "ABC123", "", 0).price, Some(0.0));
         assert_eq!(index.lookup("US", "ABC123", "", 2).status, "价格不可用");
@@ -4951,7 +5086,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             }],
             ..PriceCheckMapping::default()
         };
-        let index = build_price_index(&sheet, &mapping);
+        let index = build_price_index(&sheet, &mapping, &PricingRules::default());
         assert_eq!(index.lookup("US", "ABC123", "", 1).status, "核价键重复");
     }
 
@@ -4976,7 +5111,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                     CellValue::string("6"),
                 ],
                 vec![
-                    CellValue::string(SINGLE_SHIPMENT_PRICE_MARKER),
+                    CellValue::string("单独 发货 报价："),
                     CellValue::string(""),
                     CellValue::string(""),
                 ],
@@ -5004,7 +5139,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             }],
             ..PriceCheckMapping::default()
         };
-        let index = build_price_index(&sheet, &mapping);
+        let index = build_price_index(&sheet, &mapping, &PricingRules::default());
 
         assert_eq!(index.lookup("US", "ABC123", "", 1).price, Some(8.0));
         assert_eq!(
@@ -5019,6 +5154,180 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 .price,
             Some(6.0)
         );
+    }
+
+    #[test]
+    fn single_shipment_price_marker_requires_an_exact_normalized_alias() {
+        let sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ABC123"),
+                    CellValue::string("US"),
+                    CellValue::string("8"),
+                ],
+                vec![
+                    CellValue::string("备注：单独发货报价"),
+                    CellValue::string(""),
+                    CellValue::string(""),
+                ],
+                vec![
+                    CellValue::string("单独发货"),
+                    CellValue::string(""),
+                    CellValue::string(""),
+                ],
+                vec![
+                    CellValue::string("DEF456"),
+                    CellValue::string("US"),
+                    CellValue::string("6"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            pricing_sheet: "核价".to_string(),
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 3,
+                header: "1".to_string(),
+            }],
+            ..PriceCheckMapping::default()
+        };
+        let index = build_price_index(&sheet, &mapping, &PricingRules::default());
+
+        assert!(index.single_shipment.is_none());
+        assert_eq!(index.lookup("US", "ABC123", "", 1).price, Some(8.0));
+        assert_eq!(index.lookup("US", "DEF456", "", 1).price, Some(6.0));
+    }
+
+    #[test]
+    fn empty_single_shipment_price_marker_aliases_disable_section_detection() {
+        let sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ABC123"),
+                    CellValue::string("US"),
+                    CellValue::string("8"),
+                ],
+                vec![
+                    CellValue::string("单独发货价格"),
+                    CellValue::string(""),
+                    CellValue::string(""),
+                ],
+                vec![
+                    CellValue::string("DEF456"),
+                    CellValue::string("US"),
+                    CellValue::string("6"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            pricing_sheet: "核价".to_string(),
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 3,
+                header: "1".to_string(),
+            }],
+            ..PriceCheckMapping::default()
+        };
+        let pricing_rules = PricingRules {
+            single_shipment_price_marker_aliases: Vec::new(),
+            ..PricingRules::default()
+        };
+        let index = build_price_index(&sheet, &mapping, &pricing_rules);
+
+        assert!(index.single_shipment.is_none());
+        assert_eq!(index.lookup("US", "ABC123", "", 1).price, Some(8.0));
+        assert_eq!(index.lookup("US", "DEF456", "", 1).price, Some(6.0));
+    }
+
+    #[test]
+    fn writeback_edits_override_calculated_values_by_source_row() {
+        let mut rows = vec![
+            PriceWritebackRow {
+                source_row: 2,
+                pricing_price: Some(8.0),
+                price_difference: Some(1.0),
+                quantity: 1,
+                ..PriceWritebackRow::default()
+            },
+            PriceWritebackRow {
+                source_row: 3,
+                pricing_price: Some(6.0),
+                price_difference: Some(0.0),
+                quantity: 2,
+                ..PriceWritebackRow::default()
+            },
+        ];
+
+        apply_writeback_overrides(
+            &mut rows,
+            &[PricePreviewWritebackRow {
+                source_row: 2,
+                pricing_price: Some(9.5),
+                price_difference: Some(2.5),
+                quantity: 4,
+            }],
+        );
+
+        assert_eq!(rows[0].pricing_price, Some(9.5));
+        assert_eq!(rows[0].price_difference, Some(2.5));
+        assert_eq!(rows[0].quantity, 4);
+        assert_eq!(rows[1].pricing_price, Some(6.0));
+        assert_eq!(rows[1].quantity, 2);
+    }
+
+    #[test]
+    fn mapped_cell_edits_update_text_and_numeric_values_before_pricing() {
+        let mut workbook = WorkbookData {
+            sheets: vec![SheetData {
+                name: "订单".to_string(),
+                rows: vec![
+                    vec![CellValue::string("SKU"), CellValue::string("数量")],
+                    vec![CellValue::string("OLD-1"), CellValue::Int(1)],
+                ],
+            }],
+        };
+
+        apply_cell_edits(
+            &mut workbook,
+            &[
+                PriceCellEdit {
+                    sheet_name: "订单".to_string(),
+                    row: 2,
+                    column: 1,
+                    value: "NEW-1".to_string(),
+                    numeric: false,
+                },
+                PriceCellEdit {
+                    sheet_name: "订单".to_string(),
+                    row: 2,
+                    column: 2,
+                    value: "3".to_string(),
+                    numeric: true,
+                },
+            ],
+        )
+        .expect("mapped edits must apply");
+
+        assert_eq!(workbook.sheets[0].rows[1][0].text(), "NEW-1");
+        assert_eq!(workbook.sheets[0].rows[1][1].text(), "3");
     }
 
     #[test]
@@ -5428,8 +5737,8 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             }],
             ..PriceCheckMapping::default()
         };
-        let wrong =
-            validate_price_mapping(&path, &mapping, &Config::default()).expect("valid mapping");
+        let wrong = validate_price_mapping(&path, &mapping, &[], &Config::default())
+            .expect("valid mapping");
         assert_eq!(
             (wrong.evaluated_rows, wrong.matched_rows, wrong.coverage),
             (1, 0, 0.0)
@@ -5438,8 +5747,8 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         mapping.sku_qty_pairs[0].sku_column = 7;
         mapping.sku_qty_pairs[0].qty_column = 6;
         mapping.sku_qty_pairs[0].merged_qty_column = 8;
-        let corrected =
-            validate_price_mapping(&path, &mapping, &Config::default()).expect("valid mapping");
+        let corrected = validate_price_mapping(&path, &mapping, &[], &Config::default())
+            .expect("valid mapping");
         assert_eq!(
             (
                 corrected.evaluated_rows,
@@ -5459,7 +5768,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             }]
         );
         mapping.sku_qty_pairs[0].qty_column = 8;
-        let errors = validate_price_mapping(&path, &mapping, &Config::default())
+        let errors = validate_price_mapping(&path, &mapping, &[], &Config::default())
             .expect_err("following quantity must be rejected");
         assert!(
             errors

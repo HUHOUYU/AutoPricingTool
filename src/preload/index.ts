@@ -166,6 +166,14 @@ export type PricePreviewWritebackRow = {
   quantity: number;
 };
 
+export type PricePreviewCellEdit = {
+  sheetName: string;
+  row: number;
+  column: number;
+  value: string;
+  numeric: boolean;
+};
+
 export type ProcessorEvent =
   | { type: "ready" }
   | { type: "price-analysis"; file: PriceAnalysisFile }
@@ -204,7 +212,12 @@ export type PriceCheckRunPayload = {
   files: string[];
   outputDir: string;
   configPath?: string;
-  mappings: Array<{ inputPath: string; mapping: PriceCheckMapping }>;
+  mappings: Array<{
+    inputPath: string;
+    mapping: PriceCheckMapping;
+    writebackRows?: PricePreviewWritebackRow[];
+    cellEdits?: PricePreviewCellEdit[];
+  }>;
 };
 
 const desktopAPI = {
@@ -239,7 +252,7 @@ const desktopAPI = {
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   analyzePriceFiles: (payload: { files: string[]; configPath?: string }): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-analyze", payload),
-  validatePriceMapping: (payload: { inputPath: string; mapping: PriceCheckMapping; requestVersion: number; configPath?: string }): Promise<void> =>
+  validatePriceMapping: (payload: { inputPath: string; mapping: PriceCheckMapping; requestVersion: number; cellEdits?: PricePreviewCellEdit[]; configPath?: string }): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-validate", payload),
   runPriceCheck: (payload: PriceCheckRunPayload): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-run", payload),

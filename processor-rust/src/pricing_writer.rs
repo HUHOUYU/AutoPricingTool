@@ -1,4 +1,4 @@
-use crate::pricing::PriceWritebackRow;
+use crate::pricing::{PriceCellEdit, PriceWritebackRow};
 use anyhow::{Context, Result, anyhow};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,6 +9,7 @@ const WRITEBACK_COLUMN_COUNT: u32 = WRITEBACK_HEADERS.len() as u32;
 const WRITEBACK_BACKGROUND_COLOR: &str = "D8EEE0";
 const WRITEBACK_ALERT_BACKGROUND_COLOR: &str = "FFC7CE";
 const WRITEBACK_FONT_COLOR: &str = "FF000000";
+const WRITEBACK_TOTAL_LABEL: &str = "合计";
 const SUPPORTED_WRITEBACK_EXTENSIONS: [&str; 2] = ["xlsx", "xlsm"];
 const LEGACY_EXCEL_EXTENSIONS: [&str; 2] = ["xls", "xlsb"];
 
@@ -19,6 +20,7 @@ pub(crate) fn write_price_result(
     header_row: usize,
     total_price_column: usize,
     rows: &[PriceWritebackRow],
+    cell_edits: &[PriceCellEdit],
 ) -> Result<()> {
     validate_source_format(source_path)?;
     if total_price_column == 0 {
@@ -38,6 +40,7 @@ pub(crate) fn write_price_result(
     workbook
         .sheet_by_name(order_sheet_name)
         .with_context(|| format!("找不到订单 Sheet: {order_sheet_name}"))?;
+    apply_cell_edits(&mut workbook, cell_edits)?;
 
     let insert_column = u32::try_from(total_price_column + 1)
         .map_err(|_| anyhow!("TOTAL Price 列号超出支持范围"))?;
@@ -111,6 +114,27 @@ pub(crate) fn write_price_result(
             },
         );
     }
+    let total_row = worksheet.highest_row().saturating_add(1);
+    worksheet
+        .cell_mut((u32::try_from(total_price_column)?, total_row))
+        .set_value(WRITEBACK_TOTAL_LABEL);
+    let totals = rows.iter().fold((0.0, 0.0, 0usize), |total, row| {
+        (
+            total.0 + row.pricing_price.unwrap_or_default(),
+            total.1 + row.price_difference.unwrap_or_default(),
+            total.2 + row.quantity,
+        )
+    });
+    for (offset, value) in [totals.0, totals.1, totals.2 as f64]
+        .into_iter()
+        .enumerate()
+    {
+        let column = insert_column + offset as u32;
+        worksheet
+            .cell_mut((column, total_row))
+            .set_value_number(value);
+        apply_writeback_value_style(worksheet, column, total_row, WRITEBACK_BACKGROUND_COLOR);
+    }
 
     let temporary_path = sibling_work_path(output_path, "tmp");
     let backup_path = sibling_work_path(output_path, "bak");
@@ -121,6 +145,32 @@ pub(crate) fn write_price_result(
         return Err(error);
     }
     replace_output_file(&temporary_path, output_path, &backup_path)
+}
+
+fn apply_cell_edits(
+    workbook: &mut umya_spreadsheet::Workbook,
+    edits: &[PriceCellEdit],
+) -> Result<()> {
+    for edit in edits {
+        if edit.row == 0 || edit.column == 0 {
+            return Err(anyhow!("单元格行列必须从 1 开始"));
+        }
+        let worksheet = workbook
+            .sheet_by_name_mut(&edit.sheet_name)
+            .with_context(|| format!("找不到编辑目标 Sheet: {}", edit.sheet_name))?;
+        let cell = worksheet.cell_mut((u32::try_from(edit.column)?, u32::try_from(edit.row)?));
+        if edit.numeric && !edit.value.trim().is_empty() {
+            let value = edit
+                .value
+                .replace(',', "")
+                .parse::<f64>()
+                .map_err(|_| anyhow!("数字单元格编辑值无效: {}", edit.value))?;
+            cell.set_value_number(value);
+        } else {
+            cell.set_value(edit.value.trim());
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_source_format(source_path: &Path) -> Result<()> {
@@ -338,6 +388,36 @@ mod tests {
                     ..PriceWritebackRow::default()
                 },
             ],
+            &[
+                PriceCellEdit {
+                    sheet_name: "订单".to_string(),
+                    row: 1,
+                    column: 2,
+                    value: "商品编码".to_string(),
+                    numeric: false,
+                },
+                PriceCellEdit {
+                    sheet_name: "订单".to_string(),
+                    row: 2,
+                    column: 2,
+                    value: "EDITED-SKU".to_string(),
+                    numeric: false,
+                },
+                PriceCellEdit {
+                    sheet_name: "订单".to_string(),
+                    row: 2,
+                    column: 3,
+                    value: "15.5".to_string(),
+                    numeric: true,
+                },
+                PriceCellEdit {
+                    sheet_name: "核价".to_string(),
+                    row: 1,
+                    column: 1,
+                    value: "已编辑核价表头".to_string(),
+                    numeric: false,
+                },
+            ],
         )?;
 
         assert_eq!(fs::read(&source_path)?, source_before);
@@ -353,6 +433,7 @@ mod tests {
         assert_eq!(order.value("F1"), "数量");
         assert_eq!(order.value("G1"), "Name");
         assert_eq!(order.value("H1"), "Address");
+        assert_eq!(order.value("B1"), "商品编码");
         assert_eq!(order.value("D2"), "11");
         assert_eq!(order.value("E2"), "1");
         assert_eq!(order.value("F2"), "3");
@@ -361,7 +442,14 @@ mod tests {
         assert_eq!(order.value("D4"), "");
         assert_eq!(order.value("E4"), "");
         assert_eq!(order.value("F4"), "0");
+        assert_eq!(order.value("B2"), "EDITED-SKU");
+        assert_eq!(order.value("C2"), "15.5");
+        assert_eq!(order.value("C7"), "合计");
+        assert_eq!(order.value("D7"), "20");
+        assert_eq!(order.value("E7"), "-2");
+        assert_eq!(order.value("F7"), "3");
         assert_eq!(order.value("G2"), "Name-1");
+        assert_eq!(output.sheet_by_name("核价")?.value("A1"), "已编辑核价表头");
         assert_eq!(order.cell("G5").expect("formula cell").formula(), "C2+C3");
         assert!(
             order
@@ -418,7 +506,7 @@ mod tests {
         );
         assert_eq!(order.style("C2").borders(), order.style("D2").borders());
         let pricing = output.sheet_by_name("核价")?;
-        assert_eq!(pricing.value("A1"), "保留内容");
+        assert_eq!(pricing.value("A1"), "已编辑核价表头");
         assert_eq!(pricing.value("D1"), "核价-D");
         assert_eq!(pricing.value("E1"), "核价-E");
         assert_eq!(pricing.highest_column(), 5);
@@ -437,7 +525,7 @@ mod tests {
         for extension in LEGACY_EXCEL_EXTENSIONS {
             let source_path = unique_path("legacy-source", extension);
             let output_path = unique_path("legacy-output", "xlsx");
-            let error = write_price_result(&source_path, &output_path, "订单", 1, 3, &[])
+            let error = write_price_result(&source_path, &output_path, "订单", 1, 3, &[], &[])
                 .expect_err("legacy format must be rejected");
             assert!(error.to_string().contains("另存为 .xlsx"));
             assert!(!output_path.exists());
@@ -450,7 +538,7 @@ mod tests {
         let output_path = unique_path("missing-price-output", "xlsx");
         create_source_workbook(&source_path)?;
 
-        let error = write_price_result(&source_path, &output_path, "订单", 1, 0, &[])
+        let error = write_price_result(&source_path, &output_path, "订单", 1, 0, &[], &[])
             .expect_err("missing price column must fail");
 
         assert!(error.to_string().contains("TOTAL Price"));
@@ -466,7 +554,7 @@ mod tests {
         create_source_workbook(&source_path)?;
         add_fake_vba_project(&source_path)?;
 
-        write_price_result(&source_path, &output_path, "订单", 1, 3, &[])?;
+        write_price_result(&source_path, &output_path, "订单", 1, 3, &[], &[])?;
 
         let file = fs::File::open(&output_path)?;
         let mut archive = zip::ZipArchive::new(file)?;

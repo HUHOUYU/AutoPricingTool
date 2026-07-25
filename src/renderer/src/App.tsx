@@ -67,6 +67,8 @@ import type {
   PriceAnalysisCandidate,
   PriceAnalysisFile,
   PriceCheckMapping,
+  PricePreviewCellEdit,
+  PricePreviewWritebackRow,
   ProcessorEvent,
   RuntimeConfig,
 } from "../../preload";
@@ -509,6 +511,8 @@ export function App(): React.JSX.Element {
   const [activeMappingTarget, setActiveMappingTarget] = useState<MappingFieldTarget | null>(null);
   const [mappingValidations, setMappingValidations] = useState<Record<string, MappingValidationState>>({});
   const [matchedOrderRowsBySheet, setMatchedOrderRowsBySheet] = useState<Record<string, Record<string, number[]>>>({});
+  const [writebackEdits, setWritebackEdits] = useState<Record<string, PricePreviewWritebackRow[]>>({});
+  const [cellEdits, setCellEdits] = useState<Record<string, PricePreviewCellEdit[]>>({});
   const [detailDrawerWidth, setDetailDrawerWidth] = useState(defaultDetailDrawerWidth);
   const [detailSidebarWidth, setDetailSidebarWidth] = useState(DETAIL_SIDEBAR_DEFAULT_WIDTH);
   const [detailDrawerViewportWidth, setDetailDrawerViewportWidth] = useState(() => window.innerWidth);
@@ -519,6 +523,8 @@ export function App(): React.JSX.Element {
   const detailDrawerWidthRef = useRef(detailDrawerWidth);
   const analysesRef = useRef<Record<string, PriceAnalysisFile>>({});
   const mappingsRef = useRef<Record<string, PriceCheckMapping>>({});
+  const writebackEditsRef = useRef<Record<string, PricePreviewWritebackRow[]>>({});
+  const cellEditsRef = useRef<Record<string, PricePreviewCellEdit[]>>({});
   const confirmedPathsRef = useRef<Set<string>>(new Set());
   const resultRevealHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRunRequestedRef = useRef(false);
@@ -642,7 +648,13 @@ export function App(): React.JSX.Element {
     mappingValidationInFlightRef.current = true;
     activeMappingValidationRef.current = { path, mapping, version };
     setMappingValidations((current) => ({ ...current, [path]: { status: "validating", result: current[path]?.result ?? null } }));
-    void api.validatePriceMapping({ inputPath: path, mapping, requestVersion: version, configPath: configPath || undefined }).catch((error: unknown) => {
+    void api.validatePriceMapping({
+      inputPath: path,
+      mapping,
+      requestVersion: version,
+      cellEdits: cellEditsRef.current[path] ?? [],
+      configPath: configPath || undefined,
+    }).catch((error: unknown) => {
       mappingValidationInFlightRef.current = false;
       activeMappingValidationRef.current = null;
       setMappingValidations((current) => ({
@@ -905,8 +917,12 @@ export function App(): React.JSX.Element {
     setInputDir((current) => current || parentDirectory(newPaths[0]));
     analysesRef.current = {};
     mappingsRef.current = {};
+    writebackEditsRef.current = {};
+    cellEditsRef.current = {};
     setAnalyses({});
     setMappings({});
+    setWritebackEdits({});
+    setCellEdits({});
     setMappingValidations({});
     setMatchedOrderRowsBySheet({});
     setDetailPreviewWorkbook(null);
@@ -1091,6 +1107,8 @@ export function App(): React.JSX.Element {
     setActivePath("");
     analysesRef.current = {};
     mappingsRef.current = {};
+    writebackEditsRef.current = {};
+    cellEditsRef.current = {};
     mappingValidationVersionsRef.current = {};
     pendingMappingValidationRef.current = null;
     mappingValidationInFlightRef.current = false;
@@ -1098,6 +1116,8 @@ export function App(): React.JSX.Element {
     if (mappingValidationTimerRef.current) clearTimeout(mappingValidationTimerRef.current);
     setAnalyses({});
     setMappings({});
+    setWritebackEdits({});
+    setCellEdits({});
     setMappingValidations({});
     setMatchedOrderRowsBySheet({});
     setDetailPreviewWorkbook(null);
@@ -1135,8 +1155,10 @@ export function App(): React.JSX.Element {
       .map((path) => ({
         inputPath: path,
         mapping: mappingsRef.current[path] ?? analysesRef.current[path]?.suggestedMapping ?? mappings[path] ?? analyses[path]?.suggestedMapping ?? null,
+        writebackRows: writebackEditsRef.current[path] ?? [],
+        cellEdits: cellEditsRef.current[path] ?? [],
       }))
-      .filter((item): item is { inputPath: string; mapping: PriceCheckMapping } => item.mapping !== null);
+      .filter((item): item is { inputPath: string; mapping: PriceCheckMapping; writebackRows: PricePreviewWritebackRow[]; cellEdits: PricePreviewCellEdit[] } => item.mapping !== null);
     if (runMappings.length !== runnableFiles.length) {
       appendLog("仍有文件没有可执行字段映射，请先分析并确认", "warning");
       return;
@@ -1288,6 +1310,8 @@ export function App(): React.JSX.Element {
     setSelectedPaths([]);
     setAnalyses({});
     setMappings({});
+    setWritebackEdits({});
+    setCellEdits({});
     setMappingValidations({});
     setMatchedOrderRowsBySheet({});
     setResults({});
@@ -1295,6 +1319,8 @@ export function App(): React.JSX.Element {
     setDetailPath(null);
     analysesRef.current = {};
     mappingsRef.current = {};
+    writebackEditsRef.current = {};
+    cellEditsRef.current = {};
     mappingValidationVersionsRef.current = {};
     pendingMappingValidationRef.current = null;
     mappingValidationInFlightRef.current = false;
@@ -1388,6 +1414,14 @@ export function App(): React.JSX.Element {
   };
 
   const commitMapping = (path: string, mapping: PriceCheckMapping): void => {
+    const nextWritebackEdits = { ...writebackEditsRef.current };
+    delete nextWritebackEdits[path];
+    writebackEditsRef.current = nextWritebackEdits;
+    setWritebackEdits(nextWritebackEdits);
+    const nextCellEdits = { ...cellEditsRef.current };
+    delete nextCellEdits[path];
+    cellEditsRef.current = nextCellEdits;
+    setCellEdits(nextCellEdits);
     mappingsRef.current = { ...mappingsRef.current, [path]: mapping };
     setMappings((current) => ({ ...current, [path]: mapping }));
     queueMappingValidation(path, mapping);
@@ -1419,6 +1453,14 @@ export function App(): React.JSX.Element {
 
   const retryAnalysis = async (path: string): Promise<void> => {
     setDetailPath(null);
+    const nextWritebackEdits = { ...writebackEditsRef.current };
+    delete nextWritebackEdits[path];
+    writebackEditsRef.current = nextWritebackEdits;
+    setWritebackEdits(nextWritebackEdits);
+    const nextCellEdits = { ...cellEditsRef.current };
+    delete nextCellEdits[path];
+    cellEditsRef.current = nextCellEdits;
+    setCellEdits(nextCellEdits);
     setResults((current) => {
       const next = { ...current };
       delete next[path];
@@ -1658,9 +1700,41 @@ export function App(): React.JSX.Element {
   const detailMatchedOrderRows = detailPath && detailMapping && detailValidation.status === "ready"
     ? matchedOrderRowsBySheet[detailPath]?.[detailMapping.orderSheet] ?? []
     : [];
-  const detailWritebackRows = detailValidation.status === "ready"
-    ? detailValidation.result?.writebackRows ?? []
-    : [];
+  const detailWritebackRows = useMemo(() => {
+    if (!detailPath || detailValidation.status !== "ready") return [];
+    const baseRows = detailValidation.result?.writebackRows ?? [];
+    const editsByRow = new Map((writebackEdits[detailPath] ?? []).map((row) => [row.sourceRow, row]));
+    return baseRows.map((row) => editsByRow.get(row.sourceRow) ?? row);
+  }, [detailPath, detailValidation, writebackEdits]);
+  const editDetailWritebackRow = useCallback((row: PricePreviewWritebackRow): void => {
+    if (!detailPath) return;
+    const current = writebackEditsRef.current[detailPath] ?? [];
+    const nextRows = [...current.filter((item) => item.sourceRow !== row.sourceRow), row]
+      .sort((left, right) => left.sourceRow - right.sourceRow);
+    const next = { ...writebackEditsRef.current, [detailPath]: nextRows };
+    writebackEditsRef.current = next;
+    setWritebackEdits(next);
+  }, [detailPath]);
+  const editDetailCell = useCallback((edit: PricePreviewCellEdit): void => {
+    if (!detailPath || !detailMapping) return;
+    const current = cellEditsRef.current[detailPath] ?? [];
+    const nextEdits = [
+      ...current.filter((item) => (
+        item.sheetName !== edit.sheetName
+        || item.row !== edit.row
+        || item.column !== edit.column
+      )),
+      edit,
+    ].sort((left, right) => (
+      left.sheetName.localeCompare(right.sheetName)
+      || left.row - right.row
+      || left.column - right.column
+    ));
+    const next = { ...cellEditsRef.current, [detailPath]: nextEdits };
+    cellEditsRef.current = next;
+    setCellEdits(next);
+    queueMappingValidation(detailPath, detailMapping);
+  }, [detailMapping, detailPath]);
   const detailPreviewCandidates = useMemo<ExcelPreviewCandidate[]>(() => {
     if (!detailAnalysis) return [];
     const rolesBySheet = new Map<string, Set<ExcelPreviewCandidate["roles"][number]>>();
@@ -1983,6 +2057,9 @@ export function App(): React.JSX.Element {
                   mapping={detailMapping}
                   matchedOrderRows={detailMatchedOrderRows}
                   writebackRows={detailWritebackRows}
+                  onWritebackRowChange={editDetailWritebackRow}
+                  cellEdits={detailPath ? cellEdits[detailPath] ?? [] : []}
+                  onCellEdit={editDetailCell}
                   activeTarget={activeMappingTarget}
                   selectionPrompt={activeMappingTarget ? `正在选择“${mappingTargetLabel(activeMappingTarget)}”` : undefined}
                   onActiveSheetChange={setDetailPreviewSheetName}
