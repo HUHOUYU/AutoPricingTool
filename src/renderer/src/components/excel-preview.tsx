@@ -30,6 +30,10 @@ type ExcelPreviewProps = {
 };
 
 type PreviewStatus = "empty" | "loading" | "ready" | "error";
+type PricingLookupFilter = {
+  sku: string;
+  countries: string[];
+};
 
 const previewRowHeight = 30;
 const previewRowNumberWidth = 52;
@@ -86,7 +90,7 @@ function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetN
       || pair.mergedQtyColumn === column
     ))) return " is-sku-qty-column";
     if (mapping.orderPriceColumn === column) return " is-price-column";
-    if ([mapping.businessOrderNumberColumn, mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn, mapping.shippingMethodColumn].includes(column)) return " is-mapped-column";
+    if ([mapping.businessOrderNumberColumn, mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn, mapping.shippingMethodColumn, mapping.singleShipmentColumn].includes(column)) return " is-mapped-column";
   }
   if (sheetName === mapping.pricingSheet) {
     if (mapping.pricingSkuColumn === column) return " is-sku-column";
@@ -201,6 +205,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchMatchIndex, setActiveSearchMatchIndex] = useState(0);
   const [searchPreferredColumns, setSearchPreferredColumns] = useState<number[]>([]);
+  const [pricingLookupFilter, setPricingLookupFilter] = useState<PricingLookupFilter | null>(null);
   const [unmatchedNavigationEnabled, setUnmatchedNavigationEnabled] = useState(false);
   const [activeUnmatchedRow, setActiveUnmatchedRow] = useState<number | null>(null);
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
@@ -218,6 +223,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     setSearchOpen(false);
     setSearchQuery("");
     setSearchPreferredColumns([]);
+    setPricingLookupFilter(null);
     setUnmatchedNavigationEnabled(false);
     setActiveUnmatchedRow(null);
     setLoadAll(false);
@@ -300,7 +306,17 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     workbook?.sheets.find((sheet) => sheet.name === activeSheetName) ?? null
   ), [activeSheetName, workbook]);
   const searchMatches = useMemo<ExcelPreviewSearchMatch[]>(() => {
-    const matches = findExcelPreviewMatches(activeSheet?.rows ?? [], searchQuery);
+    let matches = findExcelPreviewMatches(activeSheet?.rows ?? [], searchQuery);
+    if (activeSheet && activeSheet.name === mapping?.pricingSheet && pricingLookupFilter) {
+      const skuColumnIndex = mapping.pricingSkuColumn - activeSheet.startColumn - 1;
+      const countryColumnIndex = mapping.pricingCountryColumn - activeSheet.startColumn - 1;
+      const countries = new Set(pricingLookupFilter.countries.map((country) => country.trim().toLocaleLowerCase()));
+      matches = matches.filter((match) => {
+        const row = activeSheet.rows[match.rowIndex] ?? [];
+        return normalizeSkuForSearch(row[skuColumnIndex] ?? "") === pricingLookupFilter.sku
+          && countries.has((row[countryColumnIndex] ?? "").trim().toLocaleLowerCase());
+      });
+    }
     if (!activeSheet || activeSheet.name !== mapping?.pricingSheet || searchPreferredColumns.length === 0) return matches;
     const preferredColumnIndexes = searchPreferredColumns
       .map((column) => column - activeSheet.startColumn - 1)
@@ -310,7 +326,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
       const columnIndex = preferredColumnIndexes.find((index) => row[index]?.trim());
       return columnIndex === undefined ? match : { ...match, columnIndex };
     });
-  }, [activeSheet, mapping?.pricingSheet, searchPreferredColumns, searchQuery]);
+  }, [activeSheet, mapping?.pricingCountryColumn, mapping?.pricingSheet, mapping?.pricingSkuColumn, pricingLookupFilter, searchPreferredColumns, searchQuery]);
   const activeSearchMatch = searchMatches.length > 0
     ? searchMatches[activeSearchMatchIndex % searchMatches.length]
     : null;
@@ -396,6 +412,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
           setSearchOpen(false);
           setSearchQuery("");
           setSearchPreferredColumns([]);
+          setPricingLookupFilter(null);
         } else {
           setSearchOpen(true);
           requestAnimationFrame(() => searchInputRef.current?.focus());
@@ -405,6 +422,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
         setSearchOpen(false);
         setSearchQuery("");
         setSearchPreferredColumns([]);
+        setPricingLookupFilter(null);
       }
     };
     document.addEventListener("keydown", handleFindShortcut);
@@ -503,6 +521,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     setSearchOpen(false);
     setSearchQuery("");
     setSearchPreferredColumns([]);
+    setPricingLookupFilter(null);
   };
 
   const changePreviewSheet = (sheetName: string): void => {
@@ -532,6 +551,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     const termGroups = [sku, countries.join(" | ")].filter(Boolean);
     if (termGroups.length === 0) return;
     setSearchQuery(termGroups.join(", "));
+    setPricingLookupFilter({ sku, countries });
     setSearchPreferredColumns([priceColumn, mapping.pricingSkuColumn, mapping.pricingCountryColumn]
       .filter((column): column is number => typeof column === "number" && column > 0));
     setSearchOpen(true);
@@ -658,6 +678,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                 value={searchQuery}
                 onChange={(event) => {
                   setSearchPreferredColumns([]);
+                  setPricingLookupFilter(null);
                   setSearchQuery(event.target.value);
                 }}
                 onKeyDown={(event) => {

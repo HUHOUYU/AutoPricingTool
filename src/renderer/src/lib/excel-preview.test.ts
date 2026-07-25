@@ -63,15 +63,16 @@ describe("parseExcelPreview", () => {
 });
 
 describe("findExcelPreviewMatches", () => {
-  it("finds partial matches without case sensitivity in row order", () => {
+  it("finds exact cell matches without case sensitivity in row order", () => {
     expect(findExcelPreviewMatches([
       ["SKU", "Country"],
       ["FL2600293-1", "ES"],
       ["fl2600293-2", "FR"],
-    ], " FL2600293 ")).toEqual([
-      { rowIndex: 1, columnIndex: 0 },
-      { rowIndex: 2, columnIndex: 0 },
-    ]);
+    ], " FL2600293-1 ")).toEqual([{ rowIndex: 1, columnIndex: 0 }]);
+    expect(findExcelPreviewMatches([
+      ["SKU"],
+      ["FL2600293-1"],
+    ], "FL2600293")).toEqual([]);
   });
 
   it("returns no matches for an empty query", () => {

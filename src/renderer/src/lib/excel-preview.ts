@@ -75,8 +75,8 @@ export function findExcelPreviewMatches(rows: string[][], query: string): ExcelP
   const matches: ExcelPreviewSearchMatch[] = [];
   rows.forEach((row, rowIndex) => {
     const normalizedCells = row.map((cell) => cell.toLocaleLowerCase());
-    if (!termGroups.every((group) => group.some((term) => normalizedCells.some((cell) => cell.includes(term))))) return;
-    const columnIndex = normalizedCells.findIndex((cell) => termGroups[0].some((term) => cell.includes(term)));
+    if (!termGroups.every((group) => group.some((term) => normalizedCells.some((cell) => cell === term)))) return;
+    const columnIndex = normalizedCells.findIndex((cell) => termGroups[0].some((term) => cell === term));
     matches.push({ rowIndex, columnIndex: Math.max(0, columnIndex) });
   });
   return matches;
