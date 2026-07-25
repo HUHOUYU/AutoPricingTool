@@ -42,6 +42,11 @@ pub(crate) fn write_price_result(
     let insert_column = u32::try_from(total_price_column + 1)
         .map_err(|_| anyhow!("TOTAL Price 列号超出支持范围"))?;
     workbook.insert_new_column_by_index(order_sheet_name, insert_column, WRITEBACK_COLUMN_COUNT);
+    for worksheet in workbook.sheet_collection_mut() {
+        if worksheet.name() != order_sheet_name {
+            worksheet.remove_column_by_index(insert_column, WRITEBACK_COLUMN_COUNT);
+        }
+    }
 
     let worksheet = workbook
         .sheet_by_name_mut(order_sheet_name)
@@ -286,6 +291,8 @@ mod tests {
             let pricing = workbook.add_worksheet();
             pricing.set_name("核价")?;
             pricing.write_string(0, 0, "保留内容")?;
+            pricing.write_string(0, 3, "核价-D")?;
+            pricing.write_string(0, 4, "核价-E")?;
             pricing.write_formula(1, 0, "=订单!C2")?;
             pricing.write_formula(2, 0, "=订单!D2")?;
         }
@@ -410,13 +417,13 @@ mod tests {
                 .map(|format| format.format_code())
         );
         assert_eq!(order.style("C2").borders(), order.style("D2").borders());
-        assert_eq!(output.sheet_by_name("核价")?.value("A1"), "保留内容");
+        let pricing = output.sheet_by_name("核价")?;
+        assert_eq!(pricing.value("A1"), "保留内容");
+        assert_eq!(pricing.value("D1"), "核价-D");
+        assert_eq!(pricing.value("E1"), "核价-E");
+        assert_eq!(pricing.highest_column(), 5);
         assert_eq!(
-            output
-                .sheet_by_name("核价")?
-                .cell("A3")
-                .expect("cross-sheet formula")
-                .formula(),
+            pricing.cell("A3").expect("cross-sheet formula").formula(),
             "'订单'!G2"
         );
 
