@@ -914,6 +914,14 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByText("订单 90.0 分")).toBeInTheDocument();
     expect(screen.getByText("核价 90.0 分")).toBeInTheDocument();
     expect(screen.getByText("核价 80.0 分")).toBeInTheDocument();
+    const unmatchedSwitch = screen.getByRole("switch", { name: "未匹配定位" });
+    expect(unmatchedSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(unmatchedSwitch);
+    expect(unmatchedSwitch).toHaveAttribute("aria-checked", "true");
+    unmatchedSwitch.focus();
+    fireEvent.keyDown(unmatchedSwitch, { key: "ArrowDown" });
+    await waitFor(() => expect(dialog.querySelector(".excel-preview-row-number.is-unmatched-target")).toHaveTextContent("18"));
+    fireEvent.click(unmatchedSwitch);
     expect(screen.getAllByText("核价[财务]").length).toBeGreaterThan(0);
     const initialPreviewDataRow = Array.from(dialog.querySelectorAll(".excel-preview-rows .excel-preview-row"))
       .find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "2");
