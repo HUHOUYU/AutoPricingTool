@@ -10,6 +10,7 @@ export type MappingFieldTarget =
   | "countryEnglishColumn"
   | "countryChineseColumn"
   | "shippingMethodColumn"
+  | "singleShipmentColumn"
   | "orderPriceColumn"
   | "pricingHeaderRow"
   | "pricingQuantityHeaderRow"
@@ -179,6 +180,13 @@ export function MappingEditor({
             <button type="button" aria-label={`删除数量/SKU/合并数量 ${index + 1}`} disabled={mapping.skuQtyPairs.length === 1} onClick={() => update({ skuQtyPairs: mapping.skuQtyPairs.filter((_, pairIndex) => pairIndex !== index) })}><Trash2 /></button>
           </div>)}
           <Button type="button" variant="outline" size="sm" onClick={() => update({ skuQtyPairs: [...mapping.skuQtyPairs, { skuColumn: 0, qtyColumn: 0, mergedQtyColumn: 0, skuHeader: "", qtyHeader: "", mergedQtyHeader: "" }] })}><Plus />添加数量/SKU/合并数量</Button>
+        </div>
+      </details>
+
+      <details onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.orderSheet); }}>
+        <summary>单独发货字段</summary>
+        <div className="mapping-fields">
+          <FieldSelect label="单独发货字段" value={mapping.singleShipmentColumn} options={orderOptions} target="singleShipmentColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("singleShipmentColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
         </div>
       </details>
 

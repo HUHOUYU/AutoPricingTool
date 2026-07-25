@@ -241,6 +241,7 @@ function buildMapping(order: PriceAnalysisCandidate, pricing: PriceAnalysisCandi
     countryChineseColumn: order.countryChineseColumn ?? null,
     skuQtyPairs: order.skuQtyPairs ?? [],
     shippingMethodColumn: order.shippingMethodColumn ?? null,
+    singleShipmentColumn: order.singleShipmentColumn ?? null,
     orderPriceColumn: order.priceColumn ?? null,
     pricingSheet: pricing.sheetName,
     pricingHeaderRow: pricing.headerRow,
@@ -407,6 +408,7 @@ function mappingTargetLabel(target: MappingFieldTarget | null): string {
     countryEnglishColumn: "英文国家名",
     countryChineseColumn: "中文国家名",
     shippingMethodColumn: "物流方式",
+    singleShipmentColumn: "单独发货字段",
     orderPriceColumn: "原始价格",
     pricingHeaderRow: "核价表头行",
     pricingQuantityHeaderRow: "数量档位表头行",
@@ -443,6 +445,7 @@ function mappingColumnConflict(mapping: PriceCheckMapping, target: MappingFieldT
         ["countryEnglishColumn", mapping.countryEnglishColumn],
         ["countryChineseColumn", mapping.countryChineseColumn],
         ["shippingMethodColumn", mapping.shippingMethodColumn],
+        ["singleShipmentColumn", mapping.singleShipmentColumn],
         ["orderPriceColumn", mapping.orderPriceColumn],
         ...mapping.skuQtyPairs.flatMap((pair, index) => [
           [`skuQtyPairs.${index}.skuColumn` as MappingFieldTarget, pair.skuColumn] as [MappingFieldTarget, number],

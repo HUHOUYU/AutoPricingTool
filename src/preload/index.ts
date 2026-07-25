@@ -84,6 +84,7 @@ export type PriceCheckMapping = {
     mergedQtyHeader: string;
   }>;
   shippingMethodColumn?: number | null;
+  singleShipmentColumn?: number | null;
   orderPriceColumn?: number | null;
   pricingSheet: string;
   pricingHeaderRow: number;
@@ -108,6 +109,7 @@ export type PriceAnalysisCandidate = {
   countryChineseColumn?: number | null;
   skuQtyPairs?: PriceCheckMapping["skuQtyPairs"];
   shippingMethodColumn?: number | null;
+  singleShipmentColumn?: number | null;
   priceColumn?: number | null;
   validOrderRows?: number;
   validPriceRows?: number;
