@@ -9,14 +9,12 @@ export type MappingFieldTarget =
   | "countryCodeColumn"
   | "countryEnglishColumn"
   | "countryChineseColumn"
-  | "shippingMethodColumn"
   | "singleShipmentColumn"
   | "orderPriceColumn"
   | "pricingHeaderRow"
   | "pricingQuantityHeaderRow"
   | "pricingSkuColumn"
   | "pricingCountryColumn"
-  | "pricingShippingMethodColumn"
   | `skuQtyPairs.${number}.skuColumn`
   | `skuQtyPairs.${number}.qtyColumn`
   | `skuQtyPairs.${number}.mergedQtyColumn`
@@ -43,6 +41,9 @@ type MappingEditorProps = {
 
 type ColumnOption = { value: number; label: string };
 
+/** 无表头文案时在字段映射下拉/选中态中显示 */
+const EMPTY_HEADER_LABEL = "空表头";
+
 function excelColumnLabel(column: number): string {
   let value = column;
   let label = "";
@@ -54,17 +55,25 @@ function excelColumnLabel(column: number): string {
   return label;
 }
 
+function formatColumnOptionLabel(column: number, header: string | null | undefined): string {
+  const text = header?.trim() ?? "";
+  return `${excelColumnLabel(column)} · ${text || EMPTY_HEADER_LABEL}`;
+}
+
 function sheetFor(workbook: ExcelPreviewWorkbook | null, name: string): ExcelPreviewSheet | null {
   return workbook?.sheets.find((sheet) => sheet.name === name) ?? null;
 }
 
 function columnOptions(sheet: ExcelPreviewSheet | null, headerRow: number): ColumnOption[] {
   if (!sheet) return [];
+  // 使用完整列数（含截断前）与当前展示列数的较大值，避免空表头列被裁掉
+  const columnSpan = Math.max(sheet.displayedColumnCount, sheet.columnCount);
   const row = sheet.rows[headerRow - sheet.startRow - 1] ?? [];
-  return Array.from({ length: sheet.displayedColumnCount }, (_, index) => {
+  return Array.from({ length: columnSpan }, (_, index) => {
     const value = sheet.startColumn + index + 1;
-    const header = row[index]?.trim();
-    return { value, label: `${excelColumnLabel(value)} · ${header || "（空表头）"}` };
+    // 预览截断时超出 displayed 的列没有单元格，仍保留为可选「空表头」
+    const header = index < sheet.displayedColumnCount ? (row[index] ?? "") : "";
+    return { value, label: formatColumnOptionLabel(value, header) };
   });
 }
 
@@ -93,12 +102,19 @@ function FieldSelect({
   onChange: (column: number | null) => void;
 }): React.JSX.Element {
   const selected = options.find((option) => option.value === value);
+  // 已选列不在 options 中时（预览未加载/截断）仍显示列标 + 空表头，避免空白
+  const selectedLabel = selected?.label
+    ?? (value && value > 0 ? formatColumnOptionLabel(value, "") : null)
+    ?? (optional ? "不使用" : "未选择");
+  const selectOptions = value && value > 0 && !selected
+    ? [...options, { value, label: formatColumnOptionLabel(value, "") }]
+    : options;
   return (
     <div className={`mapping-field${activeTarget === target ? " is-active" : ""}`} onClick={() => onActiveTargetChange(target)}>
       <span>{label}<em>{activeTarget === target ? "等待选择" : ""}</em></span>
       <div className="mapping-field-control">
-        <button type="button" aria-label={`选择${label}，当前${selected?.label ?? (optional ? "不使用" : "未选择")}`} onClick={() => onActiveTargetChange(target)}>
-          <strong>{activeTarget === target ? "请点击左侧表格" : selected?.label ?? (optional ? "不使用" : "未选择")}</strong>
+        <button type="button" aria-label={`选择${label}，当前${selectedLabel}`} onClick={() => onActiveTargetChange(target)}>
+          <strong>{activeTarget === target ? "请点击左侧表格" : selectedLabel}</strong>
         </button>
         <span className="mapping-field-fallback">
           <ChevronDown aria-hidden="true" />
@@ -110,7 +126,7 @@ function FieldSelect({
             onChange={(event) => onChange(event.currentTarget.value ? Number(event.currentTarget.value) : null)}
           >
             <option value="">{optional ? "不使用" : "请选择"}</option>
-            {options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+            {selectOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
           </select>
         </span>
       </div>
@@ -160,7 +176,6 @@ export function MappingEditor({
           <FieldSelect label="国家二字码" value={mapping.countryCodeColumn} options={orderOptions} target="countryCodeColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("countryCodeColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
           <FieldSelect label="英文国家名" value={mapping.countryEnglishColumn} options={orderOptions} target="countryEnglishColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("countryEnglishColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
           <FieldSelect label="中文国家名" value={mapping.countryChineseColumn} options={orderOptions} target="countryChineseColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("countryChineseColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
-          <FieldSelect label="物流方式" value={mapping.shippingMethodColumn} options={orderOptions} target="shippingMethodColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("shippingMethodColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
           <FieldSelect label="原始价格" value={mapping.orderPriceColumn} options={orderOptions} target="orderPriceColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("orderPriceColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
         </div>
         <div className="mapping-repeat-list">
@@ -189,7 +204,6 @@ export function MappingEditor({
           <label className={`mapping-field${activeTarget === "pricingQuantityHeaderRow" ? " is-active" : ""}`} onClick={() => onActiveTargetChange("pricingQuantityHeaderRow")}><span>档位表头行<em>{activeTarget === "pricingQuantityHeaderRow" ? "点击行号选择" : ""}</em></span><input aria-label="数量档位表头行" type="number" min={1} max={pricingSheet?.rowCount ?? 1} value={mapping.pricingQuantityHeaderRow ?? ""} placeholder="同表头行" onFocus={() => onActiveTargetChange("pricingQuantityHeaderRow")} onChange={(event) => update({ pricingQuantityHeaderRow: event.currentTarget.value ? Number(event.currentTarget.value) : null })} /></label>
           <FieldSelect label="核价 SKU" value={mapping.pricingSkuColumn || null} options={pricingOptions} target="pricingSkuColumn" activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("pricingSkuColumn", column, headerText(pricingSheet, mapping.pricingHeaderRow, column ?? 0))} />
           <FieldSelect label="核价国家" value={mapping.pricingCountryColumn || null} options={pricingOptions} target="pricingCountryColumn" activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("pricingCountryColumn", column, headerText(pricingSheet, mapping.pricingHeaderRow, column ?? 0))} />
-          <FieldSelect label="核价物流" value={mapping.pricingShippingMethodColumn} options={pricingOptions} target="pricingShippingMethodColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("pricingShippingMethodColumn", column, headerText(pricingSheet, mapping.pricingHeaderRow, column ?? 0))} />
         </div>
         <div className="mapping-repeat-list">
           {mapping.quantityTierColumns.map((tier, index) => <div className="mapping-repeat-row is-tier" key={index}>

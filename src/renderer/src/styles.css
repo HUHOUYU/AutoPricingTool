@@ -4076,6 +4076,7 @@ html:not(.dark) .cyber-log-drawer {
 .excel-preview-header > span.is-selectable-column,
 .excel-preview-row > span.is-selectable-column { cursor: crosshair; }
 .excel-preview-row > span.is-header-cell { font-weight: 700; cursor: pointer; box-shadow: inset 0 1px color-mix(in srgb, var(--cyber-primary) 42%, transparent), inset 0 -1px color-mix(in srgb, var(--cyber-primary) 42%, transparent); }
+.excel-preview-row > span.is-header-cell.is-empty-header { color: var(--cyber-muted); font-weight: 600; font-style: italic; opacity: 0.85; }
 .excel-preview-row .excel-preview-row-number { cursor: pointer; }
 .excel-preview-row .excel-preview-row-number.is-matched-row:not(.is-header-row) { color: color-mix(in srgb, var(--success) 82%, var(--cyber-text)); background: #d8eee0; font-weight: 700; }
 .excel-preview-row.is-unmatched-target-row > span { box-shadow: inset 0 2px var(--cyber-amber), inset 0 -2px var(--cyber-amber); }

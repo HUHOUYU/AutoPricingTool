@@ -23,7 +23,6 @@ function createAnalysis(path: string): PriceAnalysisFile {
       qtyHeader: "Qty",
       mergedQtyHeader: "Merged Qty",
     }],
-    shippingMethodColumn: 7,
     singleShipmentColumn: 11,
     orderPriceColumn: 10,
     pricingSheet: "核价",
@@ -31,7 +30,6 @@ function createAnalysis(path: string): PriceAnalysisFile {
     pricingQuantityHeaderRow: null,
     pricingSkuColumn: 1,
     pricingCountryColumn: 2,
-    pricingShippingMethodColumn: null,
     quantityTierColumns: [{ quantity: 1, column: 3, header: "1" }],
   };
   return {
@@ -46,7 +44,6 @@ function createAnalysis(path: string): PriceAnalysisFile {
       countryEnglishColumn: 5,
       countryChineseColumn: 6,
       skuQtyPairs: mapping.skuQtyPairs,
-      shippingMethodColumn: 7,
       singleShipmentColumn: 11,
       priceColumn: 10,
       validOrderRows: 2,
@@ -59,7 +56,6 @@ function createAnalysis(path: string): PriceAnalysisFile {
       score: 90,
       skuColumn: 1,
       countryColumn: 2,
-      shippingMethodColumn: null,
       tierColumns: mapping.quantityTierColumns,
       validPriceRows: 2,
       usablePriceCells: 2,
@@ -652,8 +648,9 @@ describe("AutoPricingTool cyber workstation", () => {
       api.emit({ type: "price-file-result", path: "C:\\orders\\order.xlsx", status: "completed", totalRows: 14, matchedRows: 14, exceptionRows: 0 });
       api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ totalRows: 14, matchedRows: 14, exceptionRows: 0 }] });
     });
-    expect(screen.getByRole("progressbar", { name: "批次处理完成 100%" })).toHaveAttribute("aria-valuenow", "100");
-    expect(useUIStore.getState().activeTab).toBe("pending");
+    expect(screen.getByRole("progressbar", { name: "本批已完成 100%" })).toHaveAttribute("aria-valuenow", "100");
+    // 批次结束后自动切到有结果的 Tab（本例全部成功）
+    expect(useUIStore.getState().activeTab).toBe("success");
     expect(screen.getByText(/1\/1 个文件/)).toBeInTheDocument();
     expect(screen.queryByText(/1\/14 个文件/)).not.toBeInTheDocument();
   });
@@ -925,14 +922,30 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.pointerUp(window);
 
     expect(await screen.findByText("订单-数据")).toBeInTheDocument();
+    // 打开详情默认截断预览，不立刻 loadAll
+    expect(FakeExcelPreviewWorker.instances[0].request).toEqual(expect.objectContaining({
+      loadAll: false,
+    }));
     expect(FakeExcelPreviewWorker.instances[0].request?.candidates.map((candidate) => candidate.name)).toEqual(["订单", "核价", "报价二"]);
     expect(screen.getByText("订单 90.0 分")).toBeInTheDocument();
     expect(screen.getByText("核价 90.0 分")).toBeInTheDocument();
     expect(screen.getByText("核价 80.0 分")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加载全部数据" })).toHaveTextContent("加载全部");
     const unmatchedSwitch = screen.getByRole("switch", { name: "未匹配定位" });
     expect(unmatchedSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(unmatchedSwitch);
     expect(unmatchedSwitch).toHaveAttribute("aria-checked", "true");
+    // 开启未匹配定位时触发一次 loadAll（订单+核价完整数据）
+    await waitFor(() => expect(FakeExcelPreviewWorker.instances).toHaveLength(2));
+    expect(FakeExcelPreviewWorker.instances[1].request).toEqual(expect.objectContaining({
+      loadAll: true,
+      candidates: expect.arrayContaining([
+        expect.objectContaining({ name: "订单" }),
+        expect.objectContaining({ name: "核价" }),
+      ]),
+    }));
+    expect(FakeExcelPreviewWorker.instances[1].request?.candidates.map((candidate) => candidate.name)).not.toContain("报价二");
+    expect(await screen.findByText("已加载全部")).toBeInTheDocument();
     unmatchedSwitch.focus();
     fireEvent.keyDown(unmatchedSwitch, { key: "ArrowDown" });
     await waitFor(() => expect(dialog.querySelector(".excel-preview-row-number.is-unmatched-target")).toHaveTextContent("18"));
@@ -986,17 +999,17 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByText("1/1")).toBeInTheDocument();
     expect(dialog.querySelectorAll(".excel-preview-row.is-search-matched-row")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
-    fireEvent.click(screen.getByRole("button", { name: "加载全部数据" }));
-    await waitFor(() => expect(FakeExcelPreviewWorker.instances).toHaveLength(2));
-    expect(FakeExcelPreviewWorker.instances[1].request).toEqual(expect.objectContaining({
-      loadAll: true,
-      candidates: expect.arrayContaining([
-        expect.objectContaining({ name: "订单" }),
-        expect.objectContaining({ name: "核价" }),
-      ]),
-    }));
-    expect(FakeExcelPreviewWorker.instances[1].request?.candidates.map((candidate) => candidate.name)).not.toContain("报价二");
-    expect(await screen.findByText("已加载全部")).toBeInTheDocument();
+    // 已加载全部后按钮禁用，点击不重复触发
+    const loadAllButton = screen.getByRole("button", { name: "加载全部数据" });
+    expect(loadAllButton).toBeDisabled();
+    expect(loadAllButton).toHaveTextContent("已加载全部");
+    fireEvent.click(loadAllButton);
+    expect(FakeExcelPreviewWorker.instances).toHaveLength(2);
+    // 再次开启未匹配定位：已 loadAll 则不额外请求
+    fireEvent.click(screen.getByRole("switch", { name: "未匹配定位" }));
+    expect(screen.getByRole("switch", { name: "未匹配定位" })).toHaveAttribute("aria-checked", "true");
+    expect(FakeExcelPreviewWorker.instances).toHaveLength(2);
+    fireEvent.click(screen.getByRole("switch", { name: "未匹配定位" }));
     fireEvent.click(screen.getByRole("button", { name: "冻结 C 列" }));
     fireEvent.click(screen.getByRole("button", { name: "冻结 A 列" }));
     const previewColumnOrder = (): Array<string | null> => Array.from(document.querySelectorAll(".excel-preview-header > [data-column-label]")).map((element) => element.getAttribute("data-column-label"));
@@ -1174,9 +1187,7 @@ describe("AutoPricingTool cyber workstation", () => {
     dropFiles([new File(["xlsx"], "order.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
     expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
     const analysis = createAnalysis("C:\\orders\\order.xlsx");
-    analysis.suggestedMapping!.shippingMethodColumn = null;
-    analysis.orderSheetCandidates[0].shippingMethodColumn = null;
-    analysis.requiresConfirmation = true;
+        analysis.requiresConfirmation = true;
     analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
     await act(async () => {
       api.emit({ type: "price-analysis", file: analysis });

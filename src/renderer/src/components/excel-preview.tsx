@@ -93,12 +93,12 @@ function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetN
       || pair.mergedQtyColumn === column
     ))) return " is-sku-qty-column";
     if (mapping.orderPriceColumn === column) return " is-price-column";
-    if ([mapping.businessOrderNumberColumn, mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn, mapping.shippingMethodColumn, mapping.singleShipmentColumn].includes(column)) return " is-mapped-column";
+    if ([mapping.businessOrderNumberColumn, mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn, mapping.singleShipmentColumn].includes(column)) return " is-mapped-column";
   }
   if (sheetName === mapping.pricingSheet) {
     if (mapping.pricingSkuColumn === column) return " is-sku-column";
     if (mapping.quantityTierColumns.some((tier) => tier.column === column)) return " is-price-column";
-    if ([mapping.pricingCountryColumn, mapping.pricingShippingMethodColumn].includes(column)) return " is-mapped-column";
+    if ([mapping.pricingCountryColumn].includes(column)) return " is-mapped-column";
   }
   return "";
 }
@@ -244,6 +244,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const [unmatchedNavigationEnabled, setUnmatchedNavigationEnabled] = useState(false);
   const [activeUnmatchedRow, setActiveUnmatchedRow] = useState<number | null>(null);
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  // 默认预览截断；开启「未匹配定位」或手动点「加载全部」时再拉全量
   const [loadAll, setLoadAll] = useState(false);
   const [pendingOrderReturnRow, setPendingOrderReturnRow] = useState<number | null>(null);
   const [editingWritebackCell, setEditingWritebackCell] = useState<{
@@ -732,7 +733,12 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
           className={`excel-preview-unmatched-switch${unmatchedNavigationEnabled ? " is-enabled" : ""}`}
           disabled={activeSheetName !== mapping?.orderSheet || unmatchedOrderRows.length === 0}
           onClick={() => {
-            setUnmatchedNavigationEnabled((current) => !current);
+            setUnmatchedNavigationEnabled((current) => {
+              const enabling = !current;
+              // 开启未匹配定位时加载全部；已加载则不重复触发
+              if (enabling && !loadAll) setLoadAll(true);
+              return enabling;
+            });
             setActiveUnmatchedRow(null);
           }}
           onKeyDown={(event) => {
@@ -757,7 +763,10 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
             aria-label="加载全部数据"
             title="按文件路径重新读取当前订单 Sheet 和核价 Sheet 的全部数据"
             disabled={!activeSheet || loadAll || status === "loading"}
-            onClick={() => setLoadAll(true)}
+            onClick={() => {
+              // 已加载全部时不重复触发
+              if (!loadAll) setLoadAll(true);
+            }}
           >
             {status === "loading" && loadAll ? <LoaderCircle className="is-loading" /> : <ListRestart />}
             <span>{status === "loading" && loadAll ? "加载中" : loadAll ? "已加载全部" : "加载全部"}</span>
@@ -873,21 +882,23 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                 >{activeHeaderRow}</span>
                 {orderedColumnIndexes.map((columnIndex) => {
                   const cell = cellValue(frozenHeaderRow, columnIndex, activeHeaderRow ?? 0);
+                  const headerDisplay = cell.trim() ? cell : "空表头";
                   const absoluteColumn = activeSheet.startColumn + columnIndex + 1;
                   const derived = isWritebackColumn(columnIndex);
                   const mappedClass = derived ? "" : mappedColumnClass(mapping, activeSheet.name, absoluteColumn);
                   return <span
-                    className={`${derived ? "is-writeback-column" : mappedClass}${activeColumn === absoluteColumn ? " is-active-column" : ""} is-header-cell${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === frozenHeaderIndex && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
+                    className={`${derived ? "is-writeback-column" : mappedClass}${activeColumn === absoluteColumn ? " is-active-column" : ""} is-header-cell${cell.trim() ? "" : " is-empty-header"}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === frozenHeaderIndex && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
                     style={{ ...pinnedColumnStyle(columnIndex), ...(!derived ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
-                    title={cell}
+                    title={headerDisplay}
                     onMouseEnter={() => selectingColumn && !derived && setHoveredColumn(absoluteColumn)}
                     onClick={() => {
                       if (selectingColumn && !derived) {
-                        onColumnSelect?.(absoluteColumn, cell);
+                        // 映射侧用真实空串；展示文案仅 UI 用
+                        onColumnSelect?.(absoluteColumn, cell.trim());
                       }
                     }}
                     key={columnIndex}
-                  >{cell}</span>;
+                  >{headerDisplay}</span>;
                 })}
               </div> : null}
               <div className="excel-preview-rows" style={{ height: `${rowsHeight}px`, width: `${gridWidth}px` }}>
@@ -987,10 +998,11 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           && selectedCell?.sheetName === activeSheet.name
                           && selectedCell.row === absoluteRow
                           && selectedCell.column === absoluteColumn;
+                        const headerCellDisplay = isHeaderRow && !derived && !cell.trim() ? "空表头" : cell;
                         return <span
-                          className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedClass : duplicateMappedClass}${editableWritebackCell ? " is-editable-writeback" : ""}${editableSourceCell ? " is-editable-source" : ""}${isEditingCell ? " is-editing-cell" : ""}${isSelectedCell ? " is-selected-cell" : ""}${writebackValueClass}${differenceClass}${quantityMismatchClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
+                          className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedClass : duplicateMappedClass}${editableWritebackCell ? " is-editable-writeback" : ""}${editableSourceCell ? " is-editable-source" : ""}${isEditingCell ? " is-editing-cell" : ""}${isSelectedCell ? " is-selected-cell" : ""}${writebackValueClass}${differenceClass}${quantityMismatchClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${isHeaderRow && !derived && !cell.trim() ? " is-empty-header" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
                           style={{ ...pinnedColumnStyle(columnIndex), ...(!derived && isHeaderRow ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
-                          title={isEditingCell ? undefined : cell}
+                          title={isEditingCell ? undefined : (isHeaderRow && !derived ? headerCellDisplay : cell)}
                           onMouseEnter={() => selectingColumn && !derived && setHoveredColumn(absoluteColumn)}
                           onPointerDown={(event) => {
                             if (editableWritebackCell || editableSourceCell) {
@@ -1057,7 +1069,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                                 setEditingSourceCell(null);
                               }
                             }}
-                          /> : cell}</span>;
+                          /> : headerCellDisplay}</span>;
                       })}
                     </div>
                   );
