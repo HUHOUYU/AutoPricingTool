@@ -94,17 +94,6 @@ const QTY_ALIASES: &[&str] = &[
     "购买数量",
     "数量合计",
 ];
-const SHIPPING_ALIASES: &[&str] = &[
-    "物流方式",
-    "运输方式",
-    "配送方式",
-    "物流",
-    "shippingmethod",
-    "shipping method",
-    "shipping",
-    "transportation",
-    "transport",
-];
 const PRICE_ALIASES: &[&str] = &[
     "价格",
     "price",
@@ -141,7 +130,6 @@ pub(crate) struct OrderSheetCandidate {
     pub(crate) country_english_column: Option<usize>,
     pub(crate) country_chinese_column: Option<usize>,
     pub(crate) sku_qty_pairs: Vec<SkuQtyPair>,
-    pub(crate) shipping_method_column: Option<usize>,
     pub(crate) single_shipment_column: Option<usize>,
     pub(crate) price_column: Option<usize>,
     pub(crate) valid_order_rows: usize,
@@ -165,7 +153,6 @@ pub(crate) struct PricingSheetCandidate {
     pub(crate) quantity_header_row: Option<usize>,
     pub(crate) sku_column: Option<usize>,
     pub(crate) country_column: Option<usize>,
-    pub(crate) shipping_method_column: Option<usize>,
     pub(crate) tier_columns: Vec<PriceTierColumn>,
     pub(crate) valid_price_rows: usize,
     pub(crate) usable_price_cells: usize,
@@ -183,7 +170,6 @@ pub(crate) struct PriceCheckMapping {
     pub(crate) country_english_column: Option<usize>,
     pub(crate) country_chinese_column: Option<usize>,
     pub(crate) sku_qty_pairs: Vec<SkuQtyPair>,
-    pub(crate) shipping_method_column: Option<usize>,
     pub(crate) single_shipment_column: Option<usize>,
     pub(crate) order_price_column: Option<usize>,
     pub(crate) pricing_sheet: String,
@@ -191,7 +177,6 @@ pub(crate) struct PriceCheckMapping {
     pub(crate) pricing_quantity_header_row: Option<usize>,
     pub(crate) pricing_sku_column: usize,
     pub(crate) pricing_country_column: usize,
-    pub(crate) pricing_shipping_method_column: Option<usize>,
     pub(crate) quantity_tier_columns: Vec<PriceTierColumn>,
 }
 
@@ -259,7 +244,6 @@ pub(crate) struct PriceCheckRow {
     pub(crate) country_code: String,
     pub(crate) country_english_name: String,
     pub(crate) country_chinese_name: String,
-    pub(crate) shipping_method: String,
     pub(crate) original_sku: String,
     pub(crate) matched_sku: String,
     pub(crate) total_quantity: f64,
@@ -292,7 +276,6 @@ struct CountryInfo {
     code: String,
     english: String,
     chinese: String,
-    inferred_shipping: String,
     conflict: bool,
     reason: String,
 }
@@ -301,7 +284,6 @@ struct CountryInfo {
 struct OrderLine {
     business_order_number: String,
     country: CountryInfo,
-    shipping_method: String,
     single_shipment: bool,
     original_sku: String,
     matched_sku: String,
@@ -324,7 +306,6 @@ pub(crate) struct AggregatedOrderSku {
     pub(crate) country_code: String,
     pub(crate) country_english_name: String,
     pub(crate) country_chinese_name: String,
-    pub(crate) shipping_method: String,
     pub(crate) single_shipment: bool,
     pub(crate) original_sku: String,
     pub(crate) matched_sku: String,
@@ -699,7 +680,6 @@ fn validate_price_mapping(
         .unwrap_or_default();
     let mut order_mapped_columns = [
         mapping.business_order_number_column,
-        mapping.shipping_method_column,
         mapping.single_shipment_column,
         mapping.order_price_column,
     ]
@@ -734,9 +714,6 @@ fn validate_price_mapping(
         || mapping.pricing_sku_column > pricing_columns
         || mapping.pricing_country_column > pricing_columns
         || mapping
-            .pricing_shipping_method_column
-            .is_some_and(|column| column == 0 || column > pricing_columns)
-        || mapping
             .quantity_tier_columns
             .iter()
             .any(|tier| tier.column == 0 || tier.column > pricing_columns || tier.quantity < 0)
@@ -750,10 +727,16 @@ fn validate_price_mapping(
     }) {
         errors.push("原始数量、SKU 与合并数量列不能相同".to_string());
     }
+    // 允许中间夹其他列，但列顺序必须是：原始数量 → SKU → 合并数量
     if mapping.sku_qty_pairs.iter().any(|pair| {
-        pair.qty_column + 1 != pair.sku_column || pair.sku_column + 1 != pair.merged_qty_column
+        pair.qty_column == 0
+            || pair.sku_column == 0
+            || pair.merged_qty_column == 0
+            || !(pair.qty_column < pair.sku_column && pair.sku_column < pair.merged_qty_column)
     }) {
-        errors.push("SKU 组必须按“原始数量、SKU、合并数量”三列连续排列".to_string());
+        errors.push(
+            "SKU 组必须按“原始数量、SKU、合并数量”从左到右排列（可不连续）".to_string(),
+        );
     }
     let recognized_quantity_columns = configured_matching_columns(
         order_sheet,
@@ -761,11 +744,22 @@ fn validate_price_mapping(
         order_field_rule(config, "quantity"),
         QTY_ALIASES,
     );
+    // 识别到的数量别名列，或空表头列（允许人工把空表头列当数量列）均可
+    let is_acceptable_quantity_column = |column_1based: usize| -> bool {
+        let index = column_1based.saturating_sub(1);
+        if recognized_quantity_columns.contains(&index) {
+            return true;
+        }
+        // sheet_cell_text 参数为 1-based 行列
+        sheet_cell_text(order_sheet, mapping.order_header_row, column_1based)
+            .trim()
+            .is_empty()
+    };
     if mapping.sku_qty_pairs.iter().any(|pair| {
-        !recognized_quantity_columns.contains(&pair.qty_column.saturating_sub(1))
-            || !recognized_quantity_columns.contains(&pair.merged_qty_column.saturating_sub(1))
+        !is_acceptable_quantity_column(pair.qty_column)
+            || !is_acceptable_quantity_column(pair.merged_qty_column)
     }) {
-        errors.push("SKU 前后的原始数量列和合并数量列必须为有效数量列".to_string());
+        errors.push("原始数量列与合并数量列必须为有效数量列或空表头列".to_string());
     }
     let mut order_unique_columns = HashSet::new();
     if order_mapped_columns
@@ -776,11 +770,6 @@ fn validate_price_mapping(
     }
     let mut pricing_unique_columns =
         HashSet::from([mapping.pricing_sku_column, mapping.pricing_country_column]);
-    if let Some(column) = mapping.pricing_shipping_method_column
-        && !pricing_unique_columns.insert(column)
-    {
-        errors.push("核价字段映射中存在重复列".to_string());
-    }
     let mut tier_quantities = HashSet::new();
     if mapping.quantity_tier_columns.iter().any(|tier| {
         !pricing_unique_columns.insert(tier.column) || !tier_quantities.insert(tier.quantity)
@@ -830,7 +819,6 @@ fn evaluate_matches(index: &PriceIndex, lines: &[OrderLine]) -> (usize, Vec<usiz
         let lookup = index.lookup_with_single_shipment_preference(
             &line.country.code,
             &line.matched_sku,
-            &line.shipping_method,
             line.quantity.round() as i64,
             line.single_shipment,
         );
@@ -862,7 +850,6 @@ fn calculate_preview_writeback_rows(
         let lookup = index.lookup_with_single_shipment_preference(
             &item.country_code,
             &item.matched_sku,
-            &item.shipping_method,
             item.total_quantity.round() as i64,
             item.single_shipment,
         );
@@ -1379,7 +1366,6 @@ fn mapping_from_candidates(
         country_english_column: order.country_english_column,
         country_chinese_column: order.country_chinese_column,
         sku_qty_pairs: order.sku_qty_pairs.clone(),
-        shipping_method_column: order.shipping_method_column,
         single_shipment_column: order.single_shipment_column,
         order_price_column: order.price_column,
         pricing_sheet: pricing.sheet_name.clone(),
@@ -1387,7 +1373,6 @@ fn mapping_from_candidates(
         pricing_quantity_header_row: pricing.quantity_header_row,
         pricing_sku_column: pricing.sku_column.unwrap_or(1),
         pricing_country_column: pricing.country_column.unwrap_or(1),
-        pricing_shipping_method_column: pricing.shipping_method_column,
         quantity_tier_columns: pricing.tier_columns.clone(),
     }
 }
@@ -1774,17 +1759,6 @@ fn infer_order_candidate_with_config(
         let country_en = country_en.filter(|column| Some(*column) != country_code);
         let country_cn = country_cn
             .filter(|column| Some(*column) != country_code && Some(*column) != country_en);
-        let shipping = if config.pricing.match_by_shipping_method {
-            best_shipping_column(
-                sheet,
-                header_idx,
-                order_field_rule(config, "shipping_method"),
-                order_field_rule(config, "price"),
-                None,
-            )
-        } else {
-            None
-        };
         let single_shipment =
             configured_best_column(sheet, header_idx, None, SINGLE_SHIPMENT_FIELD_ALIASES);
         let price = configured_best_column(
@@ -1850,7 +1824,6 @@ fn infer_order_candidate_with_config(
             country_english_column: country_en.map(|column| column + 1),
             country_chinese_column: country_cn.map(|column| column + 1),
             sku_qty_pairs: pairs,
-            shipping_method_column: shipping.map(|column| column + 1),
             single_shipment_column: single_shipment.map(|column| column + 1),
             price_column: price.map(|column| column + 1),
             valid_order_rows: valid_rows,
@@ -1907,17 +1880,6 @@ fn infer_pricing_candidate_with_config(
             best_pricing_sku_column(sheet, header_idx, pricing_field_rule(config, "sku"));
         let country_column =
             best_pricing_country_column(sheet, header_idx, pricing_field_rule(config, "country"));
-        let shipping_column = if config.pricing.match_by_shipping_method {
-            best_shipping_column(
-                sheet,
-                header_idx,
-                pricing_field_rule(config, "shipping_method"),
-                pricing_field_rule(config, "fixed_price"),
-                pricing_field_rule(config, "fixed_price"),
-            )
-        } else {
-            None
-        };
         let tier_row = (header_idx..=header_idx.saturating_add(PRICE_TIER_LOOKAHEAD_ROWS))
             .filter(|row_idx| {
                 *row_idx < sheet.rows.len()
@@ -1928,7 +1890,6 @@ fn infer_pricing_candidate_with_config(
                     &sheet.rows[row_idx],
                     sku_column,
                     country_column,
-                    shipping_column,
                 );
                 (!tiers.is_empty()).then_some((row_idx, tiers))
             })
@@ -1937,7 +1898,7 @@ fn infer_pricing_candidate_with_config(
             sheet,
             header_idx,
             pricing_field_rule(config, "fixed_price"),
-            [sku_column, country_column, shipping_column]
+            [sku_column, country_column]
                 .into_iter()
                 .flatten()
                 .collect::<HashSet<_>>(),
@@ -1968,7 +1929,7 @@ fn infer_pricing_candidate_with_config(
         if valid_rows == 0 {
             continue;
         }
-        let excluded = [Some(sku_column), Some(country_column), shipping_column]
+        let excluded = [Some(sku_column), Some(country_column)]
             .into_iter()
             .flatten()
             .collect::<HashSet<_>>();
@@ -1999,7 +1960,6 @@ fn infer_pricing_candidate_with_config(
             quantity_header_row,
             sku_column: Some(sku_column + 1),
             country_column: Some(country_column + 1),
-            shipping_method_column: shipping_column.map(|column| column + 1),
             tier_columns: tiers,
             valid_price_rows: valid_rows,
             usable_price_cells: usable_cells,
@@ -2072,9 +2032,7 @@ fn infer_order_country_columns(
         });
         let is_chinese = samples.iter().any(|value| has_chinese(value));
         let is_english = samples.iter().any(|value| {
-            !has_chinese(value)
-                && value.len() > 2
-                && country_lookup(&split_country_shipping(value).0).is_some()
+            !has_chinese(value) && value.len() > 2 && country_lookup(value).is_some()
         });
         classified.push((column, is_code, is_english, is_chinese));
     }
@@ -2135,10 +2093,10 @@ fn best_pricing_country_column(
                     continue;
                 }
                 non_empty += 1;
-                let base = split_country_shipping(&value).0;
-                if country_lookup(&base).is_some() {
+                // 国家列整格识别，不做「国名-后缀」拆分
+                if country_lookup(&value).is_some() {
                     recognized += 1;
-                    let trimmed = base.trim();
+                    let trimmed = value.trim();
                     if trimmed.len() == 2
                         && trimmed
                             .chars()
@@ -2351,42 +2309,6 @@ fn configured_best_column(
     configured_matching_columns(sheet, header_idx, rule, fallback_aliases)
         .into_iter()
         .next()
-}
-
-fn best_shipping_column(
-    sheet: &SheetData,
-    header_idx: usize,
-    shipping_rule: Option<&FieldRule>,
-    price_rule: Option<&FieldRule>,
-    fixed_price_rule: Option<&FieldRule>,
-) -> Option<usize> {
-    sheet.rows[header_idx]
-        .iter()
-        .enumerate()
-        .filter_map(|(index, cell)| {
-            let normalized = normalize_header(&cell.text());
-            if normalized.contains("COUNTRY")
-                || normalized.contains("国家")
-                || configured_header_score(&normalized, price_rule, PRICE_ALIASES) > 0
-                || configured_header_score(&normalized, fixed_price_rule, FIXED_PRICE_ALIASES) > 0
-                || (normalized.starts_with("SHIPPING")
-                    && normalized != "SHIPPING"
-                    && !normalized.contains("METHOD"))
-            {
-                return None;
-            }
-            let score = configured_header_score(&normalized, shipping_rule, SHIPPING_ALIASES)
-                + field_sample_adjustment(
-                    sheet,
-                    header_idx,
-                    index,
-                    shipping_rule,
-                    ORDER_HEADER_SCAN_ROWS,
-                );
-            (score > 0).then_some((score, index))
-        })
-        .max_by_key(|(score, index)| (*score, std::cmp::Reverse(*index)))
-        .map(|(_, index)| index)
 }
 
 fn header_score(value: &str, aliases: &[&str]) -> i32 {
@@ -2653,9 +2575,8 @@ fn tier_columns(
     row: &[CellValue],
     sku_column: Option<usize>,
     country_column: Option<usize>,
-    shipping_column: Option<usize>,
 ) -> Vec<PriceTierColumn> {
-    let excluded = [sku_column, country_column, shipping_column]
+    let excluded = [sku_column, country_column]
         .into_iter()
         .flatten()
         .collect::<HashSet<_>>();
@@ -2791,13 +2712,6 @@ fn normalize_sku_and_multiplier(value: &str) -> (String, usize) {
     }
 }
 
-fn normalize_shipping(value: &str) -> String {
-    value
-        .trim()
-        .replace([' ', '\u{3000}', '\t', '\r', '\n'], "")
-        .to_ascii_lowercase()
-}
-
 fn country_token(value: &str) -> String {
     value
         .trim()
@@ -2823,41 +2737,23 @@ fn country_lookup(value: &str) -> Option<(&'static str, &'static str, &'static s
         })
 }
 
-fn split_country_shipping(value: &str) -> (String, String) {
-    let trimmed = value.trim();
-    if country_lookup(trimmed).is_some() {
-        return (trimmed.to_string(), String::new());
-    }
-    for separator in ['-', '—', '_'] {
-        if let Some((base, suffix)) = trimmed.rsplit_once(separator)
-            && country_lookup(base).is_some()
-        {
-            return (base.trim().to_string(), suffix.trim().to_string());
-        }
-    }
-    (trimmed.to_string(), String::new())
-}
-
 fn normalize_country_fields(code: &str, english: &str, chinese: &str) -> CountryInfo {
+    // 国家字段按整格识别，不再从「UNITED STATES-hold」一类字符串拆物流后缀
     let inputs = [code, english, chinese];
     let mut resolved = Vec::new();
-    let mut inferred_shipping = String::new();
     for input in inputs {
-        if input.trim().is_empty() {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
             continue;
         }
-        let (base, shipping) = split_country_shipping(input);
-        if inferred_shipping.is_empty() && !shipping.is_empty() {
-            inferred_shipping = normalize_shipping(&shipping);
-        }
-        if let Some(item) = country_lookup(&base) {
+        if let Some(item) = country_lookup(trimmed) {
             resolved.push((item.0.to_string(), item.1.to_string(), item.2.to_string()));
-        } else if base.len() == 2
-            && base
+        } else if trimmed.len() == 2
+            && trimmed
                 .chars()
                 .all(|character| character.is_ascii_alphabetic())
         {
-            resolved.push((base.to_ascii_uppercase(), String::new(), String::new()));
+            resolved.push((trimmed.to_ascii_uppercase(), String::new(), String::new()));
         }
     }
     let codes = resolved
@@ -2872,7 +2768,6 @@ fn normalize_country_fields(code: &str, english: &str, chinese: &str) -> Country
                 .unwrap_or_default(),
             english: english.trim().to_string(),
             chinese: chinese.trim().to_string(),
-            inferred_shipping,
             conflict: true,
             reason: format!("国家三要素冲突: code={code}, en={english}, cn={chinese}"),
         };
@@ -2891,7 +2786,6 @@ fn normalize_country_fields(code: &str, english: &str, chinese: &str) -> Country
         } else {
             resolved_cn
         },
-        inferred_shipping,
         conflict: false,
         reason: if resolved_code_empty {
             "无法识别国家".to_string()
@@ -2976,16 +2870,6 @@ fn read_order_lines(
         let chinese = cell_text(row, mapping.country_chinese_column);
         let mut country =
             normalize_order_country_fields(&code, &english, &chinese, &config.pricing);
-        let shipping = if config.pricing.match_by_shipping_method {
-            let shipping_from_column = cell_text(row, mapping.shipping_method_column);
-            if shipping_from_column.is_empty() {
-                country.inferred_shipping.clone()
-            } else {
-                normalize_shipping(&shipping_from_column)
-            }
-        } else {
-            String::new()
-        };
         let single_shipment_value = mapping
             .single_shipment_column
             .map(|column| normalize_single_shipment_value(&cell_text(row, Some(column))))
@@ -3041,7 +2925,6 @@ fn read_order_lines(
             lines.push(OrderLine {
                 business_order_number: business.clone(),
                 country: country.clone(),
-                shipping_method: shipping.clone(),
                 single_shipment,
                 original_sku: raw_sku,
                 matched_sku,
@@ -3118,7 +3001,6 @@ fn build_price_index(
             row,
             sheet,
             mapping,
-            pricing_rules.match_by_shipping_method,
         );
     }
     if !single_shipment_index.entries.is_empty() {
@@ -3132,28 +3014,17 @@ fn insert_price_row(
     row: &[CellValue],
     sheet: &SheetData,
     mapping: &PriceCheckMapping,
-    match_by_shipping_method: bool,
 ) {
     let raw_sku = cell_text(row, Some(mapping.pricing_sku_column));
     let raw_country = cell_text(row, Some(mapping.pricing_country_column));
     if raw_sku.is_empty() || raw_country.is_empty() {
         return;
     }
-    let (country_base, country_shipping) = split_country_shipping(&raw_country);
-    let country = normalize_country_fields(&country_base, "", "");
+    // 国家列整格识别（如 UNITED STATES-hold 不会被拆成 US+hold）
+    let country = normalize_country_fields(&raw_country, "", "");
     if country.code.is_empty() {
         return;
     }
-    let shipping = if match_by_shipping_method {
-        let shipping_column = cell_text(row, mapping.pricing_shipping_method_column);
-        if shipping_column.is_empty() {
-            normalize_shipping(&country_shipping)
-        } else {
-            normalize_shipping(&shipping_column)
-        }
-    } else {
-        String::new()
-    };
     let sku = normalize_sku(&raw_sku);
     for tier in &mapping.quantity_tier_columns {
         let entry = PriceEntry {
@@ -3164,10 +3035,10 @@ fn insert_price_row(
                 .unwrap_or_default(),
             sheet_name: sheet.name.clone(),
         };
-        let key = full_key(&country.code, &sku, &shipping, tier.quantity);
+        let key = full_key(&country.code, &sku, tier.quantity);
         index
             .quantity_keys
-            .insert(prefix_key(&country.code, &sku, &shipping));
+            .insert(prefix_key(&country.code, &sku));
         index.entries.entry(key).or_default().push(entry);
     }
 }
@@ -3177,11 +3048,10 @@ fn aggregate_lines(lines: &[OrderLine]) -> Vec<AggregatedOrderSku> {
     let mut positions: HashMap<String, usize> = HashMap::new();
     for line in lines {
         let key = format!(
-            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}",
             line.business_order_number,
             line.country.code,
             line.matched_sku,
-            line.shipping_method,
             line.single_shipment
         );
         if let Some(position) = positions.get(&key).copied() {
@@ -3217,7 +3087,6 @@ fn aggregate_lines(lines: &[OrderLine]) -> Vec<AggregatedOrderSku> {
                 country_code: line.country.code.clone(),
                 country_english_name: line.country.english.clone(),
                 country_chinese_name: line.country.chinese.clone(),
-                shipping_method: line.shipping_method.clone(),
                 single_shipment: line.single_shipment,
                 original_sku: line.original_sku.clone(),
                 matched_sku: line.matched_sku.clone(),
@@ -3383,7 +3252,6 @@ fn process_price_file(
         let lookup = index.lookup_with_single_shipment_preference(
             &item.country_code,
             &item.matched_sku,
-            &item.shipping_method,
             item.total_quantity.round() as i64,
             item.single_shipment,
         );
@@ -3410,7 +3278,6 @@ fn process_price_file(
             country_code: item.country_code.clone(),
             country_english_name: item.country_english_name.clone(),
             country_chinese_name: item.country_chinese_name.clone(),
-            shipping_method: item.shipping_method.clone(),
             original_sku: item.original_sku.clone(),
             matched_sku: lookup.matched_sku.clone(),
             total_quantity: item.total_quantity,
@@ -3528,20 +3395,19 @@ impl PriceIndex {
         &self,
         country: &str,
         sku: &str,
-        shipping: &str,
         quantity: i64,
         prefer_single_shipment: bool,
     ) -> Lookup {
         if prefer_single_shipment && let Some(single_shipment) = &self.single_shipment {
-            let lookup = single_shipment.lookup(country, sku, shipping, quantity);
+            let lookup = single_shipment.lookup(country, sku, quantity);
             if lookup.status != "SKU或国家无法匹配" {
                 return lookup;
             }
         }
-        self.lookup(country, sku, shipping, quantity)
+        self.lookup(country, sku, quantity)
     }
 
-    fn lookup(&self, country: &str, sku: &str, shipping: &str, quantity: i64) -> Lookup {
+    fn lookup(&self, country: &str, sku: &str, quantity: i64) -> Lookup {
         if country.is_empty() || sku.is_empty() {
             return Lookup {
                 status: "SKU或国家缺失",
@@ -3551,11 +3417,10 @@ impl PriceIndex {
                 reason: "国家或 SKU 无法标准化".to_string(),
             };
         }
-        let shipping = normalize_shipping(shipping);
         let saw_quantity_key = self
             .quantity_keys
-            .contains(&prefix_key(country, sku, &shipping));
-        let key = full_key(country, sku, &shipping, quantity);
+            .contains(&prefix_key(country, sku));
+        let key = full_key(country, sku, quantity);
         if let Some(entries) = self.entries.get(&key) {
             if entries.len() != 1 {
                 let entry = &entries[0];
@@ -3564,7 +3429,7 @@ impl PriceIndex {
                     price: None,
                     matched_sku: sku.to_string(),
                     source_sheet: entry.sheet_name.clone(),
-                    reason: "相同国家、SKU、数量和物流方式对应多个价格，未静默选择".to_string(),
+                    reason: "相同国家、SKU、数量对应多个价格，未静默选择".to_string(),
                 };
             }
             let entry = &entries[0];
@@ -3611,23 +3476,12 @@ fn cell_text(row: &[CellValue], column: Option<usize>) -> String {
         .unwrap_or_default()
 }
 
-fn prefix_key(country: &str, sku: &str, shipping: &str) -> String {
-    format!(
-        "{}\u{1f}{}\u{1f}{}",
-        country,
-        sku,
-        normalize_shipping(shipping)
-    )
+fn prefix_key(country: &str, sku: &str) -> String {
+    format!("{}\u{1f}{}", country, sku)
 }
 
-fn full_key(country: &str, sku: &str, shipping: &str, quantity: i64) -> String {
-    format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
-        country,
-        sku,
-        normalize_shipping(shipping),
-        quantity
-    )
+fn full_key(country: &str, sku: &str, quantity: i64) -> String {
+    format!("{}\u{1f}{}\u{1f}{}", country, sku, quantity)
 }
 
 fn output_path_for(input_path: &Path, output_dir: &Path) -> PathBuf {
@@ -4427,14 +4281,15 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         };
 
         let index = build_price_index(&sheet, &mapping, &PricingRules::default());
-        let lookup = index.lookup("US", "CORDLESSSNOWBLOWER", "", 1);
+        let lookup = index.lookup("US", "CORDLESSSNOWBLOWER", 1);
         assert_eq!(lookup.status, "SKU或国家无法匹配");
-        assert_eq!(index.lookup("US", "QY2600223", "", 1).price, Some(112.0));
+        assert_eq!(index.lookup("US", "QY2600223", 1).price, Some(112.0));
     }
 
     #[test]
-    fn country_shipping_suffix_requires_an_exact_match() {
-        let sheet = SheetData {
+    fn country_column_matches_whole_cell_without_suffix_split() {
+        // 国家列整格匹配：UNITED STATES-hold 不是「美国+物流 hold」，不能识别为 US
+        let hold_only = SheetData {
             name: "price".to_string(),
             rows: vec![
                 vec![
@@ -4460,13 +4315,41 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             }],
             ..PriceCheckMapping::default()
         };
-
-        let index = build_price_index(&sheet, &mapping, &PricingRules::default());
+        let index_hold = build_price_index(&hold_only, &mapping, &PricingRules::default());
         assert_eq!(
-            index.lookup("US", "ABC123", "", 1).status,
-            "SKU或国家无法匹配"
+            index_hold.lookup("US", "ABC123", 1).status,
+            "SKU或国家无法匹配",
+            "hold 国名整格不可拆成 US"
         );
-        assert_eq!(index.lookup("US", "ABC123", "hold", 1).price, Some(9.0));
+
+
+        // 正式英文国名整格可识别为 US，与订单二字码匹配
+        let formal = SheetData {
+            name: "price".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ABC123"),
+                    CellValue::string("UNITED STATES"),
+                    CellValue::string("8.79"),
+                ],
+                vec![
+                    CellValue::string("ABC123"),
+                    CellValue::string("UNITED STATES-hold"),
+                    CellValue::string("9"),
+                ],
+            ],
+        };
+        let index_formal = build_price_index(&formal, &mapping, &PricingRules::default());
+        assert_eq!(
+            index_formal.lookup("US", "ABC123", 1).price,
+            Some(8.79),
+            "仅正式 UNITED STATES 行应进索引并命中"
+        );
     }
 
     #[test]
@@ -4502,7 +4385,6 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         let line = |quantity: f64, source_row: usize| OrderLine {
             business_order_number: "ORDER-1".to_string(),
             country: country.clone(),
-            shipping_method: String::new(),
             single_shipment: false,
             original_sku: "ABC123-RED".to_string(),
             matched_sku: "ABC123-RED".to_string(),
@@ -5003,7 +4885,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         let lines = read_order_lines(&order_sheet, &mapping, &Config::default()).0;
         let aggregated = aggregate_lines(&lines);
         let index = build_price_index(&pricing_sheet, &mapping, &PricingRules::default());
-        let lookup = index.lookup("US", "SKU-A", "", 3);
+        let lookup = index.lookup("US", "SKU-A", 3);
         let mut candidates = HashMap::new();
         record_matched_candidates(
             &mut candidates,
@@ -5070,9 +4952,9 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             ..PriceCheckMapping::default()
         };
         let index = build_price_index(&sheet, &mapping, &PricingRules::default());
-        assert_eq!(index.lookup("US", "ABC123", "", 0).status, "matched");
-        assert_eq!(index.lookup("US", "ABC123", "", 0).price, Some(0.0));
-        assert_eq!(index.lookup("US", "ABC123", "", 2).status, "价格不可用");
+        assert_eq!(index.lookup("US", "ABC123", 0).status, "matched");
+        assert_eq!(index.lookup("US", "ABC123", 0).price, Some(0.0));
+        assert_eq!(index.lookup("US", "ABC123", 2).status, "价格不可用");
     }
 
     #[test]
@@ -5110,7 +4992,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             ..PriceCheckMapping::default()
         };
         let index = build_price_index(&sheet, &mapping, &PricingRules::default());
-        assert_eq!(index.lookup("US", "ABC123", "", 1).status, "核价键重复");
+        assert_eq!(index.lookup("US", "ABC123", 1).status, "核价键重复");
     }
 
     #[test]
@@ -5164,16 +5046,16 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         };
         let index = build_price_index(&sheet, &mapping, &PricingRules::default());
 
-        assert_eq!(index.lookup("US", "ABC123", "", 1).price, Some(8.0));
+        assert_eq!(index.lookup("US", "ABC123", 1).price, Some(8.0));
         assert_eq!(
             index
-                .lookup_with_single_shipment_preference("US", "ABC123", "", 1, true)
+                .lookup_with_single_shipment_preference("US", "ABC123", 1, true)
                 .price,
             Some(11.0)
         );
         assert_eq!(
             index
-                .lookup_with_single_shipment_preference("US", "DEF456", "", 1, true)
+                .lookup_with_single_shipment_preference("US", "DEF456", 1, true)
                 .price,
             Some(6.0)
         );
@@ -5226,8 +5108,8 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         let index = build_price_index(&sheet, &mapping, &PricingRules::default());
 
         assert!(index.single_shipment.is_none());
-        assert_eq!(index.lookup("US", "ABC123", "", 1).price, Some(8.0));
-        assert_eq!(index.lookup("US", "DEF456", "", 1).price, Some(6.0));
+        assert_eq!(index.lookup("US", "ABC123", 1).price, Some(8.0));
+        assert_eq!(index.lookup("US", "DEF456", 1).price, Some(6.0));
     }
 
     #[test]
@@ -5276,8 +5158,8 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         let index = build_price_index(&sheet, &mapping, &pricing_rules);
 
         assert!(index.single_shipment.is_none());
-        assert_eq!(index.lookup("US", "ABC123", "", 1).price, Some(8.0));
-        assert_eq!(index.lookup("US", "DEF456", "", 1).price, Some(6.0));
+        assert_eq!(index.lookup("US", "ABC123", 1).price, Some(8.0));
+        assert_eq!(index.lookup("US", "DEF456", 1).price, Some(6.0));
     }
 
     #[test]
@@ -5507,73 +5389,6 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             }],
             ..PriceCheckMapping::default()
         }
-    }
-
-    #[test]
-    fn match_by_shipping_method_defaults_to_false_and_ignores_shipping_keys() {
-        assert!(!Config::default().pricing.match_by_shipping_method);
-
-        let order_sheet = SheetData {
-            name: "订单".to_string(),
-            rows: vec![
-                vec![
-                    CellValue::string("订单号"),
-                    CellValue::string("国家"),
-                    CellValue::string("数量"),
-                    CellValue::string("SKU"),
-                    CellValue::string("合并数量"),
-                    CellValue::string("物流"),
-                ],
-                vec![
-                    CellValue::string("O-1"),
-                    CellValue::string("US"),
-                    CellValue::string("1"),
-                    CellValue::string("SKU-A"),
-                    CellValue::string("1"),
-                    CellValue::string(""),
-                ],
-            ],
-        };
-        let pricing_sheet = SheetData {
-            name: "核价".to_string(),
-            rows: vec![
-                vec![
-                    CellValue::string("SKU"),
-                    CellValue::string("国家"),
-                    CellValue::string("1"),
-                    CellValue::string("物流"),
-                ],
-                vec![
-                    CellValue::string("SKU-A"),
-                    CellValue::string("US"),
-                    CellValue::string("9.5"),
-                    CellValue::string("4PX/express"),
-                ],
-            ],
-        };
-        let mut mapping = complete_mapping();
-        mapping.order_sheet = order_sheet.name.clone();
-        mapping.pricing_sheet = pricing_sheet.name.clone();
-        mapping.shipping_method_column = Some(6);
-        mapping.pricing_shipping_method_column = Some(4);
-        mapping.quantity_tier_columns = vec![PriceTierColumn {
-            quantity: 1,
-            column: 3,
-            header: "1".to_string(),
-        }];
-
-        let disabled = Config::default();
-        let index_off = build_price_index(&pricing_sheet, &mapping, &disabled.pricing);
-        let lines_off = read_order_lines(&order_sheet, &mapping, &disabled).0;
-        let (matched_off, _) = evaluate_matches(&index_off, &lines_off);
-        assert_eq!(matched_off, 1, "默认不按物流匹配时应命中核价");
-
-        let mut enabled = Config::default();
-        enabled.pricing.match_by_shipping_method = true;
-        let index_on = build_price_index(&pricing_sheet, &mapping, &enabled.pricing);
-        let lines_on = read_order_lines(&order_sheet, &mapping, &enabled).0;
-        let (matched_on, _) = evaluate_matches(&index_on, &lines_on);
-        assert_eq!(matched_on, 0, "启用物流匹配且订单物流为空时不应命中");
     }
 
     fn decision(rows: usize, coverage: f64, ambiguous: bool) -> AutomationDecision {
@@ -5857,13 +5672,31 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 quantity: 1,
             }]
         );
+        // 顺序错误：SKU 在原始数量左侧
         mapping.sku_qty_pairs[0].qty_column = 8;
+        mapping.sku_qty_pairs[0].sku_column = 7;
+        mapping.sku_qty_pairs[0].merged_qty_column = 9;
         let errors = validate_price_mapping(&path, &mapping, &[], &Config::default())
-            .expect_err("following quantity must be rejected");
+            .expect_err("wrong column order must be rejected");
         assert!(
-            errors
-                .iter()
-                .any(|error| error == "SKU 组必须按“原始数量、SKU、合并数量”三列连续排列")
+            errors.iter().any(|error| {
+                error == "SKU 组必须按“原始数量、SKU、合并数量”从左到右排列（可不连续）"
+            }),
+            "errors: {errors:?}"
+        );
+        // 可不连续：原始数量(C) / SKU(G) / 合并数量(H)，中间夹其他列，顺序正确
+        mapping.sku_qty_pairs[0].qty_column = 3;
+        mapping.sku_qty_pairs[0].sku_column = 7;
+        mapping.sku_qty_pairs[0].merged_qty_column = 8;
+        let non_contiguous = validate_price_mapping(&path, &mapping, &[], &Config::default())
+            .expect("non-contiguous ordered trio should be accepted");
+        assert_eq!(
+            (
+                non_contiguous.evaluated_rows,
+                non_contiguous.matched_rows,
+                non_contiguous.coverage
+            ),
+            (1, 1, 1.0)
         );
         std::fs::remove_file(path)?;
         Ok(())

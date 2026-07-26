@@ -1,8 +1,8 @@
 {
   "runtime": {
-    "recent_input_dir": "",
-    "recent_output_dir": "",
-    "recent_config_path": "",
+    "recent_input_dir": "C:\\Users\\Administrator\\Desktop\\要处理的文件",
+    "recent_output_dir": "C:\\Users\\Administrator\\Desktop\\输出目录",
+    "recent_config_path": "C:\\Users\\Administrator\\Desktop\\AutoPricingTool\\config\\extract_rules.json",
     "archive_standard_files": false,
     "auto_reveal_manual_result": false
   },
@@ -44,7 +44,6 @@
       "english",
       "chinese"
     ],
-    "match_by_shipping_method": false,
     "single_shipment_price_marker_aliases": [
       "单独发货价格",
       "单独发货价",
@@ -162,22 +161,6 @@
           "^\\d+(?:\\.0+)?$"
         ]
       },
-      "shipping_method": {
-        "header_aliases": [
-          "Shipping method",
-          "物流方式",
-          "运输方式",
-          "配送方式",
-          "物流",
-          "Shipping",
-          "Transportation"
-        ],
-        "negative_headers": [
-          "Shipping Country",
-          "Product shipping VAT tax",
-          "TAX"
-        ]
-      },
       "price": {
         "header_aliases": [
           "TOTAL Price",
@@ -211,19 +194,6 @@
         ],
         "value_patterns": [
           "(?i)^(?:[a-z]{2}|[a-z][a-z .'-]{2,}|.*[\\u4e00-\\u9fff].*)$"
-        ]
-      },
-      "shipping_method": {
-        "header_aliases": [
-          "Shipping method",
-          "物流方式",
-          "运输方式",
-          "配送方式",
-          "Shipping"
-        ],
-        "negative_headers": [
-          "Shipping Country",
-          "Product shipping VAT tax"
         ]
       },
       "fixed_price": {

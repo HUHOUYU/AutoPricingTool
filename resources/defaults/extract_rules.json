@@ -48,7 +48,6 @@
       "english",
       "chinese"
     ],
-    "match_by_shipping_method": false,
     "single_shipment_price_marker_aliases": [
       "单独发货价格",
       "单独发货价",
@@ -179,21 +178,6 @@
           "^\\d+(?:\\.0+)?$"
         ]
       },
-      "shipping_method": {
-        "header_aliases": [
-          "Shipping method",
-          "物流方式",
-          "运输方式",
-          "配送方式",
-          "物流",
-          "Shipping",
-          "Transportation"
-        ],
-        "negative_headers": [
-          "Shipping Country",
-          "Product shipping VAT tax"
-        ]
-      },
       "price": {
         "header_aliases": [
           "TOTAL Price",
@@ -237,21 +221,6 @@
         ],
         "value_patterns": [
           "(?i)^(?:[a-z]{2}|[a-z][a-z .'-]{2,}|.*[\\u4e00-\\u9fff].*)$"
-        ]
-      },
-      "shipping_method": {
-        "header_aliases": [
-          "Shipping method",
-          "物流方式",
-          "运输方式",
-          "配送方式",
-          "物流",
-          "Shipping",
-          "Transportation"
-        ],
-        "negative_headers": [
-          "Shipping Country",
-          "Product shipping VAT tax"
         ]
       },
       "fixed_price": {

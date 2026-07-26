@@ -442,10 +442,6 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
       });
     }
   }
-  if (pricing?.match_by_shipping_method !== undefined && typeof pricing.match_by_shipping_method !== "boolean") {
-    issues.push({ path: "pricing.match_by_shipping_method", message: "必须是布尔值" });
-  }
-
   const runtime = config.runtime as Record<string, unknown> | undefined;
   if (runtime) {
     for (const key of ["recent_input_dir", "recent_output_dir", "recent_config_path"] as const) {
