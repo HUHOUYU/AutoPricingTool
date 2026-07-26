@@ -59,6 +59,7 @@ import { DashboardPage } from "@/components/dashboard-page";
 import { TemplateManagementPage } from "@/components/template-management-page";
 import { ExcelPreview, type ExcelPreviewCandidate } from "@/components/excel-preview";
 import { MappingEditor, type MappingFieldTarget, type MappingValidationState } from "@/components/mapping-editor";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useUIStore, type FileTab, type WorkbenchPage } from "@/stores/ui-store";
 import type { ExcelPreviewWorkbook } from "@/lib/excel-preview";
@@ -308,6 +309,15 @@ function tabForStatus(status: FileStatus): FileTab {
   return "confirm";
 }
 
+/** 批处理结束后优先落到有结果的 Tab */
+function pickBestResultTab(counts: Record<FileTab, number>): FileTab | null {
+  if (counts.confirm > 0) return "confirm";
+  if (counts.error > 0) return "error";
+  if (counts.success > 0) return "success";
+  if (counts.pending > 0) return "pending";
+  return null;
+}
+
 function columnLabel(value: number | null | undefined): string {
   return value ? "第 " + value + " 列" : "未识别";
 }
@@ -517,6 +527,7 @@ export function App(): React.JSX.Element {
   const [detailSidebarWidth, setDetailSidebarWidth] = useState(DETAIL_SIDEBAR_DEFAULT_WIDTH);
   const [detailDrawerViewportWidth, setDetailDrawerViewportWidth] = useState(() => window.innerWidth);
   const [analysisCompletedToken, setAnalysisCompletedToken] = useState(0);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const detailDrawerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const detailSidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const detailDrawerCustomWidthRef = useRef(false);
@@ -528,6 +539,8 @@ export function App(): React.JSX.Element {
   const confirmedPathsRef = useRef<Set<string>>(new Set());
   const resultRevealHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRunRequestedRef = useRef(false);
+  const userTabLockedRef = useRef(false);
+  const batchTaskWasActiveRef = useRef(false);
   const mappingValidationVersionsRef = useRef<Record<string, number>>({});
   const mappingValidationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mappingValidationInFlightRef = useRef(false);
@@ -1327,11 +1340,18 @@ export function App(): React.JSX.Element {
     activeMappingValidationRef.current = null;
     if (mappingValidationTimerRef.current) clearTimeout(mappingValidationTimerRef.current);
     confirmedPathsRef.current = new Set();
+    userTabLockedRef.current = false;
+    batchTaskWasActiveRef.current = false;
+    setResetConfirmOpen(false);
     setInputDirectorySelected(false);
     setActiveTab("pending");
     setProgress({ current: 0, total: 0, phase: "", path: "" });
     setPageIndex(0);
     setLogs([]);
+  };
+
+  const requestResetTask = (): void => {
+    setResetConfirmOpen(true);
   };
 
   const removeFile = (path: string): void => {
@@ -1688,11 +1708,15 @@ export function App(): React.JSX.Element {
       ? "正在分析文件"
       : isRunning
         ? "正在核价"
-        : Object.keys(results).length > 0
-          ? "批次处理完成"
-          : Object.keys(analyses).length > 0
-            ? "分析已完成"
-            : "批次已停止";
+        : tabCounts.confirm > 0
+          ? `分析完成 · ${tabCounts.confirm} 个文件待确认`
+          : tabCounts.error > 0
+            ? `分析完成 · ${tabCounts.error} 个异常`
+            : tabCounts.success > 0
+              ? "本批已完成"
+              : Object.keys(analyses).length > 0
+                ? "分析已完成"
+                : "批次已停止";
   const detailAnalysis = detailPath ? analyses[detailPath] : undefined;
   const detailResult = detailPath ? results[detailPath] : undefined;
   const detailMapping = detailPath ? mappings[detailPath] ?? detailAnalysis?.suggestedMapping ?? null : null;
@@ -1850,6 +1874,92 @@ export function App(): React.JSX.Element {
     setDetailPath(path);
   };
 
+  // 批次从运行中结束时：自动切到有结果的 Tab，单文件待确认则打开详情
+  useEffect(() => {
+    if (isTaskActive) {
+      batchTaskWasActiveRef.current = true;
+      return;
+    }
+    if (!batchTaskWasActiveRef.current || !batchStarted) return;
+    batchTaskWasActiveRef.current = false;
+    if (userTabLockedRef.current) return;
+
+    const nextTab = pickBestResultTab(tabCounts);
+    if (nextTab) setActiveTab(nextTab);
+
+    if (tabCounts.confirm === 1) {
+      const confirmPath = files.find((path) => tabForStatus(fileStatusByPath[path]) === "confirm");
+      if (confirmPath) openDetailDrawer(confirmPath);
+    }
+  }, [batchStarted, fileStatusByPath, files, isTaskActive, setActiveTab, tabCounts]);
+
+  const batchNextAction = useMemo(() => {
+    if (isTaskActive || !batchStarted) return null;
+    if (tabCounts.confirm > 0) {
+      const confirmPaths = files.filter((path) => tabForStatus(fileStatusByPath[path]) === "confirm");
+      return {
+        label: confirmPaths.length === 1 ? "查看详情" : "去确认",
+        className: "cyber-action is-start is-batch-next",
+        onClick: () => {
+          userTabLockedRef.current = true;
+          setActiveTab("confirm");
+          if (confirmPaths.length === 1) openDetailDrawer(confirmPaths[0]!);
+        },
+      };
+    }
+    if (tabCounts.error > 0) {
+      return {
+        label: "查看异常",
+        className: "cyber-action is-start is-batch-next",
+        onClick: () => {
+          userTabLockedRef.current = true;
+          setActiveTab("error");
+        },
+      };
+    }
+    if (tabCounts.success > 0) {
+      return {
+        label: "查看完成",
+        className: "cyber-action is-start is-batch-next",
+        onClick: () => {
+          userTabLockedRef.current = true;
+          setActiveTab("success");
+        },
+      };
+    }
+    return null;
+  }, [batchStarted, fileStatusByPath, files, isTaskActive, setActiveTab, tabCounts]);
+
+  const listEmptyState = useMemo(() => {
+    if (files.length === 0) {
+      return {
+        title: "暂无文件",
+        detail: "导入后将在这里显示",
+        action: null as null | { label: string; onClick: () => void },
+      };
+    }
+    const otherTab = fileTabs.find((tab) => tab.key !== activeTab && tabCounts[tab.key] > 0);
+    if (otherTab) {
+      return {
+        title: "本状态暂无文件",
+        detail: `${otherTab.label}有 ${tabCounts[otherTab.key]} 个文件`,
+        action: {
+          label: `查看${otherTab.label} (${tabCounts[otherTab.key]})`,
+          onClick: () => {
+            userTabLockedRef.current = true;
+            setActiveTab(otherTab.key);
+          },
+        },
+      };
+    }
+    const currentLabel = fileTabs.find((tab) => tab.key === activeTab)?.label ?? "当前状态";
+    return {
+      title: `${currentLabel}暂无文件`,
+      detail: "可切换其他状态查看，或重置本批后重新导入",
+      action: null,
+    };
+  }, [activeTab, files.length, setActiveTab, tabCounts]);
+
   const startDetailSidebarResize = (event: React.PointerEvent<HTMLDivElement>): void => {
     event.preventDefault();
     detailSidebarResizeRef.current = { startX: event.clientX, startWidth: detailSidebarWidth };
@@ -1904,12 +2014,17 @@ export function App(): React.JSX.Element {
     await api.stopProcessing();
   };
 
-  const renderTaskActions = (className: string, showReset = false): React.JSX.Element => (
+  const renderTaskActions = (className: string, showReset = false, showNext = false): React.JSX.Element => (
     <div className={className} aria-label="快捷操作">
-      {!batchStarted ? <SidebarTooltip label="开始处理" enabled={sidebarCollapsed}><button type="button" aria-label="开始处理" className="cyber-action is-start" onClick={() => void startCurrentTask()} disabled={actionFiles.length === 0 || isTaskActive}><Play /><strong>开始处理</strong></button></SidebarTooltip> : null}
+      {!batchStarted ? <SidebarTooltip label="开始处理" enabled={sidebarCollapsed}><button type="button" aria-label="开始处理" className="cyber-action is-start" onClick={() => { userTabLockedRef.current = false; void startCurrentTask(); }} disabled={actionFiles.length === 0 || isTaskActive}><Play /><strong>开始处理</strong></button></SidebarTooltip> : null}
       {isTaskActive ? <SidebarTooltip label={isPaused ? "继续任务" : "暂停任务"} enabled={sidebarCollapsed}><button type="button" aria-label={isPaused ? "继续任务" : "暂停任务"} className="cyber-action is-pause" onClick={() => void togglePauseTask()} disabled={!isTaskActive}>{isPaused ? <Play /> : <Pause />}<strong>{isPaused ? "继续任务" : "暂停任务"}</strong></button></SidebarTooltip> : null}
       {isTaskActive ? <SidebarTooltip label="停止任务" enabled={sidebarCollapsed}><button type="button" aria-label="停止任务" className="cyber-action is-stop" onClick={() => void stopCurrentTask()} disabled={!isTaskActive}><CircleStop /><strong>停止任务</strong></button></SidebarTooltip> : null}
-      {showReset ? <button type="button" aria-label="重置任务" className="cyber-action is-reset" onClick={() => void resetTask()} disabled={!hasResettableTaskState}><RefreshCw /><strong>重置</strong></button> : null}
+      {showNext && batchNextAction ? (
+        <button type="button" aria-label={batchNextAction.label} className={batchNextAction.className} onClick={batchNextAction.onClick}>
+          <FileCheck2 /><strong>{batchNextAction.label}</strong>
+        </button>
+      ) : null}
+      {showReset ? <button type="button" aria-label="重置本批" className="cyber-action is-reset" onClick={requestResetTask} disabled={!hasResettableTaskState}><RefreshCw /><strong>重置本批</strong></button> : null}
     </div>
   );
 
@@ -2278,7 +2393,19 @@ export function App(): React.JSX.Element {
               <h2>文件列表 <span>（{visibleFiles.length}）</span></h2>
               {files.length > 0 ? <div className="cyber-table-actions">
                 <div className="cyber-tabs" aria-label="文件状态统计">
-                  {fileTabs.map((tab) => <button type="button" className={activeTab === tab.key ? "is-active" : ""} key={tab.key} onClick={() => setActiveTab(tab.key)}>{tab.label}<b>{tabCounts[tab.key]}</b></button>)}
+                  {fileTabs.map((tab) => (
+                    <button
+                      type="button"
+                      className={activeTab === tab.key ? "is-active" : ""}
+                      key={tab.key}
+                      onClick={() => {
+                        userTabLockedRef.current = true;
+                        setActiveTab(tab.key);
+                      }}
+                    >
+                      {tab.label}<b>{tabCounts[tab.key]}</b>
+                    </button>
+                  ))}
                 </div>
                 <details className="cyber-column-manager">
                   <summary aria-label="列管理"><Settings2 /></summary>
@@ -2292,7 +2419,7 @@ export function App(): React.JSX.Element {
                 <div className="cyber-batch-progress-copy"><span className="cyber-batch-phase"><i />{batchPhaseLabel}</span><strong>{progressPercent}%</strong></div>
                 <Progress value={progressPercent} role="progressbar" aria-label={`${batchPhaseLabel} ${progressPercent}%`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent} />
                 <small className="cyber-batch-file">{progress.current}/{progress.total || files.length} 个文件{activePath ? ` · ${fileNameFromPath(activePath)}` : ""}</small>
-                {!sidebarCollapsed ? renderTaskActions("cyber-workbench-actions cyber-progress-actions", true) : null}
+                {!sidebarCollapsed ? renderTaskActions("cyber-workbench-actions cyber-progress-actions", true, true) : null}
               </motion.div> : null}
             </AnimatePresence>
 
@@ -2347,7 +2474,18 @@ export function App(): React.JSX.Element {
                   })}
                 </tbody>
               </table>
-              {!hasTableRows ? <div className="cyber-empty cyber-empty-overlay"><div className="cyber-empty-visual" aria-hidden="true"><Inbox /></div><strong>暂无文件</strong><span>导入后将在这里显示</span></div> : null}
+              {!hasTableRows ? (
+                <div className="cyber-empty cyber-empty-overlay">
+                  <div className="cyber-empty-visual" aria-hidden="true"><Inbox /></div>
+                  <strong>{listEmptyState.title}</strong>
+                  <span>{listEmptyState.detail}</span>
+                  {listEmptyState.action ? (
+                    <button type="button" className="cyber-empty-action" onClick={listEmptyState.action.onClick}>
+                      {listEmptyState.action.label}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             <footer className="cyber-pagination" aria-label="分页">
@@ -2398,6 +2536,15 @@ export function App(): React.JSX.Element {
           )}
         </section>
 
+        <ConfirmDialog
+          open={resetConfirmOpen}
+          title="重置本批？"
+          description="将清空当前列表、分析结果与进度，且不可恢复。确认后可重新导入文件开始新批次。"
+          confirmLabel="重置本批"
+          tone="danger"
+          onCancel={() => setResetConfirmOpen(false)}
+          onConfirm={() => { void resetTask(); }}
+        />
       </main>
     </MotionConfig>
     </TooltipProvider>
@@ -2440,7 +2587,7 @@ export function App(): React.JSX.Element {
           <div className="rail-toolbar rail-toolbar-secondary" aria-label="任务控制">
             <IconAction icon={ScanSearch} label="扫描" onClick={() => void scanFiles()} disabled={isAnalyzing || isRunning} active={isAnalyzing} tone={isAnalyzing ? "primary" : "normal"} />
             <IconAction icon={Play} label="处理" onClick={() => void runPricing()} disabled={isAnalyzing || isRunning || actionFiles.length === 0} active={isRunning} tone={isRunning ? "primary" : "normal"} />
-            <IconAction icon={RefreshCw} label="重置" onClick={() => void resetTask()} />
+            <IconAction icon={RefreshCw} label="重置本批" onClick={requestResetTask} />
           </div>
           <div className="pinned-paths">
             <div className="pinned-path"><span>目标</span><code title={inputDir}>{inputDir || "未选择输入文件夹"}</code></div>

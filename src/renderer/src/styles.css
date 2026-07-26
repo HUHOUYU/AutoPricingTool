@@ -4949,6 +4949,25 @@ html:not(.dark) .cyber-app {
 .cyber-batch-progress [role="progressbar"] > div { background: var(--cyber-status-info); }
 .cyber-batch-progress.is-settled [role="progressbar"] > div { background: var(--cyber-status-success); }
 .cyber-progress-actions { justify-content: flex-end; gap: 6px; }
+.cyber-batch-progress .cyber-progress-actions .cyber-action.is-batch-next {
+  order: -1;
+}
+.cyber-empty-action {
+  margin-top: 10px;
+  min-height: 34px;
+  border: 1px solid color-mix(in srgb, var(--cyber-primary) 40%, var(--cyber-border));
+  border-radius: 10px;
+  padding: 0 14px;
+  color: color-mix(in srgb, var(--cyber-primary) 80%, var(--cyber-text));
+  background: color-mix(in srgb, var(--cyber-primary) 10%, var(--cyber-panel));
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cyber-empty-action:hover {
+  border-color: color-mix(in srgb, var(--cyber-primary) 55%, var(--cyber-border));
+  background: color-mix(in srgb, var(--cyber-primary) 14%, var(--cyber-panel));
+}
 .cyber-batch-progress .cyber-progress-actions .cyber-action {
   box-sizing: border-box;
   width: 96px;

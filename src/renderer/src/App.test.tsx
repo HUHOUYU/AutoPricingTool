@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
@@ -384,7 +384,7 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.queryByRole("button", { name: "开始处理" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "暂停任务" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "停止任务" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重置任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重置本批" })).not.toBeInTheDocument();
   });
 
   it("collapses the upload area, appends files, and locks importing after processing starts", async () => {
@@ -400,7 +400,7 @@ describe("AutoPricingTool cyber workstation", () => {
     await waitFor(() => expect(container.querySelector(".cyber-upload-panel.is-compact")).toBeInTheDocument());
     expect(container.querySelector(".cyber-workspace")).toHaveClass("has-ready-batch");
     expect(screen.getByRole("button", { name: "开始处理" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "重置任务" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "重置本批" })).toBeEnabled();
     expect(screen.getByLabelText("文件状态统计").querySelectorAll("button")).toHaveLength(4);
 
     dropFiles([new File(["xlsx"], "second.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
@@ -432,8 +432,10 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByLabelText("批次处理进度")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("button", { name: "继续添加" })).not.toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "暂停任务" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "重置任务" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "重置任务" }));
+    expect(screen.getByRole("button", { name: "重置本批" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "重置本批" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "重置本批" }));
     await waitFor(() => expect(screen.getByText("拖拽单个 Excel 文件到此处")).toBeInTheDocument());
     await waitFor(() => expect(screen.queryByLabelText("批次处理进度")).not.toBeInTheDocument());
     expect(screen.queryByLabelText("文件状态统计")).not.toBeInTheDocument();
@@ -460,7 +462,9 @@ describe("AutoPricingTool cyber workstation", () => {
     openFileProcessing();
     dropFiles([new File(["xlsx"], "before-reset.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
     expect(await screen.findByText("before-reset.xlsx")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重置任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "重置本批" }));
+    const resetDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(resetDialog).getByRole("button", { name: "重置本批" }));
     await waitFor(() => expect(screen.queryByText("before-reset.xlsx")).not.toBeInTheDocument());
     expect(screen.getByRole("heading", { name: "文件列表 （0）" })).toBeInTheDocument();
     expect(api.setRuntimeConfig).not.toHaveBeenCalled();
