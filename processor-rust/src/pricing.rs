@@ -734,9 +734,7 @@ fn validate_price_mapping(
             || pair.merged_qty_column == 0
             || !(pair.qty_column < pair.sku_column && pair.sku_column < pair.merged_qty_column)
     }) {
-        errors.push(
-            "SKU 组必须按“原始数量、SKU、合并数量”从左到右排列（可不连续）".to_string(),
-        );
+        errors.push("SKU 组必须按“原始数量、SKU、合并数量”从左到右排列（可不连续）".to_string());
     }
     let recognized_quantity_columns = configured_matching_columns(
         order_sheet,
@@ -1886,11 +1884,7 @@ fn infer_pricing_candidate_with_config(
                     && (*row_idx == header_idx || row_idx.saturating_add(1) < sheet.rows.len())
             })
             .filter_map(|row_idx| {
-                let tiers = tier_columns(
-                    &sheet.rows[row_idx],
-                    sku_column,
-                    country_column,
-                );
+                let tiers = tier_columns(&sheet.rows[row_idx], sku_column, country_column);
                 (!tiers.is_empty()).then_some((row_idx, tiers))
             })
             .max_by_key(|(row_idx, tiers)| (tiers.len(), std::cmp::Reverse(*row_idx)));
@@ -2031,9 +2025,9 @@ fn infer_order_country_columns(
                 && country_lookup(token).is_some()
         });
         let is_chinese = samples.iter().any(|value| has_chinese(value));
-        let is_english = samples.iter().any(|value| {
-            !has_chinese(value) && value.len() > 2 && country_lookup(value).is_some()
-        });
+        let is_english = samples
+            .iter()
+            .any(|value| !has_chinese(value) && value.len() > 2 && country_lookup(value).is_some());
         classified.push((column, is_code, is_english, is_chinese));
     }
     if code_column.is_none_or(|current| {
@@ -2996,12 +2990,7 @@ fn build_price_index(
         } else {
             &mut index
         };
-        insert_price_row(
-            target,
-            row,
-            sheet,
-            mapping,
-        );
+        insert_price_row(target, row, sheet, mapping);
     }
     if !single_shipment_index.entries.is_empty() {
         index.single_shipment = Some(Box::new(single_shipment_index));
@@ -3036,9 +3025,7 @@ fn insert_price_row(
             sheet_name: sheet.name.clone(),
         };
         let key = full_key(&country.code, &sku, tier.quantity);
-        index
-            .quantity_keys
-            .insert(prefix_key(&country.code, &sku));
+        index.quantity_keys.insert(prefix_key(&country.code, &sku));
         index.entries.entry(key).or_default().push(entry);
     }
 }
@@ -3049,10 +3036,7 @@ fn aggregate_lines(lines: &[OrderLine]) -> Vec<AggregatedOrderSku> {
     for line in lines {
         let key = format!(
             "{}\u{1f}{}\u{1f}{}\u{1f}{}",
-            line.business_order_number,
-            line.country.code,
-            line.matched_sku,
-            line.single_shipment
+            line.business_order_number, line.country.code, line.matched_sku, line.single_shipment
         );
         if let Some(position) = positions.get(&key).copied() {
             let row = &mut result[position];
@@ -3417,9 +3401,7 @@ impl PriceIndex {
                 reason: "国家或 SKU 无法标准化".to_string(),
             };
         }
-        let saw_quantity_key = self
-            .quantity_keys
-            .contains(&prefix_key(country, sku));
+        let saw_quantity_key = self.quantity_keys.contains(&prefix_key(country, sku));
         let key = full_key(country, sku, quantity);
         if let Some(entries) = self.entries.get(&key) {
             if entries.len() != 1 {
@@ -4321,7 +4303,6 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             "SKU或国家无法匹配",
             "hold 国名整格不可拆成 US"
         );
-
 
         // 正式英文国名整格可识别为 US，与订单二字码匹配
         let formal = SheetData {
