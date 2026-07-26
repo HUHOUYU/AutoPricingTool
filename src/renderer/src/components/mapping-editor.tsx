@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ChevronDown, Plus, Trash2 } from "lucide-react";
 import type { PriceAnalysisFile, PriceCheckMapping, PriceMappingValidation } from "../../../preload";
 import type { ExcelPreviewSheet, ExcelPreviewWorkbook } from "../lib/excel-preview";
 import { Button } from "./ui/button";
@@ -31,7 +31,6 @@ type MappingEditorProps = {
   analysis: PriceAnalysisFile;
   mapping: PriceCheckMapping;
   workbook: ExcelPreviewWorkbook | null;
-  activeSheetName: string;
   activeTarget: MappingFieldTarget | null;
   validation: MappingValidationState;
   onActiveTargetChange: (target: MappingFieldTarget | null) => void;
@@ -39,7 +38,6 @@ type MappingEditorProps = {
   onColumnChange: (target: MappingFieldTarget, column: number | null, header: string) => void;
   onSheetChange: (orderSheet: string, pricingSheet: string, previewSheet: string) => void;
   onPreviewSheetChange: (sheetName: string) => void;
-  onRevalidate: () => void;
   onConfirm: () => void;
 };
 
@@ -124,7 +122,6 @@ export function MappingEditor({
   analysis,
   mapping,
   workbook,
-  activeSheetName,
   activeTarget,
   validation,
   onActiveTargetChange,
@@ -132,7 +129,6 @@ export function MappingEditor({
   onColumnChange,
   onSheetChange,
   onPreviewSheetChange,
-  onRevalidate,
   onConfirm,
 }: MappingEditorProps): React.JSX.Element {
   const orderSheet = sheetFor(workbook, mapping.orderSheet);
@@ -142,17 +138,13 @@ export function MappingEditor({
   const tierOptions = columnOptions(pricingSheet, mapping.pricingQuantityHeaderRow ?? mapping.pricingHeaderRow);
   const update = (patch: Partial<PriceCheckMapping>): void => onMappingChange({ ...mapping, ...patch });
   const validationErrors = validation.result?.errors ?? [];
-  const validationMessages = validation.result?.requestVersion === 0 ? validationErrors : [...validationErrors, ...(validation.result?.warnings ?? [])];
   const canConfirm = validation.status === "ready" && validationErrors.length === 0;
 
   return (
     <section className="mapping-editor" aria-label="字段映射编辑器">
       <div className="mapping-editor-scroll">
       <div className="mapping-editor-heading">
-        <div><h3>字段映射</h3><small>先选择字段，再点击左侧表格中的任意单元格</small></div>
-        <button type="button" className={`mapping-validation-state is-${validation.status}`} title="字段变更后会自动试算，也可以点击立即试算" disabled={validation.status === "validating"} onClick={onRevalidate}>
-          <RefreshCw />{validation.status === "validating" ? "正在试算" : validation.status === "stale" ? "立即试算" : "重新试算"}
-        </button>
+        <h3>字段映射</h3>
       </div>
 
       <div className="mapping-sheet-switches">
@@ -160,7 +152,7 @@ export function MappingEditor({
         <label>核价 Sheet<select aria-label="核价 Sheet" value={mapping.pricingSheet} onChange={(event) => onSheetChange(mapping.orderSheet, event.currentTarget.value, event.currentTarget.value)}>{analysis.pricingSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.score.toFixed(1)} 分</option>)}</select></label>
       </div>
 
-      <details open={activeSheetName === mapping.orderSheet} onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.orderSheet); }}>
+      <details onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.orderSheet); }}>
         <summary>订单字段</summary>
         <div className="mapping-fields">
           <label className={`mapping-field${activeTarget === "orderHeaderRow" ? " is-active" : ""}`} onClick={() => onActiveTargetChange("orderHeaderRow")}><span>表头行<em>{activeTarget === "orderHeaderRow" ? "点击行号选择" : ""}</em></span><input aria-label="订单表头行" type="number" min={1} max={orderSheet?.rowCount ?? 1} value={mapping.orderHeaderRow} onFocus={() => onActiveTargetChange("orderHeaderRow")} onChange={(event) => update({ orderHeaderRow: Number(event.currentTarget.value) || 0 })} /></label>
@@ -190,7 +182,7 @@ export function MappingEditor({
         </div>
       </details>
 
-      <details open={activeSheetName === mapping.pricingSheet} onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.pricingSheet); }}>
+      <details onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.pricingSheet); }}>
         <summary>核价字段</summary>
         <div className="mapping-fields">
           <label className={`mapping-field${activeTarget === "pricingHeaderRow" ? " is-active" : ""}`} onClick={() => onActiveTargetChange("pricingHeaderRow")}><span>表头行<em>{activeTarget === "pricingHeaderRow" ? "点击行号选择" : ""}</em></span><input aria-label="核价表头行" type="number" min={1} max={pricingSheet?.rowCount ?? 1} value={mapping.pricingHeaderRow} onFocus={() => onActiveTargetChange("pricingHeaderRow")} onChange={(event) => update({ pricingHeaderRow: Number(event.currentTarget.value) || 0 })} /></label>
@@ -211,7 +203,6 @@ export function MappingEditor({
       </div>
 
       <div className="mapping-editor-footer">
-        {validation.result ? <div className={`mapping-validation-result${validationErrors.length ? " is-error" : validation.result.requestVersion > 0 && validation.result.warnings.length ? " is-warning" : " is-success"}`}><strong>试算 {validation.result.matchedRows}/{validation.result.evaluatedRows} 行 · {(validation.result.coverage * 100).toFixed(1)}%</strong>{validationMessages.map((message) => <span key={message}>{message}</span>)}</div> : null}
         <Button type="button" disabled={!canConfirm} onClick={onConfirm}>确认并处理此文件</Button>
       </div>
     </section>
