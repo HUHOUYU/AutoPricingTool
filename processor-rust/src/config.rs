@@ -51,6 +51,9 @@ pub(crate) struct PricingRules {
     pub(crate) country_identity: Vec<CountryIdentity>,
     #[serde(default = "default_single_shipment_price_marker_aliases")]
     pub(crate) single_shipment_price_marker_aliases: Vec<String>,
+    /// 是否按物流方式参与核价匹配。默认 false（不适用物流）。
+    #[serde(default = "default_match_by_shipping_method")]
+    pub(crate) match_by_shipping_method: bool,
 }
 
 impl PricingRules {
@@ -64,6 +67,7 @@ impl Default for PricingRules {
         Self {
             country_identity: default_country_identity(),
             single_shipment_price_marker_aliases: default_single_shipment_price_marker_aliases(),
+            match_by_shipping_method: default_match_by_shipping_method(),
         }
     }
 }
@@ -330,6 +334,10 @@ fn default_single_shipment_price_marker_aliases() -> Vec<String> {
         .into_iter()
         .map(str::to_string)
         .collect()
+}
+
+fn default_match_by_shipping_method() -> bool {
+    false
 }
 
 fn default_auto_run() -> bool {

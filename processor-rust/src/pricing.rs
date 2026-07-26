@@ -1774,13 +1774,17 @@ fn infer_order_candidate_with_config(
         let country_en = country_en.filter(|column| Some(*column) != country_code);
         let country_cn = country_cn
             .filter(|column| Some(*column) != country_code && Some(*column) != country_en);
-        let shipping = best_shipping_column(
-            sheet,
-            header_idx,
-            order_field_rule(config, "shipping_method"),
-            order_field_rule(config, "price"),
-            None,
-        );
+        let shipping = if config.pricing.match_by_shipping_method {
+            best_shipping_column(
+                sheet,
+                header_idx,
+                order_field_rule(config, "shipping_method"),
+                order_field_rule(config, "price"),
+                None,
+            )
+        } else {
+            None
+        };
         let single_shipment =
             configured_best_column(sheet, header_idx, None, SINGLE_SHIPMENT_FIELD_ALIASES);
         let price = configured_best_column(
@@ -1903,13 +1907,17 @@ fn infer_pricing_candidate_with_config(
             best_pricing_sku_column(sheet, header_idx, pricing_field_rule(config, "sku"));
         let country_column =
             best_pricing_country_column(sheet, header_idx, pricing_field_rule(config, "country"));
-        let shipping_column = best_shipping_column(
-            sheet,
-            header_idx,
-            pricing_field_rule(config, "shipping_method"),
-            pricing_field_rule(config, "fixed_price"),
-            pricing_field_rule(config, "fixed_price"),
-        );
+        let shipping_column = if config.pricing.match_by_shipping_method {
+            best_shipping_column(
+                sheet,
+                header_idx,
+                pricing_field_rule(config, "shipping_method"),
+                pricing_field_rule(config, "fixed_price"),
+                pricing_field_rule(config, "fixed_price"),
+            )
+        } else {
+            None
+        };
         let tier_row = (header_idx..=header_idx.saturating_add(PRICE_TIER_LOOKAHEAD_ROWS))
             .filter(|row_idx| {
                 *row_idx < sheet.rows.len()
@@ -2968,11 +2976,15 @@ fn read_order_lines(
         let chinese = cell_text(row, mapping.country_chinese_column);
         let mut country =
             normalize_order_country_fields(&code, &english, &chinese, &config.pricing);
-        let shipping_from_column = cell_text(row, mapping.shipping_method_column);
-        let shipping = if shipping_from_column.is_empty() {
-            country.inferred_shipping.clone()
+        let shipping = if config.pricing.match_by_shipping_method {
+            let shipping_from_column = cell_text(row, mapping.shipping_method_column);
+            if shipping_from_column.is_empty() {
+                country.inferred_shipping.clone()
+            } else {
+                normalize_shipping(&shipping_from_column)
+            }
         } else {
-            normalize_shipping(&shipping_from_column)
+            String::new()
         };
         let single_shipment_value = mapping
             .single_shipment_column
@@ -3101,7 +3113,13 @@ fn build_price_index(
         } else {
             &mut index
         };
-        insert_price_row(target, row, sheet, mapping);
+        insert_price_row(
+            target,
+            row,
+            sheet,
+            mapping,
+            pricing_rules.match_by_shipping_method,
+        );
     }
     if !single_shipment_index.entries.is_empty() {
         index.single_shipment = Some(Box::new(single_shipment_index));
@@ -3114,6 +3132,7 @@ fn insert_price_row(
     row: &[CellValue],
     sheet: &SheetData,
     mapping: &PriceCheckMapping,
+    match_by_shipping_method: bool,
 ) {
     let raw_sku = cell_text(row, Some(mapping.pricing_sku_column));
     let raw_country = cell_text(row, Some(mapping.pricing_country_column));
@@ -3125,11 +3144,15 @@ fn insert_price_row(
     if country.code.is_empty() {
         return;
     }
-    let shipping_column = cell_text(row, mapping.pricing_shipping_method_column);
-    let shipping = if shipping_column.is_empty() {
-        normalize_shipping(&country_shipping)
+    let shipping = if match_by_shipping_method {
+        let shipping_column = cell_text(row, mapping.pricing_shipping_method_column);
+        if shipping_column.is_empty() {
+            normalize_shipping(&country_shipping)
+        } else {
+            normalize_shipping(&shipping_column)
+        }
     } else {
-        normalize_shipping(&shipping_column)
+        String::new()
     };
     let sku = normalize_sku(&raw_sku);
     for tier in &mapping.quantity_tier_columns {
@@ -5484,6 +5507,73 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             }],
             ..PriceCheckMapping::default()
         }
+    }
+
+    #[test]
+    fn match_by_shipping_method_defaults_to_false_and_ignores_shipping_keys() {
+        assert!(!Config::default().pricing.match_by_shipping_method);
+
+        let order_sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("国家"),
+                    CellValue::string("数量"),
+                    CellValue::string("SKU"),
+                    CellValue::string("合并数量"),
+                    CellValue::string("物流"),
+                ],
+                vec![
+                    CellValue::string("O-1"),
+                    CellValue::string("US"),
+                    CellValue::string("1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
+                    CellValue::string(""),
+                ],
+            ],
+        };
+        let pricing_sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("国家"),
+                    CellValue::string("1"),
+                    CellValue::string("物流"),
+                ],
+                vec![
+                    CellValue::string("SKU-A"),
+                    CellValue::string("US"),
+                    CellValue::string("9.5"),
+                    CellValue::string("4PX/express"),
+                ],
+            ],
+        };
+        let mut mapping = complete_mapping();
+        mapping.order_sheet = order_sheet.name.clone();
+        mapping.pricing_sheet = pricing_sheet.name.clone();
+        mapping.shipping_method_column = Some(6);
+        mapping.pricing_shipping_method_column = Some(4);
+        mapping.quantity_tier_columns = vec![PriceTierColumn {
+            quantity: 1,
+            column: 3,
+            header: "1".to_string(),
+        }];
+
+        let disabled = Config::default();
+        let index_off = build_price_index(&pricing_sheet, &mapping, &disabled.pricing);
+        let lines_off = read_order_lines(&order_sheet, &mapping, &disabled).0;
+        let (matched_off, _) = evaluate_matches(&index_off, &lines_off);
+        assert_eq!(matched_off, 1, "默认不按物流匹配时应命中核价");
+
+        let mut enabled = Config::default();
+        enabled.pricing.match_by_shipping_method = true;
+        let index_on = build_price_index(&pricing_sheet, &mapping, &enabled.pricing);
+        let lines_on = read_order_lines(&order_sheet, &mapping, &enabled).0;
+        let (matched_on, _) = evaluate_matches(&index_on, &lines_on);
+        assert_eq!(matched_on, 0, "启用物流匹配且订单物流为空时不应命中");
     }
 
     fn decision(rows: usize, coverage: f64, ambiguous: bool) -> AutomationDecision {

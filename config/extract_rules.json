@@ -1,28 +1,32 @@
 {
+  "runtime": {
+    "recent_input_dir": "C:\\Users\\Administrator\\Desktop\\要处理的文件",
+    "recent_output_dir": "C:\\Users\\Administrator\\Desktop\\输出目录",
+    "recent_config_path": "C:\\Users\\Administrator\\Desktop\\AutoPricingTool\\config\\extract_rules.json",
+    "archive_standard_files": false,
+    "auto_reveal_manual_result": false
+  },
   "sheet_rules": {
     "header_scan_rows": 30,
     "data_sample_rows": 120,
     "sample_column_scan_limit": 180,
     "empty_gap_limit": 20,
     "preferred_sheet_names": [
-      "Cost",
-      "order_1",
-      "orders_export",
-      "Order",
-      "order_",
-      "Sheet1",
-      "Sheet2",
-      "Sheet4",
-      "核价"
+      "order",
+      "Cost"
     ]
   },
   "sheet_selection": {
     "sequential_numeric_header_penalty": 500,
     "reject_header_keywords": [
       "Dropshipping price",
+      "Product Description",
+      "Photos",
       "Payment Way",
       "Picture",
-      "Item No."
+      "Item No.",
+      "Item  No",
+      "Client No."
     ]
   },
   "performance": {
@@ -40,15 +44,16 @@
       "english",
       "chinese"
     ],
-    "sku_qty_pair_selection": "max_match_coverage",
-    "quantity_policy": "nearest",
-    "multiply_quantity_by_price": true,
-    "zero_price_is_valid": true,
+    "match_by_shipping_method": false,
     "single_shipment_price_marker_aliases": [
       "单独发货价格",
       "单独发货价",
       "单独发货报价"
     ],
+    "sku_qty_pair_selection": "max_match_coverage",
+    "quantity_policy": "nearest",
+    "multiply_quantity_by_price": true,
+    "zero_price_is_valid": true,
     "unavailable_price_tokens": [
       "/",
       "未核价",
@@ -61,69 +66,57 @@
       "字段映射"
     ]
   },
-  "runtime": {
-    "recent_input_dir": "C:\\Users\\29931\\Desktop\\模板管理",
-    "recent_output_dir": "C:\\Users\\29931\\Desktop\\AI_核价",
-    "recent_config_path": "C:\\Users\\29931\\Desktop\\AutoPricingTool\\config\\extract_rules.json",
-    "archive_standard_files": false
-  },
   "fields": {},
   "pricing_fields": {
     "order": {
       "order_number": {
         "header_aliases": [
+          "Order number-PY",
           "Order number",
           "订单号",
-          "订单编号",
-          "业务订单号",
-          "平台订单号",
-          "平台单号",
-          "子订单号",
-          "Sub order number",
-          "Platform order",
-          "Order ID",
-          "Order No.",
-          "Name",
-          "Order"
+          "店铺单号"
         ],
         "value_patterns": [
-          "(?i)^(?:#?[a-z0-9]+(?:[-_][a-z0-9]+)+|#?\\d{4,})$"
+          "^[A-Za-z]+[0-9]+(?:#[0-9]+)?$",
+          "^(?:[A-Za-z][A-Za-z0-9-]*[0-9][A-Za-z0-9-]*|[0-9][A-Za-z0-9-]*[A-Za-z][A-Za-z0-9-]*)$"
         ]
       },
       "country_code": {
         "header_aliases": [
+          "收货国家二字码",
           "国家二字码",
-          "国家代码",
-          "Country code",
-          "ISO",
-          "Country"
+          "Country",
+          "Shipping Country",
+          "Shipping: Country",
+          "Country/Region"
         ],
         "value_patterns": [
-          "(?i)^[a-z]{2}$"
+          "^[A-Z]{2}$"
         ]
       },
       "country_english": {
         "header_aliases": [
-          "Country/Region",
-          "Shipping Country",
           "Country",
-          "英文国家名"
+          "收货国家名称",
+          "收货人国家",
+          "国家",
+          "Shipping: Country"
         ],
         "value_patterns": [
-          "(?i)^[a-z][a-z .'-]{2,}$"
+          "^[A-Z][A-Za-z\\s\\-()]{3,}$"
         ],
         "negative_patterns": [
-          "(?i)^[a-z]{2}$"
+          "^[A-Z]{2}$"
         ]
       },
       "country_chinese": {
         "header_aliases": [
-          "中文国家名",
-          "中文国家",
+          "Country",
+          "国家",
           "国家中文",
-          "目的国家",
-          "收货国家",
-          "国家"
+          "收货人国家中文",
+          "中文国家名",
+          "国家名中文"
         ],
         "value_patterns": [
           "[\\u4e00-\\u9fff]"
@@ -131,12 +124,11 @@
       },
       "sku": {
         "header_aliases": [
+          "SKU",
           "核价SKU",
           "Line: SKU",
-          "Product's SKU (sales number)",
-          "SKU",
+          "SKU 1",
           "Item No.",
-          "货号",
           "产品编码",
           "商品编码"
         ],
@@ -155,13 +147,16 @@
       },
       "quantity": {
         "header_aliases": [
-          "Quantity",
           "Qty",
+          "Quantity",
           "数量",
+          "产品数量",
           "产品总数",
-          "商品总数",
           "Total number of products",
-          "Lineitem quantity"
+          "Line: Fulfillable Quantity",
+          "Lineitem quantity",
+          "导单数量",
+          "核价Qty"
         ],
         "value_patterns": [
           "^\\d+(?:\\.0+)?$"
@@ -179,18 +174,16 @@
         ],
         "negative_headers": [
           "Shipping Country",
-          "Product shipping VAT tax"
+          "Product shipping VAT tax",
+          "TAX"
         ]
       },
       "price": {
         "header_aliases": [
+          "TOTAL Price",
+          "Total price",
           "Price",
-          "Cost",
-          "价格",
-          "售价",
-          "原价",
-          "订单金额",
-          "销售金额"
+          "Cost"
         ],
         "negative_headers": [
           "Product shipping VAT tax"
@@ -202,11 +195,7 @@
         "header_aliases": [
           "Item No.",
           "Item number",
-          "核价SKU",
-          "SKU",
-          "货号",
-          "产品编码",
-          "商品编码"
+          "SKU"
         ],
         "value_patterns": [
           "(?i)^[a-z0-9][a-z0-9+._-]{2,}$"
@@ -218,8 +207,7 @@
           "国家",
           "Country code",
           "国家代码",
-          "国家二字码",
-          "配送国家"
+          "国家二字码"
         ],
         "value_patterns": [
           "(?i)^(?:[a-z]{2}|[a-z][a-z .'-]{2,}|.*[\\u4e00-\\u9fff].*)$"
@@ -231,9 +219,7 @@
           "物流方式",
           "运输方式",
           "配送方式",
-          "物流",
-          "Shipping",
-          "Transportation"
+          "Shipping"
         ],
         "negative_headers": [
           "Shipping Country",
@@ -245,10 +231,7 @@
           "Product shipping VAT tax",
           "Shipping VAT tax",
           "Price",
-          "Cost",
-          "价格",
-          "核价",
-          "单价"
+          "Cost"
         ],
         "negative_headers": [
           "Shipping Country"
@@ -269,8 +252,8 @@
   "automation": {
     "auto_run": true,
     "coverage_threshold": 1,
-    "min_trial_rows": 20,
-    "candidate_score_gap": 3,
+    "min_trial_rows": 50,
+    "candidate_score_gap": 2,
     "template_match_priority": true
   }
 }

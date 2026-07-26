@@ -48,6 +48,7 @@
       "english",
       "chinese"
     ],
+    "match_by_shipping_method": false,
     "single_shipment_price_marker_aliases": [
       "单独发货价格",
       "单独发货价",
