@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, ChevronDown, ChevronUp, FileSpreadsheet, ListRestart, LoaderCircle, Pin, PinOff, Search, Table2, X } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, ListRestart, LoaderCircle, Pin, PinOff, Search, Table2, X } from "lucide-react";
 import type { DesktopAPI, PriceCheckMapping, PricePreviewCellEdit, PricePreviewWritebackRow } from "../../../preload";
 import type { MappingFieldTarget } from "./mapping-editor";
 import type {
@@ -699,12 +699,18 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     setEditingSourceCell(null);
   };
 
+  // 稳定 ref：仅在输入框挂载时聚焦全选，避免每次按键重跑
+  const focusEditor = useCallback((input: HTMLInputElement | null) => {
+    if (!input) return;
+    requestAnimationFrame(() => {
+      if (document.activeElement === input) return;
+      input.focus();
+      input.setSelectionRange(0, input.value.length);
+    });
+  }, []);
+
   return (
     <section className={`excel-preview-panel${activeTarget ? " is-selecting" : ""}`} aria-label="Excel 预览">
-      <header>
-        <div><span><FileSpreadsheet /></span><div><strong>Excel 预览</strong><small>双击核价写回单元格可修改 · 不执行公式或宏</small></div></div>
-        {fileSize !== null ? <em>{formatBytes(fileSize)}</em> : null}
-      </header>
       <div className="excel-preview-tabs" role="tablist" aria-label="候选 Sheet">
         {previewCandidates.map((candidate) => (
           <button
@@ -744,50 +750,57 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
           <strong>未匹配定位</strong>
           <span>↑↓ {unmatchedOrderRows.length}</span>
         </button>
-        <button
-          type="button"
-          className="excel-preview-load-all"
-          aria-label="加载全部数据"
-          title="按文件路径重新读取当前订单 Sheet 和核价 Sheet 的全部数据"
-          disabled={!activeSheet || loadAll || status === "loading"}
-          onClick={() => setLoadAll(true)}
-        >
-          {status === "loading" && loadAll ? <LoaderCircle className="is-loading" /> : <ListRestart />}
-          <span>{status === "loading" && loadAll ? "加载中" : loadAll ? "已加载全部" : "加载全部"}</span>
-        </button>
-        <div className={`excel-preview-search${searchOpen ? " is-open" : ""}`}>
-          {!searchOpen ? (
-            <button type="button" className="excel-preview-search-toggle" aria-label="搜索表格" title="搜索表格（Ctrl+F）" disabled={!activeSheet} onClick={() => { setSearchOpen(true); requestAnimationFrame(() => searchInputRef.current?.focus()); }}>
-              <Search /><kbd>Ctrl F</kbd>
-            </button>
-          ) : (
-            <>
-              <Search aria-hidden="true" />
-              <input
-                ref={searchInputRef}
-                type="search"
-                aria-label="搜索表格数据"
-                placeholder={searchInputPlaceholder}
-                size={Math.max(searchInputMinimumCharacters, Array.from(searchQuery).length + 1)}
-                value={searchQuery}
-                onChange={(event) => {
-                  setSearchPreferredColumns([]);
-                  setPricingLookupFilter(null);
-                  setSearchQuery(event.target.value);
-                }}
-                onKeyDown={(event) => {
-                  const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : event.key === "Enter" ? event.shiftKey ? -1 : 1 : null;
-                  if (direction === null) return;
-                  event.preventDefault();
-                  moveSearchMatch(direction);
-                }}
-              />
-              <output aria-live="polite">{searchQuery ? `${searchMatches.length ? activeSearchMatchIndex % searchMatches.length + 1 : 0}/${searchMatches.length}` : "0/0"}</output>
-              <button type="button" aria-label="上一个匹配" title="上一个匹配（↑ / Shift+Enter）" disabled={searchMatches.length === 0} onClick={() => moveSearchMatch(-1)}><ChevronUp /></button>
-              <button type="button" aria-label="下一个匹配" title="下一个匹配（↓ / Enter）" disabled={searchMatches.length === 0} onClick={() => moveSearchMatch(1)}><ChevronDown /></button>
-              <button type="button" aria-label="关闭搜索" onClick={closeSearch}><X /></button>
-            </>
-          )}
+        <div className="excel-preview-toolbar">
+          <button
+            type="button"
+            className="excel-preview-load-all"
+            aria-label="加载全部数据"
+            title="按文件路径重新读取当前订单 Sheet 和核价 Sheet 的全部数据"
+            disabled={!activeSheet || loadAll || status === "loading"}
+            onClick={() => setLoadAll(true)}
+          >
+            {status === "loading" && loadAll ? <LoaderCircle className="is-loading" /> : <ListRestart />}
+            <span>{status === "loading" && loadAll ? "加载中" : loadAll ? "已加载全部" : "加载全部"}</span>
+          </button>
+          <div className={`excel-preview-search${searchOpen ? " is-open" : ""}`}>
+            {!searchOpen ? (
+              <button type="button" className="excel-preview-search-toggle" aria-label="搜索表格" title="搜索表格（Ctrl+F）" disabled={!activeSheet} onClick={() => { setSearchOpen(true); requestAnimationFrame(() => searchInputRef.current?.focus()); }}>
+                <Search /><kbd>Ctrl F</kbd>
+              </button>
+            ) : (
+              <>
+                <Search className="excel-preview-search-icon" aria-hidden="true" />
+                <input
+                  ref={searchInputRef}
+                  type="search"
+                  aria-label="搜索表格数据"
+                  placeholder={searchInputPlaceholder}
+                  size={Math.max(searchInputMinimumCharacters, Array.from(searchQuery).length + 1)}
+                  value={searchQuery}
+                  onChange={(event) => {
+                    setSearchPreferredColumns([]);
+                    setPricingLookupFilter(null);
+                    setSearchQuery(event.target.value);
+                  }}
+                  onKeyDown={(event) => {
+                    const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : event.key === "Enter" ? event.shiftKey ? -1 : 1 : null;
+                    if (direction === null) return;
+                    event.preventDefault();
+                    moveSearchMatch(direction);
+                  }}
+                />
+                <output className="excel-preview-search-count" aria-live="polite">
+                  {searchQuery ? `${searchMatches.length ? activeSearchMatchIndex % searchMatches.length + 1 : 0}/${searchMatches.length}` : "0/0"}
+                </output>
+                <div className="excel-preview-search-actions">
+                  <button type="button" className="excel-preview-search-action" aria-label="上一个匹配" title="上一个匹配（↑ / Shift+Enter）" disabled={searchMatches.length === 0} onClick={() => moveSearchMatch(-1)}><ChevronUp /></button>
+                  <button type="button" className="excel-preview-search-action" aria-label="下一个匹配" title="下一个匹配（↓ / Enter）" disabled={searchMatches.length === 0} onClick={() => moveSearchMatch(1)}><ChevronDown /></button>
+                  <button type="button" className="excel-preview-search-action" aria-label="关闭搜索" title="关闭搜索（Esc）" onClick={closeSearch}><X /></button>
+                </div>
+              </>
+            )}
+          </div>
+          {fileSize !== null ? <em className="excel-preview-filesize" title="文件大小">{formatBytes(fileSize)}</em> : null}
         </div>
       </div>
       {activeTarget ? <div className="excel-preview-selection-prompt" role="status"><strong>{selectionPrompt}</strong><span>{activeTarget.endsWith("HeaderRow") ? "点击左侧行号" : "点击目标列中的任意单元格"}</span><kbd>Esc 取消</kbd></div> : null}
@@ -969,16 +982,20 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           && editingSourceCell?.sheetName === activeSheet.name
                           && editingSourceCell.row === absoluteRow
                           && editingSourceCell.column === absoluteColumn;
-                        const isSelectedCell = selectedCell?.sheetName === activeSheet.name
+                        const isEditingCell = isEditing || isEditingSourceCell;
+                        const isSelectedCell = !isEditingCell
+                          && selectedCell?.sheetName === activeSheet.name
                           && selectedCell.row === absoluteRow
                           && selectedCell.column === absoluteColumn;
                         return <span
-                          className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedClass : duplicateMappedClass}${editableWritebackCell ? " is-editable-writeback" : ""}${editableSourceCell ? " is-editable-source" : ""}${isSelectedCell ? " is-selected-cell" : ""}${writebackValueClass}${differenceClass}${quantityMismatchClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
+                          className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedClass : duplicateMappedClass}${editableWritebackCell ? " is-editable-writeback" : ""}${editableSourceCell ? " is-editable-source" : ""}${isEditingCell ? " is-editing-cell" : ""}${isSelectedCell ? " is-selected-cell" : ""}${writebackValueClass}${differenceClass}${quantityMismatchClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
                           style={{ ...pinnedColumnStyle(columnIndex), ...(!derived && isHeaderRow ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
-                          title={cell}
+                          title={isEditingCell ? undefined : cell}
                           onMouseEnter={() => selectingColumn && !derived && setHoveredColumn(absoluteColumn)}
-                          onPointerDown={() => {
+                          onPointerDown={(event) => {
                             if (editableWritebackCell || editableSourceCell) {
+                              // 阻止双击时浏览器先选中单元格文字
+                              if (event.detail > 1) event.preventDefault();
                               setSelectedCell({ sheetName: activeSheet.name, row: absoluteRow, column: absoluteColumn });
                             }
                           }}
@@ -987,7 +1004,10 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                               onColumnSelect?.(absoluteColumn, selectionHeaderRow ? activeSheet.rows[selectionHeaderRow - activeSheet.startRow - 1]?.[columnIndex] ?? "" : "");
                             }
                           }}
-                          onDoubleClick={() => {
+                          onDoubleClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            window.getSelection()?.removeAllRanges();
                             if (editableWritebackCell) {
                               setSelectedCell({ sheetName: activeSheet.name, row: absoluteRow, column: absoluteColumn });
                               setEditingWritebackCell({ sourceRow: absoluteRow, columnIndex: writebackColumnIndex, value: cell });
@@ -1004,9 +1024,10 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           }}
                           key={columnIndex}
                         >{isEditing ? <input
-                            autoFocus
+                            ref={focusEditor}
                             aria-label={`编辑第 ${absoluteRow} 行${writebackColumnHeaders[writebackColumnIndex]}`}
                             inputMode="decimal"
+                            spellCheck={false}
                             value={editingWritebackCell.value}
                             onChange={(event) => setEditingWritebackCell({ ...editingWritebackCell, value: event.currentTarget.value })}
                             onBlur={commitWritebackEdit}
@@ -1020,9 +1041,10 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                               }
                             }}
                           /> : isEditingSourceCell ? <input
-                            autoFocus
+                            ref={focusEditor}
                             aria-label={`编辑${activeSheet.name}第 ${absoluteRow} 行第 ${absoluteColumn} 列`}
                             inputMode={editingSourceCell.numeric ? "decimal" : "text"}
+                            spellCheck={false}
                             value={editingSourceCell.value}
                             onChange={(event) => setEditingSourceCell({ ...editingSourceCell, value: event.currentTarget.value })}
                             onBlur={commitSourceEdit}
@@ -1047,11 +1069,53 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
       </div>
       {activeSheet ? (
         <footer className="excel-preview-legend" aria-label="字段颜色说明">
-          {mapping && activeSheet.name === mapping.orderSheet
-            ? skuQtyPairsByPriority(mapping).map((pair, index) => <span key={`${pair.qtyColumn}-${pair.skuColumn}-${pair.mergedQtyColumn}`}><i className="is-sku-qty" style={{ "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(index, skuPairShadeStrengths.length - 1)]}%` } as SkuPairStyle} />数量/SKU/合并数量 {index + 1}</span>)
-            : <span><i className="is-sku" />SKU 字段</span>}
-          <span><i className="is-price" />价格字段</span>
-          <span><i className="is-mapped" />常规匹配字段</span>
+          <div className="excel-preview-legend-colors">
+            {mapping && activeSheet.name === mapping.orderSheet
+              ? skuQtyPairsByPriority(mapping).map((pair, index) => <span key={`${pair.qtyColumn}-${pair.skuColumn}-${pair.mergedQtyColumn}`}><i className="is-sku-qty" style={{ "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(index, skuPairShadeStrengths.length - 1)]}%` } as SkuPairStyle} />数量/SKU/合并数量 {index + 1}</span>)
+              : <span><i className="is-sku" />SKU 字段</span>}
+            <span><i className="is-price" />价格字段</span>
+            <span><i className="is-mapped" />常规匹配字段</span>
+            {showsWritebackColumns ? <span><i className="is-writeback" />写回结果</span> : null}
+            {showsWritebackColumns ? <span><i className="is-alert" />金额差/数量异常</span> : null}
+            {mapping && activeSheet.name === mapping.orderSheet ? <span><i className="is-matched-row" />已匹配行号</span> : null}
+            {mapping && activeSheet.name === mapping.orderSheet && unmatchedOrderRows.length > 0 ? <span><i className="is-unmatched-row" />未匹配定位行</span> : null}
+          </div>
+          <div className="excel-preview-legend-stats" aria-label="预览状态">
+            <strong>{mapping
+              ? activeSheet.name === mapping.orderSheet
+                ? "订单表"
+                : activeSheet.name === mapping.pricingSheet
+                  ? "核价表"
+                  : "预览表"
+              : "预览表"}</strong>
+            <span>{activeSheet.rows.length}/{activeSheet.rowCount || activeSheet.rows.length} 行 · {columnCount} 列</span>
+            {mapping && activeSheet.name === mapping.orderSheet ? (
+              <span>匹配 {(matchedOrderRows ?? []).length} · 未匹配 {unmatchedOrderRows.length}</span>
+            ) : null}
+            {showsWritebackColumns && (writebackRows?.length ?? 0) > 0 ? (
+              <span>写回 {writebackRows?.length ?? 0} 行</span>
+            ) : null}
+            {activeSheet.truncatedRows || activeSheet.truncatedColumns ? (
+              <span className="is-warning">已截断</span>
+            ) : loadAll ? (
+              <span>完整数据</span>
+            ) : null}
+            {activeTarget ? (
+              <span className="is-selecting">{selectionPrompt || "正在选择字段"} · Esc 取消</span>
+            ) : selectedCell && selectedCell.sheetName === activeSheet.name ? (
+              <span>选中 {excelColumnLabel(selectedCell.column - 1)}{selectedCell.row}</span>
+            ) : selectedRow !== null ? (
+              <span>选中第 {selectedRow} 行</span>
+            ) : null}
+          </div>
+          <div className="excel-preview-legend-hints" aria-label="操作提示">
+            <span>双击写回格可改</span>
+            <span>图钉冻结列</span>
+            <span>拖动表头调列宽</span>
+            <span>Ctrl+F 搜索</span>
+            {mapping && activeSheet.name === mapping.orderSheet ? <span>未匹配定位 ↑↓</span> : null}
+            <span>点列头/单元格映射字段</span>
+          </div>
         </footer>
       ) : null}
     </section>

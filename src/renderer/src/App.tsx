@@ -1923,7 +1923,7 @@ export function App(): React.JSX.Element {
   return (
     <TooltipProvider delayDuration={220} skipDelayDuration={80}>
     <MotionConfig reducedMotion="user">
-      <main className={"cyber-app" + (sidebarCollapsed ? " is-sidebar-collapsed" : "")} ref={shellRef}>
+      <main className={"cyber-app" + (sidebarCollapsed ? " is-sidebar-collapsed" : "") + (detailPath ? " is-detail-open" : "")} ref={shellRef}>
         <Toaster
           className="cyber-toaster"
           position="top-left"
@@ -2047,7 +2047,26 @@ export function App(): React.JSX.Element {
                 onPointerDown={startDetailDrawerResize}
                 onKeyDown={resizeDetailDrawerWithKeyboard}
               ><i /></div>
-              <header><div><FileSpreadsheet /><div><strong>{fileNameFromPath(detailPath)}</strong><small title={detailPath}>{detailPath}</small></div></div><div className="issue-header-actions"><Button type="button" variant="outline" className="issue-open-source" onClick={() => void getDesktopAPI()?.openPath(detailPath)}><ExternalLink />打开原始文件</Button><button type="button" aria-label="关闭文件详情" onClick={() => setDetailPath(null)}><X /></button></div></header>
+              <header className="issue-drawer-header">
+                <div className="issue-header-identity">
+                  <FileSpreadsheet />
+                  <div>
+                    <strong>{fileNameFromPath(detailPath)}</strong>
+                    <small title={detailPath}>{detailPath}</small>
+                  </div>
+                </div>
+                <div className="issue-header-actions">
+                  <Button type="button" variant="outline" className="issue-open-source" onClick={() => void getDesktopAPI()?.openPath(detailPath)}>
+                    <ExternalLink />打开原始文件
+                  </Button>
+                  {detailResult?.outputPath && tabForStatus(fileStatusByPath[detailPath]) === "success" ? (
+                    <Button type="button" variant="outline" className="issue-open-result" onClick={() => void getDesktopAPI()?.openPath(detailResult.outputPath ?? "")}>
+                      <FolderOutput />打开结果文件
+                    </Button>
+                  ) : null}
+                  <button type="button" aria-label="关闭文件详情" onClick={() => setDetailPath(null)}><X /></button>
+                </div>
+              </header>
               <div className="issue-drawer-content" style={{ gridTemplateColumns: `minmax(${DETAIL_PREVIEW_MIN_WIDTH}px, 1fr) ${DETAIL_CONTENT_RESIZER_WIDTH}px ${detailSidebarWidth}px` }}>
                 <ExcelPreview
                   api={getDesktopAPI()}
@@ -2080,10 +2099,89 @@ export function App(): React.JSX.Element {
                   onKeyDown={resizeDetailSidebarWithKeyboard}
                 ><i /></div>
                 <div className="issue-detail-column">
-                  <section><h3>自动化判定</h3>{detailAnalysis ? <><div className={"decision-card is-" + detailAnalysis.automationDecision.status}><strong>{detailAnalysis.automationDecision.status === "eligible" ? "可自动处理" : detailAnalysis.automationDecision.status === "confirm" ? "需要人工确认" : "分析异常"}</strong><span>试算 {detailAnalysis.automationDecision.matchedRows}/{detailAnalysis.automationDecision.evaluatedRows} 行 · {formatCoverage(detailAnalysis.automationDecision.coverage)}</span></div><ul className="decision-reasons">{detailAnalysis.automationDecision.reasons.map((reason) => <DecisionReason reason={reason} bestScore={detailAnalysis.automationDecision.candidateScore} runnerUpScore={detailAnalysis.automationDecision.runnerUpScore} scoreKind={detailAnalysis.automationDecision.scoreKind} key={reason} />)}</ul></> : <p>文件尚未分析。</p>}</section>
-                  {detailAnalysis && detailMapping ? <MappingEditor analysis={detailAnalysis} mapping={detailMapping} workbook={detailPreviewWorkbook} activeSheetName={detailPreviewSheetName} activeTarget={activeMappingTarget} validation={detailValidation} onActiveTargetChange={selectMappingTarget} onMappingChange={(mapping) => commitMapping(detailPath, mapping)} onColumnChange={(target, column, header) => changeMappingColumn(target, column, header)} onSheetChange={(orderSheet, pricingSheet, previewSheet) => { updateMapping(detailPath, orderSheet, pricingSheet); setDetailPreviewSheetName(previewSheet); }} onPreviewSheetChange={setDetailPreviewSheetName} onRevalidate={() => revalidateMapping(detailPath)} onConfirm={() => void confirmAndContinue(detailPath)} /> : null}
-                  {detailResult ? <section><h3>处理结果</h3><div className="result-summary"><span>总行数<strong>{detailResult.totalRows ?? 0}</strong></span><span>已匹配<strong>{detailResult.matchedRows ?? 0}</strong></span><span>异常行<strong>{detailResult.exceptionRows ?? 0}</strong></span></div>{detailResult.message ? <p>{detailResult.message}</p> : null}{detailResult.outputPath && detailPath && tabForStatus(fileStatusByPath[detailPath]) === "success" ? <Button variant="outline" onClick={() => void getDesktopAPI()?.openPath(detailResult.outputPath ?? "")}>打开结果文件</Button> : null}</section> : null}
-                  {detailPath && fileStatusByPath[detailPath] && tabForStatus(fileStatusByPath[detailPath]) === "error" ? <section><h3>异常处理</h3><p>调整源文件或配置后，可以重新分析当前文件。</p><Button type="button" variant="outline" onClick={() => void retryAnalysis(detailPath)}><RefreshCw />重新分析此文件</Button></section> : null}
+                  {(() => {
+                    const liveValidation = detailValidation.result;
+                    const validationErrors = liveValidation?.errors ?? [];
+                    const validationMessages = liveValidation
+                      ? liveValidation.requestVersion === 0
+                        ? validationErrors
+                        : [...validationErrors, ...(liveValidation.warnings ?? [])]
+                      : [];
+                    const trialMatched = liveValidation?.matchedRows ?? detailAnalysis?.automationDecision.matchedRows;
+                    const trialEvaluated = liveValidation?.evaluatedRows ?? detailAnalysis?.automationDecision.evaluatedRows;
+                    const trialCoverage = liveValidation?.coverage ?? detailAnalysis?.automationDecision.coverage;
+                    const trialTone = !liveValidation
+                      ? "is-idle"
+                      : validationErrors.length
+                        ? "is-error"
+                        : liveValidation.requestVersion > 0 && (liveValidation.warnings?.length ?? 0) > 0
+                          ? "is-warning"
+                          : detailValidation.status === "stale"
+                            ? "is-stale"
+                            : "is-success";
+                    const decisionStatus = detailAnalysis?.automationDecision.status;
+                    const decisionLabel = decisionStatus === "eligible"
+                      ? "可自动"
+                      : decisionStatus === "confirm"
+                        ? "需确认"
+                        : decisionStatus === "error"
+                          ? "异常"
+                          : "未分析";
+                    return (
+                      <section className="issue-status-section" aria-label="状态概览">
+                        <div className="issue-status-main">
+                          <span className={`issue-status-badge is-${decisionStatus ?? "idle"}`}>{decisionLabel}</span>
+                          <div className={`issue-status-trial ${trialTone}`}>
+                            <strong>
+                              {trialMatched !== undefined && trialEvaluated !== undefined
+                                ? `试算 ${trialMatched}/${trialEvaluated} 行 · ${formatCoverage(trialCoverage ?? 0)}`
+                                : "试算 —"}
+                            </strong>
+                            {detailMapping ? (
+                              <button
+                                type="button"
+                                className={`mapping-validation-state is-${detailValidation.status}`}
+                                title="字段变更后会自动试算，也可以点击立即试算"
+                                disabled={detailValidation.status === "validating"}
+                                onClick={() => revalidateMapping(detailPath)}
+                              >
+                                <RefreshCw />
+                                {detailValidation.status === "validating" ? "正在试算" : detailValidation.status === "stale" ? "立即试算" : "重新试算"}
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                        {detailResult ? (
+                          <div className="issue-status-metrics" aria-label="处理结果">
+                            <span><b>{detailResult.totalRows ?? 0}</b><em>总行</em></span>
+                            <span><b>{detailResult.matchedRows ?? 0}</b><em>匹配</em></span>
+                            <span className={(detailResult.exceptionRows ?? 0) > 0 ? "is-alert" : undefined}><b>{detailResult.exceptionRows ?? 0}</b><em>异常</em></span>
+                          </div>
+                        ) : null}
+                        {detailResult?.message ? <p className="issue-status-message">{detailResult.message}</p> : null}
+                        {validationMessages.length > 0 ? (
+                          <div className={`issue-status-messages ${trialTone}`}>
+                            {validationMessages.map((message) => <span key={message}>{message}</span>)}
+                          </div>
+                        ) : null}
+                        {detailAnalysis && detailAnalysis.automationDecision.reasons.length > 0 ? (
+                          <ul className="decision-reasons is-compact">
+                            {detailAnalysis.automationDecision.reasons.map((reason) => (
+                              <DecisionReason
+                                reason={reason}
+                                bestScore={detailAnalysis.automationDecision.candidateScore}
+                                runnerUpScore={detailAnalysis.automationDecision.runnerUpScore}
+                                scoreKind={detailAnalysis.automationDecision.scoreKind}
+                                key={reason}
+                              />
+                            ))}
+                          </ul>
+                        ) : null}
+                      </section>
+                    );
+                  })()}
+                  {detailAnalysis && detailMapping ? <MappingEditor analysis={detailAnalysis} mapping={detailMapping} workbook={detailPreviewWorkbook} activeTarget={activeMappingTarget} validation={detailValidation} onActiveTargetChange={selectMappingTarget} onMappingChange={(mapping) => commitMapping(detailPath, mapping)} onColumnChange={(target, column, header) => changeMappingColumn(target, column, header)} onSheetChange={(orderSheet, pricingSheet, previewSheet) => { updateMapping(detailPath, orderSheet, pricingSheet); setDetailPreviewSheetName(previewSheet); }} onPreviewSheetChange={setDetailPreviewSheetName} onConfirm={() => void confirmAndContinue(detailPath)} /> : null}
+                  {detailPath && fileStatusByPath[detailPath] && tabForStatus(fileStatusByPath[detailPath]) === "error" ? <section className="issue-error-section"><Button type="button" variant="outline" size="sm" onClick={() => void retryAnalysis(detailPath)}><RefreshCw />重新分析此文件</Button></section> : null}
                 </div>
               </div>
             </motion.aside>
@@ -2252,11 +2350,37 @@ export function App(): React.JSX.Element {
               {!hasTableRows ? <div className="cyber-empty cyber-empty-overlay"><div className="cyber-empty-visual" aria-hidden="true"><Inbox /></div><strong>暂无文件</strong><span>导入后将在这里显示</span></div> : null}
             </div>
 
-            <footer className="cyber-pagination">
-              <button type="button" aria-label="上一页" disabled={pageIndex === 0} onClick={() => setPageIndex((current) => Math.max(0, current - 1))}><ChevronLeft /></button>
-              <strong>{pageIndex + 1}</strong>
-              <button type="button" aria-label="下一页" disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex((current) => Math.min(pageCount - 1, current + 1))}><ChevronRight /></button>
-              <select aria-label="每页条数" value={pageSize} onChange={(event) => setPageSize(Number(event.currentTarget.value))}><option value={50}>50 条/页</option><option value={100}>100 条/页</option><option value={200}>200 条/页</option><option value={500}>500 条/页</option><option value={1000}>1000 条/页</option></select>
+            <footer className="cyber-pagination" aria-label="分页">
+              <div className="cyber-pagination-info">
+                {visibleFiles.length === 0
+                  ? "共 0 条"
+                  : `共 ${visibleFiles.length} 条 · 第 ${pageIndex * pageSize + 1}–${Math.min((pageIndex + 1) * pageSize, visibleFiles.length)} 条`}
+              </div>
+              <div className="cyber-pagination-nav" role="navigation" aria-label="页码">
+                <button type="button" aria-label="上一页" disabled={pageIndex === 0} onClick={() => setPageIndex((current) => Math.max(0, current - 1))}>
+                  <ChevronLeft />
+                </button>
+                <span className="cyber-pagination-page" aria-current="page">
+                  {pageIndex + 1}<em>/</em>{pageCount}
+                </span>
+                <button type="button" aria-label="下一页" disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex((current) => Math.min(pageCount - 1, current + 1))}>
+                  <ChevronRight />
+                </button>
+              </div>
+              <label className="cyber-pagination-size">
+                <span>每页</span>
+                <select
+                  aria-label="每页条数"
+                  value={pageSize}
+                  onChange={(event) => setPageSize(Number(event.currentTarget.value))}
+                >
+                  <option value={50}>50 条</option>
+                  <option value={100}>100 条</option>
+                  <option value={200}>200 条</option>
+                  <option value={500}>500 条</option>
+                  <option value={1000}>1000 条</option>
+                </select>
+              </label>
             </footer>
           </section>
           </> : activePage === "config" ? (
