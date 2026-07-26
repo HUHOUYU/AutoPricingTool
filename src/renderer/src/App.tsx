@@ -243,7 +243,6 @@ function buildMapping(order: PriceAnalysisCandidate, pricing: PriceAnalysisCandi
     countryEnglishColumn: order.countryEnglishColumn ?? null,
     countryChineseColumn: order.countryChineseColumn ?? null,
     skuQtyPairs: order.skuQtyPairs ?? [],
-    shippingMethodColumn: order.shippingMethodColumn ?? null,
     singleShipmentColumn: order.singleShipmentColumn ?? null,
     orderPriceColumn: order.priceColumn ?? null,
     pricingSheet: pricing.sheetName,
@@ -251,7 +250,6 @@ function buildMapping(order: PriceAnalysisCandidate, pricing: PriceAnalysisCandi
     pricingQuantityHeaderRow: pricing.quantityHeaderRow ?? null,
     pricingSkuColumn: pricing.skuColumn ?? 1,
     pricingCountryColumn: pricing.countryColumn ?? 1,
-    pricingShippingMethodColumn: pricing.shippingMethodColumn ?? null,
     quantityTierColumns: pricing.tierColumns ?? [],
   });
 }
@@ -373,8 +371,11 @@ function mappingIsComplete(mapping: PriceCheckMapping | null | undefined): boole
     mapping.skuQtyPairs.length > 0 &&
     mapping.skuQtyPairs.every((pair) => (
       pair.qtyColumn > 0
-      && pair.qtyColumn + 1 === pair.skuColumn
-      && pair.skuColumn + 1 === pair.mergedQtyColumn
+      && pair.skuColumn > 0
+      && pair.mergedQtyColumn > 0
+      // 顺序：原始数量 → SKU → 合并数量；中间可夹其他列
+      && pair.qtyColumn < pair.skuColumn
+      && pair.skuColumn < pair.mergedQtyColumn
     )) &&
     mapping.pricingSkuColumn > 0 &&
     mapping.pricingCountryColumn > 0 &&
@@ -419,14 +420,12 @@ function mappingTargetLabel(target: MappingFieldTarget | null): string {
     countryCodeColumn: "国家二字码",
     countryEnglishColumn: "英文国家名",
     countryChineseColumn: "中文国家名",
-    shippingMethodColumn: "物流方式",
     singleShipmentColumn: "单独发货字段",
     orderPriceColumn: "原始价格",
     pricingHeaderRow: "核价表头行",
     pricingQuantityHeaderRow: "数量档位表头行",
     pricingSkuColumn: "核价 SKU",
     pricingCountryColumn: "核价国家",
-    pricingShippingMethodColumn: "核价物流",
   };
   if (labels[target]) return labels[target];
   const pair = /^skuQtyPairs\.(\d+)\.(skuColumn|qtyColumn|mergedQtyColumn)$/.exec(target);
@@ -448,7 +447,6 @@ function mappingColumnConflict(mapping: PriceCheckMapping, target: MappingFieldT
     ? [
         ["pricingSkuColumn", mapping.pricingSkuColumn],
         ["pricingCountryColumn", mapping.pricingCountryColumn],
-        ["pricingShippingMethodColumn", mapping.pricingShippingMethodColumn],
         ...mapping.quantityTierColumns.map((tier, index) => [`quantityTierColumns.${index}.column` as MappingFieldTarget, tier.column] as [MappingFieldTarget, number]),
       ]
     : [
@@ -456,7 +454,6 @@ function mappingColumnConflict(mapping: PriceCheckMapping, target: MappingFieldT
         ["countryCodeColumn", mapping.countryCodeColumn],
         ["countryEnglishColumn", mapping.countryEnglishColumn],
         ["countryChineseColumn", mapping.countryChineseColumn],
-        ["shippingMethodColumn", mapping.shippingMethodColumn],
         ["singleShipmentColumn", mapping.singleShipmentColumn],
         ["orderPriceColumn", mapping.orderPriceColumn],
         ...mapping.skuQtyPairs.flatMap((pair, index) => [
