@@ -53,6 +53,12 @@
       "单独发货价",
       "单独发货报价"
     ],
+    "single_shipment_matching_enabled": false,
+    "single_shipment_match_fields": [
+      "recipient_name",
+      "phone",
+      "postal_code"
+    ],
     "sku_qty_pair_selection": "max_match_coverage",
     "quantity_policy": "nearest",
     "multiply_quantity_by_price": true,

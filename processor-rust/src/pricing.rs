@@ -1,4 +1,6 @@
-use crate::config::{Config, CountryIdentity, FieldRule, PricingRules, load_config};
+use crate::config::{
+    Config, CountryIdentity, FieldRule, PricingRules, SingleShipmentMatchField, load_config,
+};
 use crate::country_catalog::COUNTRY_ALIASES;
 use crate::excel_engine::{CellValue, SheetData, WorkbookData};
 use crate::ipc::{config_path, emit};
@@ -107,6 +109,38 @@ const PRICE_ALIASES: &[&str] = &[
 const FIXED_PRICE_ALIASES: &[&str] = &["productshippingvattax", "shippingvattax"];
 const SINGLE_SHIPMENT_FIELD_ALIASES: &[&str] =
     &["name", "收件人", "收货人", "收件人姓名", "收货人姓名"];
+const SINGLE_SHIPMENT_PHONE_ALIASES: &[&str] = &[
+    "phone",
+    "phone number",
+    "telephone",
+    "mobile",
+    "电话",
+    "联系电话",
+    "手机",
+    "手机号码",
+    "收件人电话",
+];
+const SINGLE_SHIPMENT_POSTAL_CODE_ALIASES: &[&str] = &[
+    "zip code",
+    "zipcode",
+    "postal code",
+    "postcode",
+    "code",
+    "邮编",
+    "邮政编码",
+];
+const SINGLE_SHIPMENT_ADDRESS_ALIASES: &[&str] = &[
+    "address",
+    "address1",
+    "address2",
+    "street",
+    "street address",
+    "地址",
+    "地址1",
+    "地址2",
+    "详细地址",
+];
+const SINGLE_SHIPMENT_EMAIL_ALIASES: &[&str] = &["email", "buyeremail", "收件人邮箱", "邮箱"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
@@ -2959,31 +2993,183 @@ fn highest_priority_sku_qty_pair(mapping: &PriceCheckMapping) -> Option<(usize, 
         .max_by_key(|(_, pair)| (pair.merged_qty_column, pair.sku_column))
 }
 
-fn normalize_single_shipment_value(value: &str) -> String {
-    value.trim().to_lowercase()
+#[derive(Debug, Clone)]
+struct SingleShipmentMatchColumns {
+    field: SingleShipmentMatchField,
+    columns: Vec<usize>,
 }
 
-fn single_shipment_values_by_order(
+fn exact_header_columns(sheet: &SheetData, header_idx: usize, aliases: &[&str]) -> Vec<usize> {
+    let normalized_aliases = aliases
+        .iter()
+        .map(|alias| normalize_header(alias))
+        .collect::<HashSet<_>>();
+    sheet
+        .rows
+        .get(header_idx)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(column, cell)| {
+            normalized_aliases
+                .contains(&normalize_header(&cell.text()))
+                .then_some(column)
+        })
+        .collect()
+}
+
+fn single_shipment_match_columns(
     sheet: &SheetData,
     mapping: &PriceCheckMapping,
-) -> HashMap<String, HashSet<String>> {
-    let Some(column) = mapping.single_shipment_column else {
-        return HashMap::new();
+    config: &Config,
+) -> Option<Vec<SingleShipmentMatchColumns>> {
+    if !config.pricing.single_shipment_matching_enabled {
+        return None;
+    }
+    let header_idx = mapping.order_header_row.checked_sub(1)?;
+    let mut matches = Vec::new();
+    for field in &config.pricing.single_shipment_match_fields {
+        let mut columns = match field {
+            SingleShipmentMatchField::RecipientName => mapping
+                .single_shipment_column
+                .map(|column| vec![column.saturating_sub(1)])
+                .unwrap_or_else(|| {
+                    exact_header_columns(sheet, header_idx, SINGLE_SHIPMENT_FIELD_ALIASES)
+                }),
+            SingleShipmentMatchField::Phone => {
+                exact_header_columns(sheet, header_idx, SINGLE_SHIPMENT_PHONE_ALIASES)
+            }
+            SingleShipmentMatchField::PostalCode => {
+                exact_header_columns(sheet, header_idx, SINGLE_SHIPMENT_POSTAL_CODE_ALIASES)
+            }
+            SingleShipmentMatchField::Address => {
+                exact_header_columns(sheet, header_idx, SINGLE_SHIPMENT_ADDRESS_ALIASES)
+            }
+            SingleShipmentMatchField::Email => {
+                exact_header_columns(sheet, header_idx, SINGLE_SHIPMENT_EMAIL_ALIASES)
+            }
+        };
+        if columns.is_empty() {
+            return None;
+        }
+        if *field != SingleShipmentMatchField::Address {
+            columns.truncate(1);
+        }
+        matches.push(SingleShipmentMatchColumns {
+            field: *field,
+            columns,
+        });
+    }
+    (matches.len() >= 2).then_some(matches)
+}
+
+fn normalize_single_shipment_match_value(field: SingleShipmentMatchField, value: &str) -> String {
+    match field {
+        SingleShipmentMatchField::Phone | SingleShipmentMatchField::PostalCode => value
+            .chars()
+            .filter(|character| character.is_alphanumeric())
+            .flat_map(char::to_uppercase)
+            .collect(),
+        SingleShipmentMatchField::Email => value.trim().to_lowercase(),
+        SingleShipmentMatchField::RecipientName | SingleShipmentMatchField::Address => value
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_uppercase(),
+    }
+}
+
+fn single_shipment_match_key(
+    row: &[CellValue],
+    columns: &[SingleShipmentMatchColumns],
+) -> Option<String> {
+    let mut values = Vec::with_capacity(columns.len());
+    for matched in columns {
+        let combined = matched
+            .columns
+            .iter()
+            .filter_map(|column| row.get(*column).map(CellValue::text))
+            .filter(|value| !value.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let normalized = normalize_single_shipment_match_value(matched.field, &combined);
+        if normalized.is_empty() {
+            return None;
+        }
+        values.push(normalized);
+    }
+    Some(values.join("\u{1f}"))
+}
+
+fn single_shipment_orders(
+    sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    config: &Config,
+    resolved_quantities: &[ResolvedOrderQuantity],
+) -> HashSet<String> {
+    let Some(match_columns) = single_shipment_match_columns(sheet, mapping, config) else {
+        return HashSet::new();
     };
-    let mut orders_by_value: HashMap<String, HashSet<String>> = HashMap::new();
-    for row in sheet.rows.iter().skip(mapping.order_header_row) {
-        let business_order_number =
-            normalize_order_number(&cell_text(row, mapping.business_order_number_column));
-        let value = normalize_single_shipment_value(&cell_text(row, Some(column)));
-        if business_order_number.is_empty() || value.is_empty() {
+    let mut invalid_orders = HashSet::new();
+    let mut keys_by_order: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut main_skus_by_order: HashMap<String, HashSet<String>> = HashMap::new();
+    for resolved in resolved_quantities {
+        if resolved.business_order_number.is_empty() {
             continue;
         }
-        orders_by_value
-            .entry(value)
-            .or_default()
-            .insert(business_order_number);
+        let Some(row) = sheet.rows.get(resolved.source_row.saturating_sub(1)) else {
+            invalid_orders.insert(resolved.business_order_number.clone());
+            continue;
+        };
+        if resolved.quantity_error.is_some() {
+            invalid_orders.insert(resolved.business_order_number.clone());
+        }
+        if let Some(key) = single_shipment_match_key(row, &match_columns) {
+            keys_by_order
+                .entry(resolved.business_order_number.clone())
+                .or_default()
+                .insert(key);
+        } else {
+            invalid_orders.insert(resolved.business_order_number.clone());
+        }
+        if !resolved.absorbed
+            && resolved.quantity.is_some_and(|quantity| quantity > 0)
+            && !resolved.matched_sku.is_empty()
+        {
+            main_skus_by_order
+                .entry(resolved.business_order_number.clone())
+                .or_default()
+                .insert(resolved.matched_sku.clone());
+        }
     }
-    orders_by_value
+
+    let valid_keys = keys_by_order
+        .into_iter()
+        .filter_map(|(order, keys)| {
+            (!invalid_orders.contains(&order) && keys.len() == 1)
+                .then(|| (order, keys.into_iter().next().expect("one key")))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut orders_by_key: HashMap<String, HashSet<String>> = HashMap::new();
+    for (order, key) in &valid_keys {
+        orders_by_key
+            .entry(key.clone())
+            .or_default()
+            .insert(order.clone());
+    }
+
+    valid_keys
+        .into_iter()
+        .filter_map(|(order, key)| {
+            let one_order_per_key = orders_by_key
+                .get(&key)
+                .is_some_and(|orders| orders.len() == 1);
+            let one_main_sku = main_skus_by_order
+                .get(&order)
+                .is_some_and(|skus| skus.len() == 1);
+            (one_order_per_key && one_main_sku).then_some(order)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -3259,8 +3445,9 @@ fn read_order_lines(
 ) {
     let mut lines = Vec::new();
     let mut exceptions = Vec::new();
-    let single_shipment_values = single_shipment_values_by_order(sheet, mapping);
     let resolved_quantities = resolve_order_quantities(sheet, mapping, config);
+    let single_shipment_orders =
+        single_shipment_orders(sheet, mapping, config, &resolved_quantities);
     for resolved in &resolved_quantities {
         let row_index = resolved.source_row.saturating_sub(1);
         let Some(row) = sheet.rows.get(row_index) else {
@@ -3271,14 +3458,7 @@ fn read_order_lines(
         let english = cell_text(row, mapping.country_english_column);
         let chinese = cell_text(row, mapping.country_chinese_column);
         let country = normalize_order_country_fields(&code, &english, &chinese, &config.pricing);
-        let single_shipment_value = mapping
-            .single_shipment_column
-            .map(|column| normalize_single_shipment_value(&cell_text(row, Some(column))))
-            .unwrap_or_default();
-        let single_shipment = !single_shipment_value.is_empty()
-            && single_shipment_values
-                .get(&single_shipment_value)
-                .is_some_and(|orders| orders.len() == 1 && orders.contains(&business));
+        let single_shipment = single_shipment_orders.contains(&business);
         if let Some(error) = &resolved.quantity_error {
             exceptions.push(PriceCheckException {
                 file_path: String::new(),
@@ -6089,13 +6269,14 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
     }
 
     #[test]
-    fn name_is_single_shipment_only_when_absent_from_other_orders() {
+    fn joint_headers_require_complete_unique_single_sku_order() {
         let sheet = SheetData {
             name: "订单".to_string(),
             rows: vec![
                 vec![
                     CellValue::string("Order number"),
                     CellValue::string("Name"),
+                    CellValue::string("Phone"),
                     CellValue::string("前一 SKU"),
                     CellValue::string("Qty"),
                     CellValue::string("主要 SKU"),
@@ -6105,6 +6286,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("Alice"),
+                    CellValue::string("111"),
                     CellValue::string("ABC123"),
                     CellValue::string("1"),
                     CellValue::string("ABC123"),
@@ -6114,6 +6296,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("Alice"),
+                    CellValue::string("111"),
                     CellValue::string("ABC123"),
                     CellValue::string("1"),
                     CellValue::string("ABC123"),
@@ -6123,6 +6306,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-2"),
                     CellValue::string("Bob"),
+                    CellValue::string("222"),
                     CellValue::string("ABC123"),
                     CellValue::string("1"),
                     CellValue::string("ABC123"),
@@ -6132,9 +6316,40 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-3"),
                     CellValue::string("Bob"),
+                    CellValue::string("222"),
                     CellValue::string("ABC123"),
                     CellValue::string("1"),
                     CellValue::string("ABC123"),
+                    CellValue::string("1"),
+                    CellValue::string("US"),
+                ],
+                vec![
+                    CellValue::string("ORDER-4"),
+                    CellValue::string("Carol"),
+                    CellValue::string(""),
+                    CellValue::string("ABC123"),
+                    CellValue::string("1"),
+                    CellValue::string("ABC123"),
+                    CellValue::string("1"),
+                    CellValue::string("US"),
+                ],
+                vec![
+                    CellValue::string("ORDER-5"),
+                    CellValue::string("Dan"),
+                    CellValue::string("444"),
+                    CellValue::string("TC2500348"),
+                    CellValue::string("1"),
+                    CellValue::string("TC2500348"),
+                    CellValue::string("1"),
+                    CellValue::string("US"),
+                ],
+                vec![
+                    CellValue::string("ORDER-5"),
+                    CellValue::string("Dan"),
+                    CellValue::string("444"),
+                    CellValue::string("TC2500830"),
+                    CellValue::string("1"),
+                    CellValue::string("TC2500830"),
                     CellValue::string("1"),
                     CellValue::string("US"),
                 ],
@@ -6145,30 +6360,101 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             order_header_row: 1,
             business_order_number_column: Some(1),
             single_shipment_column: Some(2),
-            country_code_column: Some(7),
+            country_code_column: Some(8),
             sku_qty_pairs: vec![
                 SkuQtyPair {
-                    sku_column: 3,
-                    qty_column: 4,
+                    sku_column: 4,
+                    qty_column: 5,
                     ..SkuQtyPair::default()
                 },
                 SkuQtyPair {
-                    sku_column: 5,
-                    qty_column: 6,
-                    merged_qty_column: 6,
+                    sku_column: 6,
+                    qty_column: 7,
+                    merged_qty_column: 7,
                     ..SkuQtyPair::default()
                 },
             ],
             ..PriceCheckMapping::default()
         };
-        let (lines, exceptions, _) = read_order_lines(&sheet, &mapping, &Config::default());
+        let (default_lines, _, _) = read_order_lines(&sheet, &mapping, &Config::default());
+        let mut config = Config::default();
+        config.pricing.single_shipment_matching_enabled = true;
+        config.pricing.single_shipment_match_fields = vec![
+            SingleShipmentMatchField::RecipientName,
+            SingleShipmentMatchField::Phone,
+        ];
+        let (lines, exceptions, _) = read_order_lines(&sheet, &mapping, &config);
 
         assert!(exceptions.is_empty());
-        assert_eq!(lines.len(), 4);
+        assert!(default_lines.iter().all(|line| !line.single_shipment));
+        assert_eq!(lines.len(), 7);
         assert!(lines[0].single_shipment);
         assert!(lines[1].single_shipment);
         assert!(!lines[2].single_shipment);
         assert!(!lines[3].single_shipment);
+        assert!(!lines[4].single_shipment);
+        assert!(!lines[5].single_shipment);
+        assert!(!lines[6].single_shipment);
+
+        let pricing_sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("TC2500830"),
+                    CellValue::string("US"),
+                    CellValue::string("2.9"),
+                ],
+                vec![
+                    CellValue::string("单独发货价格"),
+                    CellValue::string(""),
+                    CellValue::string(""),
+                ],
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("TC2500830"),
+                    CellValue::string("US"),
+                    CellValue::string("5.59"),
+                ],
+            ],
+        };
+        let pricing_mapping = PriceCheckMapping {
+            pricing_sheet: "核价".to_string(),
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 3,
+                header: "1".to_string(),
+            }],
+            ..PriceCheckMapping::default()
+        };
+        let price_index = build_price_index(&pricing_sheet, &pricing_mapping, &config.pricing);
+        let accessory = lines
+            .iter()
+            .find(|line| line.business_order_number == "ORDER-5" && line.matched_sku == "TC2500830")
+            .expect("joint shipment accessory");
+
+        assert_eq!(
+            price_index
+                .lookup_with_single_shipment_preference(
+                    &accessory.country.code,
+                    &accessory.matched_sku,
+                    accessory.quantity as i64,
+                    accessory.single_shipment,
+                )
+                .price,
+            Some(2.9)
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use regex::Regex;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -51,6 +51,20 @@ pub(crate) struct PricingRules {
     pub(crate) country_identity: Vec<CountryIdentity>,
     #[serde(default = "default_single_shipment_price_marker_aliases")]
     pub(crate) single_shipment_price_marker_aliases: Vec<String>,
+    #[serde(default)]
+    pub(crate) single_shipment_matching_enabled: bool,
+    #[serde(default = "default_single_shipment_match_fields")]
+    pub(crate) single_shipment_match_fields: Vec<SingleShipmentMatchField>,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SingleShipmentMatchField {
+    RecipientName,
+    Phone,
+    PostalCode,
+    Address,
+    Email,
 }
 
 impl PricingRules {
@@ -64,6 +78,8 @@ impl Default for PricingRules {
         Self {
             country_identity: default_country_identity(),
             single_shipment_price_marker_aliases: default_single_shipment_price_marker_aliases(),
+            single_shipment_matching_enabled: false,
+            single_shipment_match_fields: default_single_shipment_match_fields(),
         }
     }
 }
@@ -332,6 +348,15 @@ fn default_single_shipment_price_marker_aliases() -> Vec<String> {
         .collect()
 }
 
+fn default_single_shipment_match_fields() -> Vec<SingleShipmentMatchField> {
+    [
+        SingleShipmentMatchField::RecipientName,
+        SingleShipmentMatchField::Phone,
+        SingleShipmentMatchField::PostalCode,
+    ]
+    .to_vec()
+}
+
 fn default_auto_run() -> bool {
     true
 }
@@ -485,6 +510,19 @@ pub(crate) fn load_config(path: &Path) -> Result<Config> {
 fn prepare_config(config: &mut Config) -> Result<()> {
     if config.pricing.country_identity.is_empty() {
         anyhow::bail!("pricing.country_identity 至少需要保留一个国家身份字段");
+    }
+    if config.pricing.single_shipment_matching_enabled
+        && config
+            .pricing
+            .single_shipment_match_fields
+            .iter()
+            .collect::<HashSet<_>>()
+            .len()
+            < 2
+    {
+        anyhow::bail!(
+            "pricing.single_shipment_match_fields 开启单独发货匹配时至少需要两个不同字段"
+        );
     }
     config.filename_rules.compiled_date_patterns =
         compile_indexed_patterns(&config.filename_rules.date_patterns)?;
@@ -655,6 +693,38 @@ mod tests {
                 .single_shipment_price_marker_aliases
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn single_shipment_matching_is_disabled_for_old_configs() {
+        let config: Config = serde_json::from_str("{}").expect("old config must use defaults");
+
+        assert!(!config.pricing.single_shipment_matching_enabled);
+        assert_eq!(
+            config.pricing.single_shipment_match_fields,
+            [
+                SingleShipmentMatchField::RecipientName,
+                SingleShipmentMatchField::Phone,
+                SingleShipmentMatchField::PostalCode,
+            ]
+        );
+    }
+
+    #[test]
+    fn enabled_single_shipment_matching_requires_two_distinct_fields() {
+        let mut config: Config = serde_json::from_str(
+            r#"{
+                "pricing": {
+                    "single_shipment_matching_enabled": true,
+                    "single_shipment_match_fields": ["recipient_name", "recipient_name"]
+                }
+            }"#,
+        )
+        .expect("supported fields must parse");
+
+        let error = prepare_config(&mut config).expect_err("duplicate fields must not be enough");
+
+        assert!(error.to_string().contains("至少需要两个不同字段"));
     }
 
     #[test]
