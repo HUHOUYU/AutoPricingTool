@@ -323,7 +323,8 @@ pub(crate) struct PriceWritebackRow {
     pub(crate) matched: bool,
     pub(crate) pricing_price: Option<f64>,
     pub(crate) price_difference: Option<f64>,
-    pub(crate) quantity: usize,
+    pub(crate) quantity: Option<usize>,
+    pub(crate) quantity_error: Option<String>,
     pub(crate) quantity_mismatch: bool,
 }
 
@@ -366,7 +367,8 @@ pub(crate) struct PricePreviewWritebackRow {
     source_row: usize,
     pricing_price: Option<f64>,
     price_difference: Option<f64>,
-    quantity: usize,
+    quantity: Option<usize>,
+    quantity_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -781,12 +783,29 @@ fn validate_price_mapping(
     }
 
     let index = build_price_index(pricing_sheet, mapping, &config.pricing);
-    let lines = read_order_lines(order_sheet, mapping, config).0;
+    let (lines, quantity_exceptions, resolved_quantities) =
+        read_order_lines(order_sheet, mapping, config);
     let evaluated_rows = lines.len();
     let (matched_rows, matched_order_rows) = evaluate_matches(&index, &lines);
-    let writeback_rows = calculate_preview_writeback_rows(order_sheet, mapping, &index, &lines);
+    let writeback_rows = calculate_preview_writeback_rows(
+        order_sheet,
+        mapping,
+        &index,
+        &lines,
+        &resolved_quantities,
+    );
     let coverage = ratio(matched_rows, evaluated_rows);
     let mut warnings = Vec::new();
+    let quantity_exception_count = quantity_exceptions
+        .iter()
+        .filter(|exception| matches!(exception.kind.as_str(), "数量无效" | "SKU关系无法计算"))
+        .count();
+    if quantity_exception_count > 0 {
+        warnings.push(format!(
+            "{} 行数量无法计算，需要确认",
+            quantity_exception_count
+        ));
+    }
     if evaluated_rows == 0 {
         warnings.push("没有可用于试算的订单行".to_string());
     } else if evaluated_rows < config.automation.min_trial_rows && coverage < 1.0 {
@@ -842,6 +861,7 @@ fn calculate_preview_writeback_rows(
     mapping: &PriceCheckMapping,
     index: &PriceIndex,
     lines: &[OrderLine],
+    resolved_quantities: &[ResolvedOrderQuantity],
 ) -> Vec<PricePreviewWritebackRow> {
     let mut matched_candidates = HashMap::new();
     for item in aggregate_lines(lines) {
@@ -857,15 +877,21 @@ fn calculate_preview_writeback_rows(
             record_matched_candidates(&mut matched_candidates, &item, pricing_price);
         }
     }
-    build_writeback_rows(order_sheet, mapping, &matched_candidates)
-        .into_iter()
-        .map(|row| PricePreviewWritebackRow {
-            source_row: row.source_row,
-            pricing_price: row.pricing_price,
-            price_difference: row.price_difference,
-            quantity: row.quantity,
-        })
-        .collect()
+    build_writeback_rows(
+        order_sheet,
+        mapping,
+        &matched_candidates,
+        resolved_quantities,
+    )
+    .into_iter()
+    .map(|row| PricePreviewWritebackRow {
+        source_row: row.source_row,
+        pricing_price: row.pricing_price,
+        price_difference: row.price_difference,
+        quantity: row.quantity,
+        quantity_error: row.quantity_error,
+    })
+    .collect()
 }
 
 fn command_files(command: &Value) -> Result<Vec<PathBuf>> {
@@ -1128,6 +1154,28 @@ fn analyze_path_with_templates(
     automation_decision.candidate_score = candidate_score;
     automation_decision.runner_up_score = runner_up_score;
     automation_decision.score_kind = automation_score_kind;
+    if let Some(mapping) = suggested_mapping.as_ref()
+        && let Some(order_sheet) = workbook
+            .sheets
+            .iter()
+            .find(|sheet| sheet.name == mapping.order_sheet)
+    {
+        let quantity_exception_count = read_order_lines(order_sheet, mapping, config)
+            .1
+            .iter()
+            .filter(|exception| matches!(exception.kind.as_str(), "数量无效" | "SKU关系无法计算"))
+            .count();
+        if quantity_exception_count > 0 {
+            let reason = format!("{quantity_exception_count} 行数量无法计算，需要确认");
+            if !automation_decision.reasons.contains(&reason) {
+                automation_decision.reasons.push(reason.clone());
+            }
+            if automation_decision.status == "eligible" {
+                automation_decision.status = "confirm".to_string();
+            }
+            issues.push(reason);
+        }
+    }
     let requires_confirmation = automation_decision.status != "eligible";
     if suggested_mapping
         .as_ref()
@@ -1153,12 +1201,13 @@ fn analyze_path_with_templates(
                 .iter()
                 .find(|sheet| sheet.name == mapping.pricing_sheet)?;
             let index = build_price_index(pricing_sheet, mapping, &config.pricing);
-            let lines = read_order_lines(order_sheet, mapping, config).0;
+            let (lines, _, resolved_quantities) = read_order_lines(order_sheet, mapping, config);
             Some(calculate_preview_writeback_rows(
                 order_sheet,
                 mapping,
                 &index,
                 &lines,
+                &resolved_quantities,
             ))
         })
         .unwrap_or_default();
@@ -2688,22 +2737,110 @@ fn parse_price(cell: &CellValue) -> Option<f64> {
 }
 
 fn normalize_sku(value: &str) -> String {
-    normalize_sku_and_multiplier(value).0
-}
-
-fn normalize_sku_and_multiplier(value: &str) -> (String, usize) {
-    let normalized = value
+    value
         .trim()
         .replace([' ', '\u{3000}', '\t', '\r', '\n'], "")
-        .to_ascii_uppercase();
-    let Some((sku, multiplier)) = normalized.rsplit_once('*') else {
-        return (normalized, 1);
-    };
-    let multiplier = multiplier.parse::<usize>().ok().filter(|value| *value > 0);
-    match multiplier {
-        Some(multiplier) if !sku.is_empty() => (sku.to_string(), multiplier),
-        _ => (normalized, 1),
+        .to_ascii_uppercase()
+}
+
+fn normalize_order_number(value: &str) -> String {
+    value.trim().to_ascii_uppercase()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkuExpression {
+    normalized: String,
+    components: HashMap<String, usize>,
+}
+
+fn parse_sku_expression(value: &str) -> Result<SkuExpression, String> {
+    let normalized = normalize_sku(value);
+    if normalized.is_empty() {
+        return Err("SKU为空".to_string());
     }
+    let mut components = HashMap::new();
+    for raw_component in normalized.split('+') {
+        if raw_component.is_empty() {
+            return Err(format!("SKU格式无效: {normalized}"));
+        }
+        let (sku, multiplier) = if let Some((sku, multiplier)) = raw_component.rsplit_once('*') {
+            let multiplier = multiplier
+                .parse::<usize>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| format!("SKU倍数无效: {raw_component}"))?;
+            if sku.is_empty() {
+                return Err(format!("SKU格式无效: {raw_component}"));
+            }
+            (sku, multiplier)
+        } else {
+            (raw_component, 1)
+        };
+        let total = components.entry(sku.to_string()).or_insert(0usize);
+        *total = total
+            .checked_add(multiplier)
+            .ok_or_else(|| format!("SKU倍数过大: {raw_component}"))?;
+    }
+    Ok(SkuExpression {
+        normalized,
+        components,
+    })
+}
+
+fn calculate_related_quantity(
+    main_sku: &str,
+    previous_sku: &str,
+    source_quantity: usize,
+) -> Result<usize, String> {
+    let main = parse_sku_expression(main_sku)?;
+    let previous = parse_sku_expression(previous_sku)?;
+    if main.normalized == previous.normalized {
+        return Ok(source_quantity);
+    }
+
+    // 主要 SKU 为基础子串时，累计前一 SKU 中所有对应组件的件数。
+    if main.components.len() == 1
+        && main.components.values().next() == Some(&1)
+        && !main.normalized.contains(['+', '*'])
+    {
+        let multiplier = previous
+            .components
+            .iter()
+            .filter_map(|(sku, quantity)| sku.contains(&main.normalized).then_some(*quantity))
+            .try_fold(0usize, |total, quantity| total.checked_add(quantity));
+        if let Some(multiplier) = multiplier.filter(|value| *value > 0) {
+            return source_quantity
+                .checked_mul(multiplier)
+                .ok_or_else(|| "数量计算溢出".to_string());
+        }
+    }
+
+    // 复合 SKU 不相同时，仅使用双方共同组件的倍数比例；比例冲突则不猜测。
+    let shared_ratios = previous
+        .components
+        .iter()
+        .filter_map(|(sku, previous_count)| {
+            main.components
+                .get(sku)
+                .map(|main_count| (*previous_count, *main_count))
+        })
+        .collect::<Vec<_>>();
+    let Some((ratio_numerator, ratio_denominator)) = shared_ratios.first().copied() else {
+        return Err(format!(
+            "SKU关系无法计算: 前一SKU {previous_sku} 与主要SKU {main_sku} 无共同组件"
+        ));
+    };
+    if shared_ratios.iter().any(|(numerator, denominator)| {
+        numerator.saturating_mul(ratio_denominator) != ratio_numerator.saturating_mul(*denominator)
+    }) {
+        return Err(format!(
+            "SKU关系无法计算: 前一SKU {previous_sku} 与主要SKU {main_sku} 的组件比例冲突"
+        ));
+    }
+    let scaled = source_quantity
+        .checked_mul(ratio_numerator)
+        .ok_or_else(|| "数量计算溢出".to_string())?;
+    Ok(scaled.div_ceil(ratio_denominator))
 }
 
 fn country_token(value: &str) -> String {
@@ -2835,7 +2972,8 @@ fn single_shipment_values_by_order(
     };
     let mut orders_by_value: HashMap<String, HashSet<String>> = HashMap::new();
     for row in sheet.rows.iter().skip(mapping.order_header_row) {
-        let business_order_number = cell_text(row, mapping.business_order_number_column);
+        let business_order_number =
+            normalize_order_number(&cell_text(row, mapping.business_order_number_column));
         let value = normalize_single_shipment_value(&cell_text(row, Some(column)));
         if business_order_number.is_empty() || value.is_empty() {
             continue;
@@ -2848,22 +2986,291 @@ fn single_shipment_values_by_order(
     orders_by_value
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedOrderQuantity {
+    source_row: usize,
+    business_order_number: String,
+    raw_sku: String,
+    matched_sku: String,
+    quantity: Option<usize>,
+    quantity_error: Option<String>,
+    absorbed: bool,
+    sku_pair_priority: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QuantitySourceColumns {
+    main_sku: usize,
+    previous_sku: usize,
+    quantity: usize,
+}
+
+fn quantity_source_columns(
+    sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    config: &Config,
+) -> Result<QuantitySourceColumns, String> {
+    let Some((_, main_pair)) = highest_priority_sku_qty_pair(mapping) else {
+        return Err("没有主要 SKU 映射".to_string());
+    };
+    let header_idx = mapping.order_header_row.saturating_sub(1);
+    if header_idx >= sheet.rows.len() {
+        return Err("订单表头行超出范围".to_string());
+    }
+    let main_sku = main_pair.sku_column.saturating_sub(1);
+    let mut sku_columns = configured_matching_columns(
+        sheet,
+        header_idx,
+        order_field_rule(config, "sku"),
+        SKU_ALIASES,
+    );
+    sku_columns.extend(
+        mapping
+            .sku_qty_pairs
+            .iter()
+            .map(|pair| pair.sku_column.saturating_sub(1)),
+    );
+    sku_columns.push(main_sku);
+    sku_columns.sort_unstable();
+    sku_columns.dedup();
+    let previous_sku = sku_columns
+        .iter()
+        .copied()
+        .filter(|column| *column < main_sku)
+        .max()
+        .ok_or_else(|| "主要 SKU 左侧找不到前一个 SKU 列".to_string())?;
+
+    let mut quantity_columns = configured_matching_columns(
+        sheet,
+        header_idx,
+        order_field_rule(config, "quantity"),
+        QTY_ALIASES,
+    );
+    quantity_columns.extend(
+        mapping
+            .sku_qty_pairs
+            .iter()
+            .map(|pair| pair.qty_column.saturating_sub(1)),
+    );
+    quantity_columns.sort_unstable();
+    quantity_columns.dedup();
+
+    // 先取前一 SKU 右侧、主要 SKU 左侧的最近数量列；主要 SKU 是不可跨越的硬边界。
+    let right_quantity = quantity_columns
+        .iter()
+        .copied()
+        .filter(|column| *column > previous_sku && *column < main_sku)
+        .min();
+    let left_sku_boundary = sku_columns
+        .iter()
+        .copied()
+        .filter(|column| *column < previous_sku)
+        .max();
+    let left_quantity = quantity_columns
+        .iter()
+        .copied()
+        .filter(|column| {
+            *column < previous_sku && left_sku_boundary.is_none_or(|boundary| *column > boundary)
+        })
+        .max();
+    let quantity = right_quantity
+        .or(left_quantity)
+        .ok_or_else(|| "前一个 SKU 两侧的限定区间内找不到对应数量列".to_string())?;
+    Ok(QuantitySourceColumns {
+        main_sku,
+        previous_sku,
+        quantity,
+    })
+}
+
+fn resolve_order_quantities(
+    sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    config: &Config,
+) -> Vec<ResolvedOrderQuantity> {
+    let source_columns = quantity_source_columns(sheet, mapping, config);
+    let sku_pair_priority = highest_priority_sku_qty_pair(mapping)
+        .map(|(priority, _)| priority)
+        .unwrap_or_default();
+    let mut resolved = Vec::new();
+    for (row_index, row) in sheet.rows.iter().enumerate().skip(mapping.order_header_row) {
+        let source_row = row_index + 1;
+        let business_order_number =
+            normalize_order_number(&cell_text(row, mapping.business_order_number_column));
+        let raw_sku = source_columns
+            .as_ref()
+            .ok()
+            .and_then(|columns| row.get(columns.main_sku))
+            .map(CellValue::text)
+            .unwrap_or_else(|| {
+                highest_priority_sku_qty_pair(mapping)
+                    .map(|(_, pair)| cell_text(row, Some(pair.sku_column)))
+                    .unwrap_or_default()
+            });
+        if business_order_number.is_empty() && raw_sku.is_empty() {
+            continue;
+        }
+        let matched_sku = normalize_sku(&raw_sku);
+        let quantity_result = if business_order_number.is_empty() {
+            Err("订单号为空".to_string())
+        } else if raw_sku.is_empty() {
+            Err("主要 SKU 为空".to_string())
+        } else {
+            source_columns
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|columns| {
+                    let previous_sku = row
+                        .get(columns.previous_sku)
+                        .map(CellValue::text)
+                        .unwrap_or_default();
+                    if previous_sku.is_empty() {
+                        return Err("前一个 SKU 为空，SKU关系无法计算".to_string());
+                    }
+                    let quantity = row
+                        .get(columns.quantity)
+                        .and_then(parse_number)
+                        .filter(|value| *value >= 0.0 && value.fract() == 0.0)
+                        .ok_or_else(|| {
+                            format!(
+                                "数量无效: {} 列没有可用非负整数",
+                                excel_column_label(columns.quantity + 1)
+                            )
+                        })?;
+                    calculate_related_quantity(&raw_sku, &previous_sku, quantity as usize)
+                })
+        };
+        resolved.push(ResolvedOrderQuantity {
+            source_row,
+            business_order_number,
+            raw_sku,
+            matched_sku,
+            quantity: quantity_result.as_ref().ok().copied(),
+            quantity_error: quantity_result.err(),
+            absorbed: false,
+            sku_pair_priority,
+        });
+    }
+
+    // 吸收严格按订单隔离，且仅处理原金额明确为 0 的独立 SKU 行。
+    let mut order_rows: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, item) in resolved.iter().enumerate() {
+        if !item.business_order_number.is_empty() {
+            order_rows
+                .entry(item.business_order_number.clone())
+                .or_default()
+                .push(index);
+        }
+    }
+    for indexes in order_rows.values() {
+        for source_index in indexes {
+            let source = &resolved[*source_index];
+            if source.quantity.is_none() {
+                continue;
+            }
+            let original_price = mapping
+                .order_price_column
+                .and_then(|column| {
+                    sheet
+                        .rows
+                        .get(source.source_row.saturating_sub(1))?
+                        .get(column.saturating_sub(1))
+                })
+                .and_then(parse_price);
+            if original_price != Some(0.0) {
+                continue;
+            }
+            let Ok(source_expression) = parse_sku_expression(&source.matched_sku) else {
+                continue;
+            };
+            let targets = indexes
+                .iter()
+                .filter_map(|target_index| {
+                    if target_index == source_index {
+                        return None;
+                    }
+                    let target = &resolved[*target_index];
+                    target.quantity?;
+                    let expression = parse_sku_expression(&target.matched_sku).ok()?;
+                    (expression.components.len() > 1
+                        && expression.normalized != source_expression.normalized
+                        && source_expression.components.iter().all(|(sku, quantity)| {
+                            expression
+                                .components
+                                .get(sku)
+                                .is_some_and(|target_quantity| target_quantity >= quantity)
+                        }))
+                    .then_some(target.matched_sku.clone())
+                })
+                .collect::<HashSet<_>>();
+            if targets.len() == 1 {
+                let source = &mut resolved[*source_index];
+                source.quantity = Some(0);
+                source.absorbed = true;
+            } else if targets.len() > 1 {
+                let source = &mut resolved[*source_index];
+                source.quantity = None;
+                source.quantity_error =
+                    Some("SKU关系无法计算: 同订单内存在多个可吸收的复合主要 SKU".to_string());
+            }
+        }
+    }
+
+    // 同订单、同主要 SKU 全局合并；首行保留合计，后续行写 0。
+    let mut groups: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    for (index, item) in resolved.iter().enumerate() {
+        if !item.absorbed
+            && item.quantity.is_some()
+            && !item.business_order_number.is_empty()
+            && !item.matched_sku.is_empty()
+        {
+            groups
+                .entry((item.business_order_number.clone(), item.matched_sku.clone()))
+                .or_default()
+                .push(index);
+        }
+    }
+    for indexes in groups.values() {
+        let total = indexes.iter().try_fold(0usize, |total, index| {
+            total.checked_add(resolved[*index].quantity.unwrap_or_default())
+        });
+        if let Some(total) = total {
+            for (position, index) in indexes.iter().enumerate() {
+                resolved[*index].quantity = Some(if position == 0 { total } else { 0 });
+            }
+        } else {
+            for index in indexes {
+                resolved[*index].quantity = None;
+                resolved[*index].quantity_error = Some("数量合并溢出".to_string());
+            }
+        }
+    }
+    resolved
+}
+
 fn read_order_lines(
     sheet: &SheetData,
     mapping: &PriceCheckMapping,
     config: &Config,
-) -> (Vec<OrderLine>, Vec<PriceCheckException>) {
+) -> (
+    Vec<OrderLine>,
+    Vec<PriceCheckException>,
+    Vec<ResolvedOrderQuantity>,
+) {
     let mut lines = Vec::new();
     let mut exceptions = Vec::new();
     let single_shipment_values = single_shipment_values_by_order(sheet, mapping);
-    let data_start = mapping.order_header_row;
-    for (row_index, row) in sheet.rows.iter().enumerate().skip(data_start) {
-        let business = cell_text(row, mapping.business_order_number_column);
+    let resolved_quantities = resolve_order_quantities(sheet, mapping, config);
+    for resolved in &resolved_quantities {
+        let row_index = resolved.source_row.saturating_sub(1);
+        let Some(row) = sheet.rows.get(row_index) else {
+            continue;
+        };
+        let business = resolved.business_order_number.clone();
         let code = cell_text(row, mapping.country_code_column);
         let english = cell_text(row, mapping.country_english_column);
         let chinese = cell_text(row, mapping.country_chinese_column);
-        let mut country =
-            normalize_order_country_fields(&code, &english, &chinese, &config.pricing);
+        let country = normalize_order_country_fields(&code, &english, &chinese, &config.pricing);
         let single_shipment_value = mapping
             .single_shipment_column
             .map(|column| normalize_single_shipment_value(&cell_text(row, Some(column))))
@@ -2872,89 +3279,52 @@ fn read_order_lines(
             && single_shipment_values
                 .get(&single_shipment_value)
                 .is_some_and(|orders| orders.len() == 1 && orders.contains(&business));
-        if business.is_empty() {
+        if let Some(error) = &resolved.quantity_error {
+            exceptions.push(PriceCheckException {
+                file_path: String::new(),
+                sheet_name: sheet.name.clone(),
+                source_row: Some(resolved.source_row),
+                kind: if error.starts_with("数量") {
+                    "数量无效".to_string()
+                } else {
+                    "SKU关系无法计算".to_string()
+                },
+                message: error.clone(),
+            });
             continue;
         }
-        let mut row_has_sku = false;
-        if let Some((sku_pair_priority, pair)) = highest_priority_sku_qty_pair(mapping) {
-            let raw_sku = cell_text(row, Some(pair.sku_column));
-            if raw_sku.is_empty() {
-                continue;
-            }
-            row_has_sku = true;
-            let quantity = row
-                .get(pair.qty_column.saturating_sub(1))
-                .and_then(parse_number);
-            let Some(quantity) = quantity.filter(|value| *value >= 0.0) else {
-                exceptions.push(PriceCheckException {
-                    file_path: String::new(),
-                    sheet_name: sheet.name.clone(),
-                    source_row: Some(row_index + 1),
-                    kind: "数量无效".to_string(),
-                    message: format!("SKU {} 没有可用数量", raw_sku),
-                });
-                continue;
-            };
-            if quantity.fract() != 0.0 {
-                exceptions.push(PriceCheckException {
-                    file_path: String::new(),
-                    sheet_name: sheet.name.clone(),
-                    source_row: Some(row_index + 1),
-                    kind: "数量无效".to_string(),
-                    message: format!("SKU {} 的数量不是整数: {}", raw_sku, quantity),
-                });
-                continue;
-            }
-            if country.conflict {
-                exceptions.push(PriceCheckException {
-                    file_path: String::new(),
-                    sheet_name: sheet.name.clone(),
-                    source_row: Some(row_index + 1),
-                    kind: "国家三要素冲突".to_string(),
-                    message: country.reason.clone(),
-                });
-                continue;
-            }
-            let (matched_sku, sku_multiplier) = normalize_sku_and_multiplier(&raw_sku);
+        if resolved.absorbed {
+            continue;
+        }
+        if country.conflict {
+            exceptions.push(PriceCheckException {
+                file_path: String::new(),
+                sheet_name: sheet.name.clone(),
+                source_row: Some(resolved.source_row),
+                kind: "国家三要素冲突".to_string(),
+                message: country.reason.clone(),
+            });
+            continue;
+        }
+        if let Some(quantity) = resolved.quantity {
             lines.push(OrderLine {
-                business_order_number: business.clone(),
-                country: country.clone(),
+                business_order_number: business,
+                country,
                 single_shipment,
-                original_sku: raw_sku,
-                matched_sku,
-                quantity: quantity * sku_multiplier as f64,
+                original_sku: resolved.raw_sku.clone(),
+                matched_sku: resolved.matched_sku.clone(),
+                quantity: quantity as f64,
                 original_price: mapping
                     .order_price_column
                     .and_then(|column| row.get(column.saturating_sub(1)))
                     .and_then(parse_price),
                 source_sheet: sheet.name.clone(),
-                source_row: row_index + 1,
-                sku_pair_priority,
+                source_row: resolved.source_row,
+                sku_pair_priority: resolved.sku_pair_priority,
             });
-        }
-        if !row_has_sku && !mapping.sku_qty_pairs.is_empty() {
-            exceptions.push(PriceCheckException {
-                file_path: String::new(),
-                sheet_name: sheet.name.clone(),
-                source_row: Some(row_index + 1),
-                kind: "SKU为空".to_string(),
-                message: "订单记录没有可用 SKU".to_string(),
-            });
-        }
-        let has_enabled_country_value = [
-            (CountryIdentity::Iso2, &code),
-            (CountryIdentity::English, &english),
-            (CountryIdentity::Chinese, &chinese),
-        ]
-        .into_iter()
-        .any(|(identity, value)| {
-            config.pricing.uses_country_identity(identity) && !value.is_empty()
-        });
-        if !country.conflict && country.code.is_empty() && has_enabled_country_value {
-            country.reason = "国家字段无法标准化".to_string();
         }
     }
-    (lines, exceptions)
+    (lines, exceptions, resolved_quantities)
 }
 
 fn build_price_index(
@@ -3128,49 +3498,19 @@ fn build_writeback_rows(
     sheet: &SheetData,
     mapping: &PriceCheckMapping,
     candidates: &HashMap<usize, MatchedRowCandidate>,
+    resolved_quantities: &[ResolvedOrderQuantity],
 ) -> Vec<PriceWritebackRow> {
     let Some((_, pair)) = highest_priority_sku_qty_pair(mapping) else {
         return Vec::new();
     };
-    let mut group_quantities: HashMap<(String, String), usize> = HashMap::new();
-    for row in sheet.rows.iter().skip(mapping.order_header_row) {
-        let order_number = cell_text(row, mapping.business_order_number_column);
-        if order_number.is_empty() {
-            continue;
-        }
-        let (sku, sku_multiplier) =
-            normalize_sku_and_multiplier(&cell_text(row, Some(pair.sku_column)));
-        let row_quantity = row
-            .get(pair.qty_column.saturating_sub(1))
-            .and_then(parse_number)
-            .filter(|value| *value >= 0.0 && value.fract() == 0.0)
-            .map(|value| value as usize * sku_multiplier);
-        if !sku.is_empty() {
-            *group_quantities.entry((order_number, sku)).or_default() +=
-                row_quantity.unwrap_or_default();
-        }
-    }
-
-    let mut seen_groups = HashSet::new();
     let mut rows = Vec::new();
-    for (row_index, row) in sheet.rows.iter().enumerate().skip(mapping.order_header_row) {
-        let order_number = cell_text(row, mapping.business_order_number_column);
-        if order_number.is_empty() {
+    for resolved in resolved_quantities {
+        let Some(row) = sheet.rows.get(resolved.source_row.saturating_sub(1)) else {
             continue;
-        }
-        let source_row = row_index + 1;
-        let candidate = candidates.get(&source_row);
-        let sku = normalize_sku(&cell_text(row, Some(pair.sku_column)));
-        let quantity = if sku.is_empty() {
-            0
-        } else {
-            let group = (order_number, sku);
-            if seen_groups.insert(group.clone()) {
-                group_quantities.get(&group).copied().unwrap_or_default()
-            } else {
-                0
-            }
         };
+        let source_row = resolved.source_row;
+        let candidate = candidates.get(&source_row);
+        let quantity = resolved.quantity;
         let merged_quantity = row
             .get(pair.merged_qty_column.saturating_sub(1))
             .and_then(parse_number)
@@ -3188,7 +3528,8 @@ fn build_writeback_rows(
             price_difference: candidate
                 .and_then(|value| original_price.map(|original| value.pricing_price - original)),
             quantity,
-            quantity_mismatch: merged_quantity != Some(quantity),
+            quantity_error: resolved.quantity_error.clone(),
+            quantity_mismatch: quantity.is_some_and(|quantity| merged_quantity != Some(quantity)),
         });
     }
     rows
@@ -3219,7 +3560,8 @@ fn process_price_file(
         .iter()
         .find(|sheet| sheet.name == mapping.pricing_sheet)
         .ok_or_else(|| anyhow!("找不到核价 Sheet: {}", mapping.pricing_sheet))?;
-    let (lines, mut exceptions) = read_order_lines(order_sheet, mapping, config);
+    let (lines, mut exceptions, resolved_quantities) =
+        read_order_lines(order_sheet, mapping, config);
     for exception in &mut exceptions {
         exception.file_path = input_path.display().to_string();
     }
@@ -3295,7 +3637,12 @@ fn process_price_file(
     }
     let total_rows = rows.len();
     let output_path = output_path_for(input_path, output_dir);
-    let mut writeback_rows = build_writeback_rows(order_sheet, mapping, &matched_candidates);
+    let mut writeback_rows = build_writeback_rows(
+        order_sheet,
+        mapping,
+        &matched_candidates,
+        &resolved_quantities,
+    );
     apply_writeback_overrides(&mut writeback_rows, writeback_overrides);
     let mut report = PriceCheckReport {
         input_path: input_path.display().to_string(),
@@ -3371,6 +3718,10 @@ fn apply_writeback_overrides(
         row.pricing_price = edited.pricing_price;
         row.price_difference = edited.price_difference;
         row.quantity = edited.quantity;
+        row.quantity_error = edited.quantity_error.clone();
+        if row.quantity.is_some() {
+            row.quantity_error = None;
+        }
     }
 }
 
@@ -3520,6 +3871,15 @@ fn ratio(numerator: usize, denominator: usize) -> f64 {
 mod tests {
     use super::*;
     use regex::Regex;
+
+    fn test_build_writeback_rows(
+        sheet: &SheetData,
+        mapping: &PriceCheckMapping,
+        candidates: &HashMap<usize, MatchedRowCandidate>,
+    ) -> Vec<PriceWritebackRow> {
+        let resolved_quantities = resolve_order_quantities(sheet, mapping, &Config::default());
+        build_writeback_rows(sheet, mapping, candidates, &resolved_quantities)
+    }
 
     #[test]
     fn configured_alias_order_breaks_header_ties() {
@@ -4397,9 +4757,9 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("US"),
-                    CellValue::string("SKU-B"),
-                    CellValue::string("9"),
                     CellValue::string("SKU-A*2"),
+                    CellValue::string("1"),
+                    CellValue::string("SKU-A"),
                     CellValue::string("1"),
                 ],
             ],
@@ -4423,7 +4783,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             ..PriceCheckMapping::default()
         };
 
-        let (lines, exceptions) = read_order_lines(&sheet, &mapping, &Config::default());
+        let (lines, exceptions, _) = read_order_lines(&sheet, &mapping, &Config::default());
 
         assert!(exceptions.is_empty());
         assert_eq!(lines.len(), 1);
@@ -4488,12 +4848,16 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             rows: vec![
                 vec![
                     CellValue::string("订单号"),
-                    CellValue::string("SKU"),
-                    CellValue::string("TOTAL Price"),
+                    CellValue::string("前一 SKU"),
                     CellValue::string("Qty"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("TOTAL Price"),
+                    CellValue::string("合并数量"),
                 ],
                 vec![
                     CellValue::string(" ORDER-1 "),
+                    CellValue::string("INVALID"),
+                    CellValue::string("1"),
                     CellValue::string("INVALID"),
                     CellValue::string("12"),
                     CellValue::string("1"),
@@ -4501,11 +4865,15 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-2"),
                     CellValue::string(""),
+                    CellValue::string("1"),
+                    CellValue::string(""),
                     CellValue::string("8"),
                     CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-2"),
+                    CellValue::string("1"),
                     CellValue::string("SKU-2"),
                     CellValue::string("20"),
                     CellValue::string("1"),
@@ -4513,11 +4881,15 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string(""),
                     CellValue::string("SKU-3"),
+                    CellValue::string("1"),
+                    CellValue::string("SKU-3"),
                     CellValue::string("6"),
                     CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-4"),
+                    CellValue::string("1"),
                     CellValue::string("SKU-4"),
                     CellValue::string("9"),
                     CellValue::string("1"),
@@ -4527,12 +4899,20 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         let mapping = PriceCheckMapping {
             order_header_row: 1,
             business_order_number_column: Some(1),
-            order_price_column: Some(3),
-            sku_qty_pairs: vec![SkuQtyPair {
-                sku_column: 2,
-                qty_column: 4,
-                ..SkuQtyPair::default()
-            }],
+            order_price_column: Some(5),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 6,
+                    merged_qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
             ..PriceCheckMapping::default()
         };
         let candidates = HashMap::from([(
@@ -4543,21 +4923,27 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             },
         )]);
 
-        let rows = build_writeback_rows(&sheet, &mapping, &candidates);
+        let rows = test_build_writeback_rows(&sheet, &mapping, &candidates);
 
         assert_eq!(
             rows.iter()
                 .map(|row| (row.source_row, row.quantity))
                 .collect::<Vec<_>>(),
-            vec![(2, 1), (3, 0), (4, 1), (6, 1)]
+            vec![
+                (2, Some(1)),
+                (3, None),
+                (4, Some(1)),
+                (5, None),
+                (6, Some(1))
+            ]
         );
         assert!(!rows[0].matched);
         assert_eq!(rows[2].sku_pair_priority, Some(1));
         assert_eq!(rows[2].pricing_price, Some(18.0));
         assert_eq!(rows[2].price_difference, Some(-2.0));
-        assert!(!rows[3].matched);
-        assert_eq!(rows[3].pricing_price, None);
-        assert_eq!(rows[3].price_difference, None);
+        assert!(!rows[4].matched);
+        assert_eq!(rows[4].pricing_price, None);
+        assert_eq!(rows[4].price_difference, None);
     }
 
     #[test]
@@ -4567,12 +4953,16 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             rows: vec![
                 vec![
                     CellValue::string("订单号"),
-                    CellValue::string("SKU"),
-                    CellValue::string("TOTAL Price"),
+                    CellValue::string("前一 SKU"),
                     CellValue::string("Qty"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("TOTAL Price"),
+                    CellValue::string("合并数量"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
                     CellValue::string("SKU-A"),
                     CellValue::string("10"),
                     CellValue::string("1"),
@@ -4580,11 +4970,15 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("SKU-A"),
+                    CellValue::string("1"),
+                    CellValue::string("SKU-A"),
                     CellValue::string("10"),
                     CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
                     CellValue::string("SKU-A"),
                     CellValue::string("10"),
                     CellValue::string("1"),
@@ -4592,17 +4986,23 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-2"),
                     CellValue::string("SKU-B"),
-                    CellValue::string("10"),
                     CellValue::string("1"),
-                ],
-                vec![
-                    CellValue::string("ORDER-2"),
                     CellValue::string("SKU-B"),
                     CellValue::string("10"),
                     CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string("ORDER-2"),
+                    CellValue::string("SKU-B"),
+                    CellValue::string("1"),
+                    CellValue::string("SKU-B"),
+                    CellValue::string("10"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-2"),
+                    CellValue::string("SKU-C"),
+                    CellValue::string("1"),
                     CellValue::string("SKU-C"),
                     CellValue::string("10"),
                     CellValue::string("1"),
@@ -4612,20 +5012,28 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         let mapping = PriceCheckMapping {
             order_header_row: 1,
             business_order_number_column: Some(1),
-            order_price_column: Some(3),
-            sku_qty_pairs: vec![SkuQtyPair {
-                sku_column: 2,
-                qty_column: 4,
-                ..SkuQtyPair::default()
-            }],
+            order_price_column: Some(5),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 6,
+                    merged_qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
             ..PriceCheckMapping::default()
         };
 
-        let rows = build_writeback_rows(&sheet, &mapping, &HashMap::new());
+        let rows = test_build_writeback_rows(&sheet, &mapping, &HashMap::new());
 
         assert_eq!(
             rows.iter().map(|row| row.quantity).collect::<Vec<_>>(),
-            vec![3, 0, 0, 2, 0, 1]
+            vec![Some(3), Some(0), Some(0), Some(2), Some(0), Some(1)]
         );
     }
 
@@ -4636,18 +5044,21 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             rows: vec![
                 vec![
                     CellValue::string("订单号"),
+                    CellValue::string("前一 SKU"),
                     CellValue::string("数量"),
-                    CellValue::string("SKU"),
+                    CellValue::string("主要 SKU"),
                     CellValue::string("合并数量"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
                     CellValue::string("1"),
                     CellValue::string("SKU-A"),
                     CellValue::string("2"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
                     CellValue::string("1"),
                     CellValue::string("SKU-A"),
                     CellValue::string("1"),
@@ -4657,22 +5068,29 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         let mapping = PriceCheckMapping {
             order_header_row: 1,
             business_order_number_column: Some(1),
-            sku_qty_pairs: vec![SkuQtyPair {
-                sku_column: 3,
-                qty_column: 2,
-                merged_qty_column: 4,
-                ..SkuQtyPair::default()
-            }],
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 5,
+                    merged_qty_column: 5,
+                    ..SkuQtyPair::default()
+                },
+            ],
             ..PriceCheckMapping::default()
         };
 
-        let rows = build_writeback_rows(&sheet, &mapping, &HashMap::new());
+        let rows = test_build_writeback_rows(&sheet, &mapping, &HashMap::new());
 
         assert_eq!(
             rows.iter()
                 .map(|row| (row.quantity, row.quantity_mismatch))
                 .collect::<Vec<_>>(),
-            vec![(2, false), (0, true)]
+            vec![(Some(2), false), (Some(0), true)]
         );
     }
 
@@ -4690,22 +5108,22 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
-                    CellValue::string("OTHER-A"),
-                    CellValue::string("9"),
+                    CellValue::string("PRICED-SKU"),
+                    CellValue::string("1"),
                     CellValue::string("PRICED-SKU"),
                     CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
-                    CellValue::string("OTHER-B"),
-                    CellValue::string("9"),
+                    CellValue::string("PRICED-SKU"),
+                    CellValue::string("1"),
                     CellValue::string("PRICED-SKU"),
                     CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
-                    CellValue::string("OTHER-C"),
-                    CellValue::string("9"),
+                    CellValue::string("PRICED-SKU"),
+                    CellValue::string("1"),
                     CellValue::string("PRICED-SKU"),
                     CellValue::string("1"),
                 ],
@@ -4738,11 +5156,11 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             )
         }));
 
-        let rows = build_writeback_rows(&sheet, &mapping, &candidates);
+        let rows = test_build_writeback_rows(&sheet, &mapping, &candidates);
 
         assert_eq!(
             rows.iter().map(|row| row.quantity).collect::<Vec<_>>(),
-            vec![3, 0, 0]
+            vec![Some(3), Some(0), Some(0)]
         );
     }
 
@@ -4753,16 +5171,22 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             rows: vec![
                 vec![
                     CellValue::string("订单号"),
-                    CellValue::string("SKU"),
+                    CellValue::string("前一 SKU"),
                     CellValue::string("Qty"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("合并数量"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("SKU-A*2"),
                     CellValue::string("1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
                     CellValue::string("SKU-A"),
                     CellValue::string("1"),
                 ],
@@ -4771,24 +5195,455 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         let mapping = PriceCheckMapping {
             order_header_row: 1,
             business_order_number_column: Some(1),
-            sku_qty_pairs: vec![SkuQtyPair {
-                sku_column: 2,
-                qty_column: 3,
-                ..SkuQtyPair::default()
-            }],
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 5,
+                    merged_qty_column: 5,
+                    ..SkuQtyPair::default()
+                },
+            ],
             ..PriceCheckMapping::default()
         };
 
-        let rows = build_writeback_rows(&sheet, &mapping, &HashMap::new());
+        let rows = test_build_writeback_rows(&sheet, &mapping, &HashMap::new());
 
         assert_eq!(
             rows.iter().map(|row| row.quantity).collect::<Vec<_>>(),
-            vec![3, 0]
+            vec![Some(3), Some(0)]
         );
         assert_eq!(
-            normalize_sku_and_multiplier(" sku-a * 2 "),
-            ("SKU-A".to_string(), 2)
+            parse_sku_expression(" sku-a * 2 ")
+                .expect("valid expression")
+                .components,
+            HashMap::from([("SKU-A".to_string(), 2)])
         );
+    }
+
+    #[test]
+    fn daryll_quantity_cannot_cross_main_sku_and_falls_back_left() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("较早 SKU"),
+                    CellValue::string("Qty"),
+                    CellValue::string("前一 SKU"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("Qty"),
+                ],
+                vec![
+                    CellValue::string("DARYLL-1"),
+                    CellValue::string("OTHER"),
+                    CellValue::string("1"),
+                    CellValue::string("FL2600814*5"),
+                    CellValue::string("FL2600814"),
+                    CellValue::string("99"),
+                ],
+                vec![
+                    CellValue::string("DARYLL-2"),
+                    CellValue::string("OTHER"),
+                    CellValue::string("1"),
+                    CellValue::string("FL2600913-1*10"),
+                    CellValue::string("FL2600913-1*10"),
+                    CellValue::string("99"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 5,
+                    qty_column: 6,
+                    merged_qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+
+        let columns =
+            quantity_source_columns(&sheet, &mapping, &Config::default()).expect("quantity source");
+        let resolved = resolve_order_quantities(&sheet, &mapping, &Config::default());
+
+        assert_eq!(
+            columns,
+            QuantitySourceColumns {
+                main_sku: 4,
+                previous_sku: 3,
+                quantity: 2,
+            }
+        );
+        assert_eq!(
+            resolved.iter().map(|row| row.quantity).collect::<Vec<_>>(),
+            vec![Some(5), Some(1)]
+        );
+    }
+
+    #[test]
+    fn pya_and_maka_relationships_use_bounded_quantity_and_component_ratios() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("前一 SKU"),
+                    CellValue::string("Qty"),
+                    CellValue::string("说明"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("合并数量"),
+                ],
+                vec![
+                    CellValue::string("PYA-1"),
+                    CellValue::string("TC2501602*3"),
+                    CellValue::string("1"),
+                    CellValue::string(""),
+                    CellValue::string("TC2501602"),
+                    CellValue::string("3"),
+                ],
+                vec![
+                    CellValue::string("MAKA-1"),
+                    CellValue::string("A"),
+                    CellValue::string("4"),
+                    CellValue::string(""),
+                    CellValue::string("A*4+B"),
+                    CellValue::string("1"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 5,
+                    qty_column: 6,
+                    merged_qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+        let columns =
+            quantity_source_columns(&sheet, &mapping, &Config::default()).expect("quantity source");
+        let resolved = resolve_order_quantities(&sheet, &mapping, &Config::default());
+
+        assert_eq!(columns.quantity, 2);
+        assert_eq!(
+            resolved.iter().map(|row| row.quantity).collect::<Vec<_>>(),
+            vec![Some(3), Some(1)]
+        );
+        assert_eq!(
+            calculate_related_quantity("TC2501602", "TC2501602*3", 1),
+            Ok(3)
+        );
+        assert_eq!(
+            calculate_related_quantity("TC2601361", "TC2601361-01+TC2601361-02", 1),
+            Ok(2)
+        );
+        assert_eq!(calculate_related_quantity("A*4+B", "A", 4), Ok(1));
+        assert_eq!(calculate_related_quantity("A*3+B", "A", 1), Ok(1));
+        assert_eq!(
+            calculate_related_quantity("A+B", "A*2+B", 1),
+            Err("SKU关系无法计算: 前一SKU A*2+B 与主要SKU A+B 的组件比例冲突".to_string())
+        );
+        assert!(calculate_related_quantity("A+B", "C+D", 1).is_err());
+    }
+
+    #[test]
+    fn quantity_lookup_cannot_cross_a_sku_in_either_direction() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("Qty"),
+                    CellValue::string("较早 SKU"),
+                    CellValue::string("前一 SKU"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("Qty"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("7"),
+                    CellValue::string("OLD"),
+                    CellValue::string("MAIN"),
+                    CellValue::string("MAIN"),
+                    CellValue::string("9"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 3,
+                    qty_column: 2,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 5,
+                    qty_column: 6,
+                    merged_qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+
+        let resolved = resolve_order_quantities(&sheet, &mapping, &Config::default());
+
+        assert_eq!(resolved[0].quantity, None);
+        assert_eq!(
+            resolved[0].quantity_error.as_deref(),
+            Some("前一个 SKU 两侧的限定区间内找不到对应数量列")
+        );
+    }
+
+    #[test]
+    fn absorption_and_merging_are_strictly_isolated_by_order_number() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("前一 SKU"),
+                    CellValue::string("Qty"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("TOTAL Price"),
+                    CellValue::string("合并数量"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("A"),
+                    CellValue::string("4"),
+                    CellValue::string("A*4+B"),
+                    CellValue::string("20"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("A"),
+                    CellValue::string("2"),
+                    CellValue::string("A"),
+                    CellValue::string("0"),
+                    CellValue::string("0"),
+                ],
+                vec![
+                    CellValue::string("ORDER-2"),
+                    CellValue::string("A"),
+                    CellValue::string("2"),
+                    CellValue::string("A"),
+                    CellValue::string("0"),
+                    CellValue::string("2"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("A"),
+                    CellValue::string("4"),
+                    CellValue::string("A*4+B"),
+                    CellValue::string("20"),
+                    CellValue::string("0"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            order_price_column: Some(5),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 6,
+                    merged_qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+
+        let (lines, exceptions, resolved) = read_order_lines(&sheet, &mapping, &Config::default());
+
+        assert!(exceptions.is_empty());
+        assert_eq!(
+            resolved
+                .iter()
+                .map(|row| (row.quantity, row.absorbed))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some(2), false),
+                (Some(0), true),
+                (Some(2), false),
+                (Some(0), false)
+            ]
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| (
+                    line.business_order_number.as_str(),
+                    line.matched_sku.as_str(),
+                    line.quantity
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("ORDER-1", "A*4+B", 2.0),
+                ("ORDER-2", "A", 2.0),
+                ("ORDER-1", "A*4+B", 0.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn ambiguous_absorption_leaves_quantity_blank() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("前一 SKU"),
+                    CellValue::string("Qty"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("TOTAL Price"),
+                    CellValue::string("合并数量"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("A"),
+                    CellValue::string("1"),
+                    CellValue::string("A+B"),
+                    CellValue::string("10"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("A"),
+                    CellValue::string("1"),
+                    CellValue::string("A+C"),
+                    CellValue::string("10"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("A"),
+                    CellValue::string("1"),
+                    CellValue::string("A"),
+                    CellValue::string("0"),
+                    CellValue::string(""),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            order_price_column: Some(5),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 6,
+                    merged_qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+
+        let resolved = resolve_order_quantities(&sheet, &mapping, &Config::default());
+
+        assert_eq!(resolved[2].quantity, None);
+        assert_eq!(
+            resolved[2].quantity_error.as_deref(),
+            Some("SKU关系无法计算: 同订单内存在多个可吸收的复合主要 SKU")
+        );
+    }
+
+    #[test]
+    fn pricing_uses_full_compound_sku_and_calculated_quantity_tier() {
+        let pricing_sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                    CellValue::string("5"),
+                ],
+                vec![
+                    CellValue::string("FL2600814"),
+                    CellValue::string("US"),
+                    CellValue::string("10"),
+                    CellValue::string("40"),
+                ],
+                vec![
+                    CellValue::string("A*4+B"),
+                    CellValue::string("US"),
+                    CellValue::string("25"),
+                    CellValue::string("100"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![
+                PriceTierColumn {
+                    quantity: 1,
+                    column: 3,
+                    header: "1".to_string(),
+                },
+                PriceTierColumn {
+                    quantity: 5,
+                    column: 4,
+                    header: "5".to_string(),
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+        let index = build_price_index(&pricing_sheet, &mapping, &PricingRules::default());
+
+        assert_eq!(index.lookup("US", "FL2600814", 5).price, Some(40.0));
+        assert_eq!(index.lookup("US", "A*4+B", 1).price, Some(25.0));
+        assert_eq!(index.lookup("US", "A", 1).price, None);
     }
 
     #[test]
@@ -4799,22 +5654,28 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("订单号"),
                     CellValue::string("Country"),
-                    CellValue::string("SKU"),
+                    CellValue::string("前一 SKU"),
                     CellValue::string("Qty"),
+                    CellValue::string("主要 SKU"),
                     CellValue::string("TOTAL Price"),
+                    CellValue::string("合并数量"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("US"),
                     CellValue::string("SKU-A*2"),
                     CellValue::string("1"),
+                    CellValue::string("SKU-A"),
                     CellValue::string("18"),
+                    CellValue::string("3"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("US"),
                     CellValue::string("SKU-A"),
                     CellValue::string("1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("0"),
                     CellValue::string("0"),
                 ],
             ],
@@ -4840,12 +5701,20 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             order_header_row: 1,
             business_order_number_column: Some(1),
             country_code_column: Some(2),
-            order_price_column: Some(5),
-            sku_qty_pairs: vec![SkuQtyPair {
-                sku_column: 3,
-                qty_column: 4,
-                ..SkuQtyPair::default()
-            }],
+            order_price_column: Some(6),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 3,
+                    qty_column: 4,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 5,
+                    qty_column: 7,
+                    merged_qty_column: 7,
+                    ..SkuQtyPair::default()
+                },
+            ],
             pricing_header_row: 1,
             pricing_sku_column: 1,
             pricing_country_column: 2,
@@ -4874,13 +5743,15 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             lookup.price.expect("grouped quantity price"),
         );
 
-        let rows = build_writeback_rows(&order_sheet, &mapping, &candidates);
+        let resolved_quantities =
+            resolve_order_quantities(&order_sheet, &mapping, &Config::default());
+        let rows = build_writeback_rows(&order_sheet, &mapping, &candidates, &resolved_quantities);
 
         assert_eq!(aggregated[0].total_quantity, 3.0);
-        assert_eq!(rows[0].quantity, 3);
+        assert_eq!(rows[0].quantity, Some(3));
         assert_eq!(rows[0].pricing_price, Some(25.0));
         assert_eq!(rows[0].price_difference, Some(7.0));
-        assert_eq!(rows[1].quantity, 0);
+        assert_eq!(rows[1].quantity, Some(0));
         assert_eq!(rows[1].pricing_price, Some(0.0));
         assert_eq!(rows[1].price_difference, Some(0.0));
     }
@@ -5150,14 +6021,14 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 source_row: 2,
                 pricing_price: Some(8.0),
                 price_difference: Some(1.0),
-                quantity: 1,
+                quantity: Some(1),
                 ..PriceWritebackRow::default()
             },
             PriceWritebackRow {
                 source_row: 3,
                 pricing_price: Some(6.0),
                 price_difference: Some(0.0),
-                quantity: 2,
+                quantity: Some(2),
                 ..PriceWritebackRow::default()
             },
         ];
@@ -5168,15 +6039,16 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 source_row: 2,
                 pricing_price: Some(9.5),
                 price_difference: Some(2.5),
-                quantity: 4,
+                quantity: Some(4),
+                quantity_error: None,
             }],
         );
 
         assert_eq!(rows[0].pricing_price, Some(9.5));
         assert_eq!(rows[0].price_difference, Some(2.5));
-        assert_eq!(rows[0].quantity, 4);
+        assert_eq!(rows[0].quantity, Some(4));
         assert_eq!(rows[1].pricing_price, Some(6.0));
-        assert_eq!(rows[1].quantity, 2);
+        assert_eq!(rows[1].quantity, Some(2));
     }
 
     #[test]
@@ -5224,14 +6096,16 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("Order number"),
                     CellValue::string("Name"),
+                    CellValue::string("前一 SKU"),
                     CellValue::string("Qty"),
-                    CellValue::string("SKU"),
-                    CellValue::string("Qty"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("合并数量"),
                     CellValue::string("Country"),
                 ],
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("Alice"),
+                    CellValue::string("ABC123"),
                     CellValue::string("1"),
                     CellValue::string("ABC123"),
                     CellValue::string("2"),
@@ -5240,6 +6114,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-1"),
                     CellValue::string("Alice"),
+                    CellValue::string("ABC123"),
                     CellValue::string("1"),
                     CellValue::string("ABC123"),
                     CellValue::string("0"),
@@ -5248,6 +6123,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-2"),
                     CellValue::string("Bob"),
+                    CellValue::string("ABC123"),
                     CellValue::string("1"),
                     CellValue::string("ABC123"),
                     CellValue::string("1"),
@@ -5256,6 +6132,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 vec![
                     CellValue::string("ORDER-3"),
                     CellValue::string("Bob"),
+                    CellValue::string("ABC123"),
                     CellValue::string("1"),
                     CellValue::string("ABC123"),
                     CellValue::string("1"),
@@ -5268,16 +6145,23 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             order_header_row: 1,
             business_order_number_column: Some(1),
             single_shipment_column: Some(2),
-            country_code_column: Some(6),
-            sku_qty_pairs: vec![SkuQtyPair {
-                qty_column: 3,
-                sku_column: 4,
-                merged_qty_column: 5,
-                ..SkuQtyPair::default()
-            }],
+            country_code_column: Some(7),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 3,
+                    qty_column: 4,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 5,
+                    qty_column: 6,
+                    merged_qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
             ..PriceCheckMapping::default()
         };
-        let (lines, exceptions) = read_order_lines(&sheet, &mapping, &Config::default());
+        let (lines, exceptions, _) = read_order_lines(&sheet, &mapping, &Config::default());
 
         assert!(exceptions.is_empty());
         assert_eq!(lines.len(), 4);
@@ -5579,7 +6463,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             {
                 order.write_string(0, column as u16, *value)?;
             }
-            for (column, value) in ["A-1", "US", "1", "10001", "1", "1", "GOOD-1", "1", "8"]
+            for (column, value) in ["A-1", "US", "1", "GOOD-1", "1", "1", "GOOD-1", "1", "8"]
                 .iter()
                 .enumerate()
             {
@@ -5627,12 +6511,17 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             .expect("valid mapping");
         assert_eq!(
             (wrong.evaluated_rows, wrong.matched_rows, wrong.coverage),
-            (1, 0, 0.0)
+            (0, 0, 0.0)
         );
         assert!(wrong.matched_order_rows.is_empty());
-        mapping.sku_qty_pairs[0].sku_column = 7;
-        mapping.sku_qty_pairs[0].qty_column = 6;
-        mapping.sku_qty_pairs[0].merged_qty_column = 8;
+        mapping.sku_qty_pairs.push(SkuQtyPair {
+            sku_column: 7,
+            qty_column: 6,
+            merged_qty_column: 8,
+            sku_header: "SKU".to_string(),
+            qty_header: "数量".to_string(),
+            merged_qty_header: "合并数量".to_string(),
+        });
         let corrected = validate_price_mapping(&path, &mapping, &[], &Config::default())
             .expect("valid mapping");
         assert_eq!(
@@ -5650,13 +6539,14 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 source_row: 2,
                 pricing_price: Some(9.5),
                 price_difference: Some(1.5),
-                quantity: 1,
+                quantity: Some(1),
+                quantity_error: None,
             }]
         );
         // 顺序错误：SKU 在原始数量左侧
-        mapping.sku_qty_pairs[0].qty_column = 8;
-        mapping.sku_qty_pairs[0].sku_column = 7;
-        mapping.sku_qty_pairs[0].merged_qty_column = 9;
+        mapping.sku_qty_pairs[1].qty_column = 8;
+        mapping.sku_qty_pairs[1].sku_column = 7;
+        mapping.sku_qty_pairs[1].merged_qty_column = 9;
         let errors = validate_price_mapping(&path, &mapping, &[], &Config::default())
             .expect_err("wrong column order must be rejected");
         assert!(
@@ -5666,9 +6556,9 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             "errors: {errors:?}"
         );
         // 可不连续：原始数量(C) / SKU(G) / 合并数量(H)，中间夹其他列，顺序正确
-        mapping.sku_qty_pairs[0].qty_column = 3;
-        mapping.sku_qty_pairs[0].sku_column = 7;
-        mapping.sku_qty_pairs[0].merged_qty_column = 8;
+        mapping.sku_qty_pairs[1].qty_column = 6;
+        mapping.sku_qty_pairs[1].sku_column = 7;
+        mapping.sku_qty_pairs[1].merged_qty_column = 8;
         let non_contiguous = validate_price_mapping(&path, &mapping, &[], &Config::default())
             .expect("non-contiguous ordered trio should be accepted");
         assert_eq!(

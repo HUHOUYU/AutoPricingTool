@@ -100,19 +100,21 @@ pub(crate) fn write_price_result(
                 },
             );
         }
-        worksheet
-            .cell_mut((insert_column + 2, row_number))
-            .set_value_number(row.quantity as f64);
-        apply_writeback_value_style(
-            worksheet,
-            insert_column + 2,
-            row_number,
-            if row.quantity_mismatch {
-                WRITEBACK_ALERT_BACKGROUND_COLOR
-            } else {
-                WRITEBACK_BACKGROUND_COLOR
-            },
-        );
+        if let Some(quantity) = row.quantity {
+            worksheet
+                .cell_mut((insert_column + 2, row_number))
+                .set_value_number(quantity as f64);
+            apply_writeback_value_style(
+                worksheet,
+                insert_column + 2,
+                row_number,
+                if row.quantity_mismatch {
+                    WRITEBACK_ALERT_BACKGROUND_COLOR
+                } else {
+                    WRITEBACK_BACKGROUND_COLOR
+                },
+            );
+        }
     }
     let total_row = worksheet.highest_row().saturating_add(1);
     worksheet
@@ -122,7 +124,7 @@ pub(crate) fn write_price_result(
         (
             total.0 + row.pricing_price.unwrap_or_default(),
             total.1 + row.price_difference.unwrap_or_default(),
-            total.2 + row.quantity,
+            total.2 + row.quantity.unwrap_or_default(),
         )
     });
     for (offset, value) in [totals.0, totals.1, totals.2 as f64]
@@ -369,7 +371,7 @@ mod tests {
                     source_row: 2,
                     pricing_price: Some(11.0),
                     price_difference: Some(1.0),
-                    quantity: 3,
+                    quantity: Some(3),
                     quantity_mismatch: true,
                     matched: true,
                     ..PriceWritebackRow::default()
@@ -378,13 +380,14 @@ mod tests {
                     source_row: 3,
                     pricing_price: Some(9.0),
                     price_difference: Some(-3.0),
-                    quantity: 0,
+                    quantity: Some(0),
                     matched: true,
                     ..PriceWritebackRow::default()
                 },
                 PriceWritebackRow {
                     source_row: 4,
-                    quantity: 0,
+                    quantity: None,
+                    quantity_error: Some("SKU关系无法计算".to_string()),
                     ..PriceWritebackRow::default()
                 },
             ],
@@ -441,7 +444,7 @@ mod tests {
         assert_eq!(order.value("F3"), "0");
         assert_eq!(order.value("D4"), "");
         assert_eq!(order.value("E4"), "");
-        assert_eq!(order.value("F4"), "0");
+        assert_eq!(order.value("F4"), "");
         assert_eq!(order.value("B2"), "EDITED-SKU");
         assert_eq!(order.value("C2"), "15.5");
         assert_eq!(order.value("C7"), "合计");
@@ -457,7 +460,7 @@ mod tests {
                 .iter()
                 .any(|range| range.range() == "G6:H6")
         );
-        for cell in ["D1", "E1", "F1", "D2", "E3", "F3", "F4"] {
+        for cell in ["D1", "E1", "F1", "D2", "E3", "F3"] {
             assert_eq!(
                 order
                     .style(cell)
@@ -467,7 +470,7 @@ mod tests {
                 "FFD8EEE0"
             );
         }
-        for cell in ["D4", "E4"] {
+        for cell in ["D4", "E4", "F4"] {
             assert!(
                 order.style(cell).background_color().is_none(),
                 "{cell} should not have a background"
