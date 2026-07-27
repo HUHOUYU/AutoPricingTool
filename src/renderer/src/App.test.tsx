@@ -1354,7 +1354,13 @@ describe("AutoPricingTool cyber workstation", () => {
     analysis.writebackRows = [
       { sourceRow: 2, pricingPrice: 10, priceDifference: 1.5, quantity: 2 },
       { sourceRow: 3, pricingPrice: 8, priceDifference: -2, quantity: 0 },
-      { sourceRow: 4, pricingPrice: 9.5, priceDifference: 0, quantity: 1 },
+      {
+        sourceRow: 4,
+        pricingPrice: 9.5,
+        priceDifference: 0,
+        quantity: null,
+        quantityError: "SKU关系无法计算",
+      },
     ];
     analysis.requiresConfirmation = true;
     analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
@@ -1389,6 +1395,7 @@ describe("AutoPricingTool cyber workstation", () => {
     const previewRows = Array.from(document.querySelectorAll(".excel-preview-rows .excel-preview-row"));
     const matchingQuantityRow = previewRows.find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "2");
     const mismatchedQuantityRow = previewRows.find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "3");
+    const invalidQuantityRow = previewRows.find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "4");
     const blankWritebackRow = previewRows.find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "5");
     expect(matchingQuantityRow?.querySelectorAll(".is-writeback-column")[2]).not.toHaveClass("is-mismatched-quantity");
     const mismatchedQuantityCell = mismatchedQuantityRow?.querySelectorAll(".is-writeback-column")[2];
@@ -1396,6 +1403,10 @@ describe("AutoPricingTool cyber workstation", () => {
     matchingQuantityRow?.querySelectorAll(".is-writeback-column").forEach((cell) => {
       expect(cell).toHaveClass("has-writeback-value");
     });
+    const invalidQuantityCell = invalidQuantityRow?.querySelectorAll(".is-writeback-column")[2];
+    expect(invalidQuantityCell).toBeEmptyDOMElement();
+    expect(invalidQuantityCell).toHaveAttribute("title", "SKU关系无法计算");
+    expect(invalidQuantityCell).not.toHaveClass("has-writeback-value");
     blankWritebackRow?.querySelectorAll(".is-writeback-column").forEach((cell) => {
       expect(cell).not.toHaveClass("has-writeback-value");
     });

@@ -160,7 +160,8 @@ export type PricePreviewWritebackRow = {
   sourceRow: number;
   pricingPrice?: number | null;
   priceDifference?: number | null;
-  quantity: number;
+  quantity: number | null;
+  quantityError?: string | null;
 };
 
 export type PricePreviewCellEdit = {

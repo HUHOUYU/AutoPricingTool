@@ -497,7 +497,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const writebackTotals = useMemo(() => (writebackRows ?? []).reduce((total, row) => ({
     pricingPrice: total.pricingPrice + (row.pricingPrice ?? 0),
     priceDifference: total.priceDifference + (row.priceDifference ?? 0),
-    quantity: total.quantity + row.quantity,
+    quantity: total.quantity + (row.quantity ?? 0),
   }), { pricingPrice: 0, priceDifference: 0, quantity: 0 }), [writebackRows]);
   const isWritebackColumn = (columnIndex: number): boolean => showsWritebackColumns && columnIndex >= sourceColumnCount;
   const orderPriceColumnIndex = showsWritebackColumns && mapping?.orderPriceColumn
@@ -529,7 +529,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     if (!writeback) return "";
     if (writebackColumnIndex === 0) return formatPreviewNumber(writeback.pricingPrice);
     if (writebackColumnIndex === 1) return formatPreviewNumber(writeback.priceDifference);
-    return String(writeback.quantity);
+    return writeback.quantity === null ? "" : String(writeback.quantity);
   };
   const columnWidths = Array.from({ length: columnCount }, (_, index) => columnWidthsBySheet[activeSheetName]?.[index] ?? previewColumnWidth);
   const pinnedColumnIndexes = (pinnedColumnsBySheet[activeSheetName] ?? []).filter((columnIndex) => columnIndex < columnCount);
@@ -614,7 +614,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
       .map((pair) => valueAt(pair.skuColumn))
       .find(Boolean) ?? "");
     const quantity = writebackBySourceRow.get(absoluteRow)?.quantity;
-    if (quantity === undefined || !Number.isInteger(quantity)) return;
+    if (typeof quantity !== "number" || !Number.isInteger(quantity)) return;
     const priceColumn = mapping.quantityTierColumns.find((tier) => tier.quantity === quantity)?.column;
     const termGroups = [sku, countries.join(" | ")].filter(Boolean);
     if (termGroups.length === 0) return;
@@ -683,11 +683,14 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     const trimmed = editingWritebackCell.value.trim();
     const parsed = trimmed === "" ? null : Number(trimmed.replaceAll(",", ""));
     if (parsed !== null && !Number.isFinite(parsed)) return;
-    if (editingWritebackCell.columnIndex === 2 && (parsed === null || !Number.isInteger(parsed) || parsed < 0)) return;
+    if (editingWritebackCell.columnIndex === 2 && parsed !== null && (!Number.isInteger(parsed) || parsed < 0)) return;
     const next = { ...current };
     if (editingWritebackCell.columnIndex === 0) next.pricingPrice = parsed;
     else if (editingWritebackCell.columnIndex === 1) next.priceDifference = parsed;
-    else next.quantity = parsed ?? 0;
+    else {
+      next.quantity = parsed;
+      if (parsed !== null) next.quantityError = null;
+    }
     onWritebackRowChange?.(next);
     setEditingWritebackCell(null);
   };
@@ -971,9 +974,12 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           ? parsePreviewQuantity(row[highestPrioritySkuQtyPair.mergedQtyColumn - activeSheet.startColumn - 1] ?? "")
                           : null;
                         const writebackQuantity = writebackBySourceRow.get(absoluteRow)?.quantity;
+                        const writebackQuantityError = isWritebackQuantityColumn
+                          ? writebackBySourceRow.get(absoluteRow)?.quantityError
+                          : null;
                         const quantityMismatchClass = isWritebackQuantityColumn
                           && sourceQuantity !== null
-                          && writebackQuantity !== undefined
+                          && typeof writebackQuantity === "number"
                           && sourceQuantity !== writebackQuantity
                           ? " is-mismatched-quantity"
                           : "";
@@ -1002,7 +1008,9 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                         return <span
                           className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedClass : duplicateMappedClass}${editableWritebackCell ? " is-editable-writeback" : ""}${editableSourceCell ? " is-editable-source" : ""}${isEditingCell ? " is-editing-cell" : ""}${isSelectedCell ? " is-selected-cell" : ""}${writebackValueClass}${differenceClass}${quantityMismatchClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${isHeaderRow && !derived && !cell.trim() ? " is-empty-header" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
                           style={{ ...pinnedColumnStyle(columnIndex), ...(!derived && isHeaderRow ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
-                          title={isEditingCell ? undefined : (isHeaderRow && !derived ? headerCellDisplay : cell)}
+                          title={isEditingCell
+                            ? undefined
+                            : writebackQuantityError ?? (isHeaderRow && !derived ? headerCellDisplay : cell)}
                           onMouseEnter={() => selectingColumn && !derived && setHoveredColumn(absoluteColumn)}
                           onPointerDown={(event) => {
                             if (editableWritebackCell || editableSourceCell) {
