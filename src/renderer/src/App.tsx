@@ -60,6 +60,7 @@ import { TemplateManagementPage } from "@/components/template-management-page";
 import { ExcelPreview, type ExcelPreviewCandidate } from "@/components/excel-preview";
 import { MappingEditor, type MappingFieldTarget, type MappingValidationState } from "@/components/mapping-editor";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { IssueDetailsDialog } from "@/components/ui/issue-details-dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useUIStore, type FileTab, type WorkbenchPage } from "@/stores/ui-store";
 import type { ExcelPreviewWorkbook } from "@/lib/excel-preview";
@@ -316,7 +317,7 @@ function ValidationMessage({
   message: string;
   quantityIssues: PricePreviewWritebackRow[];
 }): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const hasQuantityDetails = message.includes("数量无法计算") && quantityIssues.length > 0;
   return (
     <div className="issue-status-message-row">
@@ -324,23 +325,24 @@ function ValidationMessage({
       {hasQuantityDetails ? (
         <button
           type="button"
-          aria-expanded={expanded}
+          aria-haspopup="dialog"
+          aria-expanded={dialogOpen}
           aria-label="查看数量异常详情"
-          onClick={() => setExpanded((current) => !current)}
+          onClick={() => setDialogOpen(true)}
         >
-          {expanded ? "收起" : "详情"}
+          详情
         </button>
       ) : null}
-      {expanded && hasQuantityDetails ? (
-        <ul className="issue-status-quantity-details">
-          {quantityIssues.map((issue) => (
-            <li key={`${issue.sourceRow}-${issue.quantityError}`}>
-              <b>第 {issue.sourceRow} 行</b>
-              <span>{issue.quantityError}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <IssueDetailsDialog
+        open={dialogOpen && hasQuantityDetails}
+        title="数量计算问题"
+        summary={message}
+        issues={quantityIssues.map((issue) => ({
+          label: `第 ${issue.sourceRow} 行`,
+          message: issue.quantityError ?? "数量无法计算",
+        }))}
+        onClose={() => setDialogOpen(false)}
+      />
     </div>
   );
 }

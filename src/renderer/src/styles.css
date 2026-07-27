@@ -3750,26 +3750,157 @@ html:not(.dark) .cyber-log-drawer {
 .issue-status-message-row > button:focus-visible {
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
-.issue-status-quantity-details {
+
+.issue-details-dialog-backdrop {
+  position: fixed;
+  z-index: 600;
+  inset: 0;
   display: grid;
-  grid-column: 1 / -1;
-  gap: 3px;
-  max-height: 96px;
-  margin: 2px 0 0;
-  overflow: auto;
-  padding: 5px 0 0;
-  border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  place-items: center;
+  padding: 24px;
+  background: rgb(28 25 22 / 42%);
+  backdrop-filter: blur(4px);
+}
+
+.issue-details-dialog {
+  display: grid;
+  width: min(620px, 100%);
+  max-height: min(680px, calc(100vh - 48px));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  color: var(--card-foreground);
+  background: var(--card);
+  box-shadow: 0 26px 76px rgb(47 46 42 / 28%);
+}
+
+.issue-details-dialog > header {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 32px;
+  align-items: start;
+  gap: 13px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.issue-details-dialog-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 13px;
+  color: var(--cyber-amber);
+  background: color-mix(in srgb, var(--cyber-amber) 12%, var(--card));
+}
+
+.issue-details-dialog-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 1.8;
+}
+
+.issue-details-dialog h2 {
+  margin: 1px 0 5px;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.issue-details-dialog p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.issue-details-dialog-close {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.issue-details-dialog-close:hover,
+.issue-details-dialog-close:focus-visible {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.issue-details-dialog-close svg {
+  width: 17px;
+  height: 17px;
+}
+
+.issue-details-dialog-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.issue-details-dialog-count {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.issue-details-dialog-count strong {
+  font-size: 13px;
+}
+
+.issue-details-dialog-count span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.issue-details-dialog-body ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
   list-style: none;
 }
-.issue-status-quantity-details li {
+
+.issue-details-dialog-body li {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 6px;
-  color: inherit;
-  font-size: 8px;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--cyber-amber) 22%, var(--border));
+  border-radius: 11px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--cyber-amber) 6%, var(--card));
+  font-size: 12px;
+  line-height: 1.55;
 }
-.issue-status-quantity-details b {
+
+.issue-details-dialog-body li b {
   white-space: nowrap;
+  color: var(--cyber-amber);
+}
+
+.issue-details-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.issue-details-dialog > footer button {
+  min-width: 88px;
+}
+
+html.dark .issue-details-dialog-backdrop {
+  background: rgb(0 0 0 / 56%);
+}
+
+html.dark .issue-details-dialog {
+  box-shadow: 0 28px 80px rgb(0 0 0 / 48%);
 }
 .decision-reasons.is-compact {
   gap: 4px;

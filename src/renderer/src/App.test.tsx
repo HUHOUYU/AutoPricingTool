@@ -1261,8 +1261,11 @@ describe("AutoPricingTool cyber workstation", () => {
     await screen.findByText("订单-数据");
     const initialQuantityDetailsButton = screen.getByRole("button", { name: "查看数量异常详情" });
     fireEvent.click(initialQuantityDetailsButton);
-    expect(screen.getByText("第 37 行")).toBeInTheDocument();
-    fireEvent.click(initialQuantityDetailsButton);
+    const initialIssueDialog = screen.getByRole("dialog", { name: "数量计算问题" });
+    expect(within(initialIssueDialog).getByText("第 37 行")).toBeInTheDocument();
+    expect(within(initialIssueDialog).getByText("SKU关系无法计算")).toBeInTheDocument();
+    fireEvent.click(within(initialIssueDialog).getByRole("button", { name: "关闭问题详情" }));
+    expect(screen.queryByRole("dialog", { name: "数量计算问题" })).not.toBeInTheDocument();
 
     expect(screen.queryByLabelText("平台订单号")).not.toBeInTheDocument();
     const orderNumberSelect = screen.getByLabelText("订单号");
@@ -1348,10 +1351,13 @@ describe("AutoPricingTool cyber workstation", () => {
     const quantityDetailsButton = await screen.findByRole("button", { name: "查看数量异常详情" });
     expect(quantityDetailsButton).toHaveTextContent("详情");
     fireEvent.click(quantityDetailsButton);
-    expect(screen.getByText("第 37 行")).toBeInTheDocument();
-    expect(screen.getByText("SKU关系无法计算")).toBeInTheDocument();
-    fireEvent.click(quantityDetailsButton);
-    expect(screen.queryByText("第 37 行")).not.toBeInTheDocument();
+    const issueDialog = screen.getByRole("dialog", { name: "数量计算问题" });
+    expect(issueDialog).toHaveTextContent("1 个具体问题");
+    expect(within(issueDialog).getByText("第 37 行")).toBeInTheDocument();
+    expect(within(issueDialog).getByText("SKU关系无法计算")).toBeInTheDocument();
+    expect(document.querySelector(".issue-status-quantity-details")).not.toBeInTheDocument();
+    fireEvent.click(within(issueDialog).getByRole("button", { name: "知道了" }));
+    expect(screen.queryByRole("dialog", { name: "数量计算问题" })).not.toBeInTheDocument();
     const callsBeforeManualValidation = vi.mocked(api.validatePriceMapping).mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "重新试算" }));
     await waitFor(() => expect(api.validatePriceMapping).toHaveBeenCalledTimes(callsBeforeManualValidation + 1));
