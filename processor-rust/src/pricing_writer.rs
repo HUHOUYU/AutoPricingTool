@@ -9,26 +9,32 @@ const WRITEBACK_COLUMN_COUNT: u32 = WRITEBACK_HEADERS.len() as u32;
 const WRITEBACK_BACKGROUND_COLOR: &str = "D8EEE0";
 const WRITEBACK_ALERT_BACKGROUND_COLOR: &str = "FFC7CE";
 const WRITEBACK_FONT_COLOR: &str = "FF000000";
-const WRITEBACK_TOTAL_LABEL: &str = "合计";
+const TOTAL_ROW_LABELS: [&str; 3] = ["total", "合计", "总计"];
 const SUPPORTED_WRITEBACK_EXTENSIONS: [&str; 2] = ["xlsx", "xlsm"];
 const LEGACY_EXCEL_EXTENSIONS: [&str; 2] = ["xls", "xlsb"];
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PriceWritebackLayout {
+    pub(crate) header_row: usize,
+    pub(crate) order_number_column: Option<usize>,
+    pub(crate) total_price_column: usize,
+}
 
 pub(crate) fn write_price_result(
     source_path: &Path,
     output_path: &Path,
     order_sheet_name: &str,
-    header_row: usize,
-    total_price_column: usize,
+    layout: PriceWritebackLayout,
     rows: &[PriceWritebackRow],
     cell_edits: &[PriceCellEdit],
 ) -> Result<()> {
     validate_source_format(source_path)?;
-    if total_price_column == 0 {
+    if layout.total_price_column == 0 {
         return Err(anyhow!(
             "订单 Sheet 找不到 TOTAL Price/原始价格列，未生成结果文件"
         ));
     }
-    if header_row == 0 {
+    if layout.header_row == 0 {
         return Err(anyhow!("订单 Sheet 表头行无效，未生成结果文件"));
     }
     if let Some(parent) = output_path.parent() {
@@ -41,8 +47,16 @@ pub(crate) fn write_price_result(
         .sheet_by_name(order_sheet_name)
         .with_context(|| format!("找不到订单 Sheet: {order_sheet_name}"))?;
     apply_cell_edits(&mut workbook, cell_edits)?;
+    let total_row = existing_total_row(
+        workbook
+            .sheet_by_name(order_sheet_name)
+            .with_context(|| format!("找不到订单 Sheet: {order_sheet_name}"))?,
+        layout.header_row,
+        layout.order_number_column,
+        rows,
+    );
 
-    let insert_column = u32::try_from(total_price_column + 1)
+    let insert_column = u32::try_from(layout.total_price_column + 1)
         .map_err(|_| anyhow!("TOTAL Price 列号超出支持范围"))?;
     workbook.insert_new_column_by_index(order_sheet_name, insert_column, WRITEBACK_COLUMN_COUNT);
     for worksheet in workbook.sheet_collection_mut() {
@@ -56,19 +70,19 @@ pub(crate) fn write_price_result(
         .with_context(|| format!("找不到订单 Sheet: {order_sheet_name}"))?;
     copy_column_layout(
         worksheet,
-        u32::try_from(total_price_column)?,
+        u32::try_from(layout.total_price_column)?,
         insert_column,
         WRITEBACK_COLUMN_COUNT,
     );
     for (offset, header) in WRITEBACK_HEADERS.iter().enumerate() {
         let column = insert_column + offset as u32;
         worksheet
-            .cell_mut((column, u32::try_from(header_row)?))
+            .cell_mut((column, u32::try_from(layout.header_row)?))
             .set_value(*header);
         apply_writeback_value_style(
             worksheet,
             column,
-            u32::try_from(header_row)?,
+            u32::try_from(layout.header_row)?,
             WRITEBACK_BACKGROUND_COLOR,
         );
     }
@@ -116,26 +130,24 @@ pub(crate) fn write_price_result(
             );
         }
     }
-    let total_row = worksheet.highest_row().saturating_add(1);
-    worksheet
-        .cell_mut((u32::try_from(total_price_column)?, total_row))
-        .set_value(WRITEBACK_TOTAL_LABEL);
-    let totals = rows.iter().fold((0.0, 0.0, 0usize), |total, row| {
-        (
-            total.0 + row.pricing_price.unwrap_or_default(),
-            total.1 + row.price_difference.unwrap_or_default(),
-            total.2 + row.quantity.unwrap_or_default(),
-        )
-    });
-    for (offset, value) in [totals.0, totals.1, totals.2 as f64]
-        .into_iter()
-        .enumerate()
-    {
-        let column = insert_column + offset as u32;
-        worksheet
-            .cell_mut((column, total_row))
-            .set_value_number(value);
-        apply_writeback_value_style(worksheet, column, total_row, WRITEBACK_BACKGROUND_COLOR);
+    if let Some(total_row) = total_row {
+        let totals = rows.iter().fold((0.0, 0.0, 0usize), |total, row| {
+            (
+                total.0 + row.pricing_price.unwrap_or_default(),
+                total.1 + row.price_difference.unwrap_or_default(),
+                total.2 + row.quantity.unwrap_or_default(),
+            )
+        });
+        for (offset, value) in [totals.0, totals.1, totals.2 as f64]
+            .into_iter()
+            .enumerate()
+        {
+            let column = insert_column + offset as u32;
+            worksheet
+                .cell_mut((column, total_row))
+                .set_value_number(value);
+            apply_writeback_value_style(worksheet, column, total_row, WRITEBACK_BACKGROUND_COLOR);
+        }
     }
 
     let temporary_path = sibling_work_path(output_path, "tmp");
@@ -147,6 +159,42 @@ pub(crate) fn write_price_result(
         return Err(error);
     }
     replace_output_file(&temporary_path, output_path, &backup_path)
+}
+
+fn existing_total_row(
+    worksheet: &umya_spreadsheet::Worksheet,
+    header_row: usize,
+    order_number_column: Option<usize>,
+    rows: &[PriceWritebackRow],
+) -> Option<u32> {
+    let order_number_column = u32::try_from(order_number_column?).ok()?;
+    let last_order_row = rows
+        .iter()
+        .filter_map(|row| u32::try_from(row.source_row).ok())
+        .max()
+        .unwrap_or_else(|| u32::try_from(header_row).unwrap_or_default());
+    let highest_column = worksheet.highest_column();
+    let candidates = (last_order_row.saturating_add(1)..=worksheet.highest_row())
+        .filter(|row| {
+            worksheet
+                .value((order_number_column, *row))
+                .trim()
+                .is_empty()
+                && (1..=highest_column)
+                    .any(|column| !worksheet.value((column, *row)).trim().is_empty())
+        })
+        .collect::<Vec<_>>();
+    candidates
+        .iter()
+        .rev()
+        .copied()
+        .find(|row| {
+            (1..=highest_column).any(|column| {
+                let value = worksheet.value((column, *row)).trim().to_lowercase();
+                TOTAL_ROW_LABELS.contains(&value.as_str())
+            })
+        })
+        .or_else(|| candidates.last().copied())
 }
 
 fn apply_cell_edits(
@@ -309,6 +357,14 @@ mod tests {
         ))
     }
 
+    fn writeback_layout(total_price_column: usize) -> PriceWritebackLayout {
+        PriceWritebackLayout {
+            header_row: 1,
+            order_number_column: Some(1),
+            total_price_column,
+        }
+    }
+
     fn create_source_workbook(path: &Path) -> Result<()> {
         let mut workbook = Workbook::new();
         {
@@ -338,6 +394,8 @@ mod tests {
             }
             order.write_formula(4, 3, "=C2+C3")?;
             order.merge_range(5, 3, 5, 4, "merged", &Format::new())?;
+            order.write_string(6, 1, "Total")?;
+            order.write_number(6, 2, 30.0)?;
         }
         {
             let pricing = workbook.add_worksheet();
@@ -364,8 +422,7 @@ mod tests {
             &source_path,
             &output_path,
             "订单",
-            1,
-            3,
+            writeback_layout(3),
             &[
                 PriceWritebackRow {
                     source_row: 2,
@@ -447,10 +504,12 @@ mod tests {
         assert_eq!(order.value("F4"), "");
         assert_eq!(order.value("B2"), "EDITED-SKU");
         assert_eq!(order.value("C2"), "15.5");
-        assert_eq!(order.value("C7"), "合计");
+        assert_eq!(order.value("B7"), "Total");
+        assert_eq!(order.value("C7"), "30");
         assert_eq!(order.value("D7"), "20");
         assert_eq!(order.value("E7"), "-2");
         assert_eq!(order.value("F7"), "3");
+        assert_eq!(order.highest_row(), 7);
         assert_eq!(order.value("G2"), "Name-1");
         assert_eq!(output.sheet_by_name("核价")?.value("A1"), "已编辑核价表头");
         assert_eq!(order.cell("G5").expect("formula cell").formula(), "C2+C3");
@@ -528,8 +587,15 @@ mod tests {
         for extension in LEGACY_EXCEL_EXTENSIONS {
             let source_path = unique_path("legacy-source", extension);
             let output_path = unique_path("legacy-output", "xlsx");
-            let error = write_price_result(&source_path, &output_path, "订单", 1, 3, &[], &[])
-                .expect_err("legacy format must be rejected");
+            let error = write_price_result(
+                &source_path,
+                &output_path,
+                "订单",
+                writeback_layout(3),
+                &[],
+                &[],
+            )
+            .expect_err("legacy format must be rejected");
             assert!(error.to_string().contains("另存为 .xlsx"));
             assert!(!output_path.exists());
         }
@@ -541,8 +607,15 @@ mod tests {
         let output_path = unique_path("missing-price-output", "xlsx");
         create_source_workbook(&source_path)?;
 
-        let error = write_price_result(&source_path, &output_path, "订单", 1, 0, &[], &[])
-            .expect_err("missing price column must fail");
+        let error = write_price_result(
+            &source_path,
+            &output_path,
+            "订单",
+            writeback_layout(0),
+            &[],
+            &[],
+        )
+        .expect_err("missing price column must fail");
 
         assert!(error.to_string().contains("TOTAL Price"));
         assert!(!output_path.exists());
@@ -557,7 +630,14 @@ mod tests {
         create_source_workbook(&source_path)?;
         add_fake_vba_project(&source_path)?;
 
-        write_price_result(&source_path, &output_path, "订单", 1, 3, &[], &[])?;
+        write_price_result(
+            &source_path,
+            &output_path,
+            "订单",
+            writeback_layout(3),
+            &[],
+            &[],
+        )?;
 
         let file = fs::File::open(&output_path)?;
         let mut archive = zip::ZipArchive::new(file)?;

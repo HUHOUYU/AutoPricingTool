@@ -107,6 +107,8 @@ const PRICE_ALIASES: &[&str] = &[
     "销售价",
 ];
 const FIXED_PRICE_ALIASES: &[&str] = &["productshippingvattax", "shippingvattax"];
+const ORDER_TAX_ALIASES: &[&str] = &["EU TAX"];
+const PRICE_DIFFERENCE_ZERO_EPSILON: f64 = 1e-9;
 const SINGLE_SHIPMENT_FIELD_ALIASES: &[&str] =
     &["name", "收件人", "收货人", "收件人姓名", "收货人姓名"];
 const SINGLE_SHIPMENT_PHONE_ALIASES: &[&str] = &[
@@ -3293,13 +3295,12 @@ fn resolve_order_quantities(
                     .map(|(_, pair)| cell_text(row, Some(pair.sku_column)))
                     .unwrap_or_default()
             });
-        if business_order_number.is_empty() && raw_sku.is_empty() {
+        // 没有订单号的合计、说明或空白行不属于订单，不能进入数量计算与核价聚合。
+        if business_order_number.is_empty() {
             continue;
         }
         let matched_sku = normalize_sku(&raw_sku);
-        let quantity_result = if business_order_number.is_empty() {
-            Err("订单号为空".to_string())
-        } else if raw_sku.is_empty() {
+        let quantity_result = if raw_sku.is_empty() {
             Err("主要 SKU 为空".to_string())
         } else {
             source_columns
@@ -3674,6 +3675,28 @@ fn record_matched_candidates(
     }
 }
 
+fn order_tax_column_index(sheet: &SheetData, mapping: &PriceCheckMapping) -> Option<usize> {
+    let header_index = mapping.order_header_row.checked_sub(1)?;
+    exact_header_columns(sheet, header_index, ORDER_TAX_ALIASES)
+        .into_iter()
+        .next()
+}
+
+fn order_tax_amount(row: &[CellValue], tax_column_index: Option<usize>) -> f64 {
+    tax_column_index
+        .and_then(|column| row.get(column))
+        .and_then(parse_price)
+        .unwrap_or_default()
+}
+
+fn normalize_price_difference(value: f64) -> f64 {
+    if value.abs() < PRICE_DIFFERENCE_ZERO_EPSILON {
+        0.0
+    } else {
+        value
+    }
+}
+
 fn build_writeback_rows(
     sheet: &SheetData,
     mapping: &PriceCheckMapping,
@@ -3683,6 +3706,7 @@ fn build_writeback_rows(
     let Some((_, pair)) = highest_priority_sku_qty_pair(mapping) else {
         return Vec::new();
     };
+    let tax_column_index = order_tax_column_index(sheet, mapping);
     let mut rows = Vec::new();
     for resolved in resolved_quantities {
         let Some(row) = sheet.rows.get(resolved.source_row.saturating_sub(1)) else {
@@ -3700,13 +3724,16 @@ fn build_writeback_rows(
             .order_price_column
             .and_then(|column| row.get(column.saturating_sub(1)))
             .and_then(parse_price);
+        let pricing_price =
+            candidate.map(|value| value.pricing_price + order_tax_amount(row, tax_column_index));
         rows.push(PriceWritebackRow {
             source_row,
             sku_pair_priority: candidate.map(|value| value.sku_pair_priority),
             matched: candidate.is_some(),
-            pricing_price: candidate.map(|value| value.pricing_price),
-            price_difference: candidate
-                .and_then(|value| original_price.map(|original| value.pricing_price - original)),
+            pricing_price,
+            price_difference: pricing_price.and_then(|pricing| {
+                original_price.map(|original| normalize_price_difference(pricing - original))
+            }),
             quantity,
             quantity_error: resolved.quantity_error.clone(),
             quantity_mismatch: quantity.is_some_and(|quantity| merged_quantity != Some(quantity)),
@@ -3747,6 +3774,7 @@ fn process_price_file(
     }
     let aggregated = aggregate_lines(&lines);
     let index = build_price_index(pricing_sheet, mapping, &config.pricing);
+    let tax_column_index = order_tax_column_index(order_sheet, mapping);
     let mut rows = Vec::new();
     let mut matched_rows = 0;
     let mut matched_candidates = HashMap::new();
@@ -3775,8 +3803,15 @@ fn process_price_file(
                 message: lookup.reason.clone(),
             });
         }
-        let difference = match (item.original_price, lookup.price) {
-            (Some(original), Some(pricing)) => Some(pricing - original),
+        let tax_amount = item
+            .source_rows
+            .iter()
+            .filter_map(|source_row| order_sheet.rows.get(source_row.saturating_sub(1)))
+            .map(|row| order_tax_amount(row, tax_column_index))
+            .sum::<f64>();
+        let financial_price = lookup.price.map(|price| price + tax_amount);
+        let difference = match (item.original_price, financial_price) {
+            (Some(original), Some(pricing)) => Some(normalize_price_difference(pricing - original)),
             _ => None,
         };
         rows.push(PriceCheckRow {
@@ -3788,7 +3823,7 @@ fn process_price_file(
             matched_sku: lookup.matched_sku.clone(),
             total_quantity: item.total_quantity,
             original_price: item.original_price,
-            pricing_price: lookup.price,
+            pricing_price: financial_price,
             price_difference: difference,
             status: if lookup.status == "matched" {
                 "已核价".to_string()
@@ -3839,8 +3874,11 @@ fn process_price_file(
         input_path,
         &output_path,
         &mapping.order_sheet,
-        mapping.order_header_row,
-        order_price_column,
+        crate::pricing_writer::PriceWritebackLayout {
+            header_row: mapping.order_header_row,
+            order_number_column: mapping.business_order_number_column,
+            total_price_column: order_price_column,
+        },
         &writeback_rows,
         cell_edits,
     )?;
@@ -5109,21 +5147,16 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             rows.iter()
                 .map(|row| (row.source_row, row.quantity))
                 .collect::<Vec<_>>(),
-            vec![
-                (2, Some(1)),
-                (3, None),
-                (4, Some(1)),
-                (5, None),
-                (6, Some(1))
-            ]
+            vec![(2, Some(1)), (3, None), (4, Some(1)), (6, Some(1))]
         );
+        assert!(rows.iter().all(|row| row.source_row != 5));
         assert!(!rows[0].matched);
         assert_eq!(rows[2].sku_pair_priority, Some(1));
         assert_eq!(rows[2].pricing_price, Some(18.0));
         assert_eq!(rows[2].price_difference, Some(-2.0));
-        assert!(!rows[4].matched);
-        assert_eq!(rows[4].pricing_price, None);
-        assert_eq!(rows[4].price_difference, None);
+        assert!(!rows[3].matched);
+        assert_eq!(rows[3].pricing_price, None);
+        assert_eq!(rows[3].price_difference, None);
     }
 
     #[test]
@@ -5476,6 +5509,62 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             resolved.iter().map(|row| row.quantity).collect::<Vec<_>>(),
             vec![Some(5), Some(1)]
         );
+    }
+
+    #[test]
+    fn rows_without_order_number_do_not_participate_in_quantity_calculation() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("前一 SKU"),
+                    CellValue::string("Qty"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("合并数量"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string(""),
+                    CellValue::string(""),
+                    CellValue::string("75"),
+                    CellValue::string("Total"),
+                    CellValue::string("75"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 5,
+                    merged_qty_column: 5,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+
+        let (lines, exceptions, resolved) = read_order_lines(&sheet, &mapping, &Config::default());
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].source_row, 2);
+        assert_eq!(resolved[0].business_order_number, "ORDER-1");
+        assert_eq!(lines.len(), 1);
+        assert!(exceptions.is_empty());
     }
 
     #[test]
@@ -5934,6 +6023,69 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         assert_eq!(rows[1].quantity, Some(0));
         assert_eq!(rows[1].pricing_price, Some(0.0));
         assert_eq!(rows[1].price_difference, Some(0.0));
+    }
+
+    #[test]
+    fn financial_price_adds_eu_tax_before_comparing_total_price() {
+        let order_sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("前一 SKU"),
+                    CellValue::string("Qty"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("EU TAX"),
+                    CellValue::string("TOTAL Price"),
+                    CellValue::string("合并数量"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("1"),
+                    CellValue::string("SKU-A"),
+                    CellValue::string("3"),
+                    CellValue::string("28"),
+                    CellValue::string("1"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            order_price_column: Some(6),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 7,
+                    merged_qty_column: 7,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+        let candidates = HashMap::from([(
+            2,
+            MatchedRowCandidate {
+                sku_pair_priority: 1,
+                pricing_price: 25.0,
+            },
+        )]);
+
+        let rows = test_build_writeback_rows(&order_sheet, &mapping, &candidates);
+
+        assert_eq!(rows[0].pricing_price, Some(28.0));
+        assert_eq!(rows[0].price_difference, Some(0.0));
+    }
+
+    #[test]
+    fn near_zero_price_difference_is_written_as_zero() {
+        assert_eq!(normalize_price_difference(0.1 + 0.2 - 0.3), 0.0);
     }
 
     #[test]
