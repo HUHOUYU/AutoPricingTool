@@ -1072,6 +1072,7 @@ describe("AutoPricingTool cyber workstation", () => {
     FakeExcelPreviewWorker.orderRows = [
       ["订单号", "平台订单号", "备用SKU", "国家", "英文国家", "中文国家", "Qty", "SKU", "合并数量", "价格"],
       ["ORDER-1", "P-1", "OLD-1", "US", "United States", "美国", "1", "GOOD-1", "1", "9.5"],
+      ["", "", "", "", "", "", "", "", "", "147.67"],
     ];
     const api = createDesktopAPI();
     vi.mocked(api.readExcelPreviewFile).mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), size: 3, modifiedAt: 1 });
@@ -1107,6 +1108,12 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.keyDown(editor, { key: "Enter" });
 
     await waitFor(() => expect(dialog.querySelector(".excel-preview-total-row")).toHaveTextContent("12.5"));
+    const totalRow = dialog.querySelector(".excel-preview-total-row");
+    expect(totalRow?.querySelector(".excel-preview-row-number")).toHaveTextContent("3");
+    expect(totalRow).toHaveTextContent("147.67");
+    expect(totalRow).not.toHaveTextContent("合计");
+    expect(totalRow?.querySelectorAll(".is-writeback-column")).toHaveLength(3);
+    expect(dialog.querySelectorAll(".excel-preview-rows .excel-preview-row")).toHaveLength(3);
     const frozenHeader = screen.getByLabelText("冻结表头，第 1 行");
     const orderNumberHeaderCell = Array.from(frozenHeader.querySelectorAll(":scope > span"))
       .find((cell) => cell.textContent === "订单号");
@@ -1115,6 +1122,41 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(orderNumberHeaderCell).not.toHaveClass("is-editable-source");
     expect(orderPriceHeaderCell).not.toHaveClass("is-editable-source");
     expect(frozenHeader.querySelectorAll(".is-editable-source")).toHaveLength(0);
+    const orderPriceCell = Array.from(dataRow?.querySelectorAll(":scope > span") ?? [])
+      .find((cell) => cell.textContent === "9.5");
+    expect(orderPriceCell).toHaveClass("is-editable-source");
+    fireEvent.doubleClick(orderPriceCell as HTMLElement);
+    const orderPriceEditor = screen.getByRole("textbox", { name: "编辑订单第 2 行第 10 列" });
+    expect(orderPriceEditor).toHaveAttribute("inputmode", "decimal");
+    fireEvent.change(orderPriceEditor, { target: { value: "10.25" } });
+    fireEvent.keyDown(orderPriceEditor, { key: "Enter" });
+    await waitFor(() => expect(api.validatePriceMapping).toHaveBeenCalledWith(expect.objectContaining({
+      cellEdits: [
+        {
+          sheetName: "订单",
+          row: 2,
+          column: 10,
+          value: "10.25",
+          numeric: true,
+        },
+      ],
+    })));
+    const priceValidationRequest = vi.mocked(api.validatePriceMapping).mock.calls.at(-1)?.[0];
+    expect(priceValidationRequest).toBeDefined();
+    await act(async () => {
+      api.emit({
+        type: "price-validation",
+        inputPath: "C:\\orders\\order.xlsx",
+        requestVersion: priceValidationRequest!.requestVersion,
+        evaluatedRows: 1,
+        matchedRows: 1,
+        coverage: 1,
+        matchedOrderRows: [2],
+        writebackRows: analysis.writebackRows,
+        errors: [],
+        warnings: [],
+      });
+    });
     const skuHeaderCell = Array.from(frozenHeader.querySelectorAll(":scope > span"))
       .find((cell) => cell.textContent === "SKU");
     expect(skuHeaderCell).not.toHaveClass("is-editable-source");
@@ -1136,6 +1178,13 @@ describe("AutoPricingTool cyber workstation", () => {
           column: 8,
           value: "EDITED-1",
           numeric: false,
+        },
+        {
+          sheetName: "订单",
+          row: 2,
+          column: 10,
+          value: "10.25",
+          numeric: true,
         },
       ],
     })));
@@ -1168,6 +1217,13 @@ describe("AutoPricingTool cyber workstation", () => {
             value: "EDITED-1",
             numeric: false,
           },
+          {
+            sheetName: "订单",
+            row: 2,
+            column: 10,
+            value: "10.25",
+            numeric: true,
+          },
         ],
       })],
     })));
@@ -1187,8 +1243,15 @@ describe("AutoPricingTool cyber workstation", () => {
     dropFiles([new File(["xlsx"], "order.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
     expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
     const analysis = createAnalysis("C:\\orders\\order.xlsx");
-        analysis.requiresConfirmation = true;
-    analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
+    analysis.writebackRows = [
+      { sourceRow: 37, pricingPrice: null, priceDifference: null, quantity: null, quantityError: "SKU关系无法计算" },
+    ];
+    analysis.requiresConfirmation = true;
+    analysis.automationDecision = {
+      ...analysis.automationDecision,
+      status: "confirm",
+      reasons: ["需要确认映射", "1 行数量无法计算，需要确认"],
+    };
     await act(async () => {
       api.emit({ type: "price-analysis", file: analysis });
       api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
@@ -1196,6 +1259,10 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(screen.getByRole("button", { name: "待确认1" }));
     fireEvent.click(await screen.findByRole("button", { name: "详情" }));
     await screen.findByText("订单-数据");
+    const initialQuantityDetailsButton = screen.getByRole("button", { name: "查看数量异常详情" });
+    fireEvent.click(initialQuantityDetailsButton);
+    expect(screen.getByText("第 37 行")).toBeInTheDocument();
+    fireEvent.click(initialQuantityDetailsButton);
 
     expect(screen.queryByLabelText("平台订单号")).not.toBeInTheDocument();
     const orderNumberSelect = screen.getByLabelText("订单号");
@@ -1263,6 +1330,28 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(previewDataRow).toHaveTextContent("2");
     expect(previewDataRow?.querySelectorAll(".is-writeback-column")).toHaveLength(3);
     expect(previewDataRow?.querySelectorAll(".is-writeback-column")[2]).toHaveClass("is-mismatched-quantity");
+    await act(async () => api.emit({
+      type: "price-validation",
+      inputPath: request.inputPath,
+      requestVersion: request.requestVersion,
+      evaluatedRows: 1,
+      matchedRows: 1,
+      coverage: 1,
+      matchedOrderRows: [2],
+      writebackRows: [
+        { sourceRow: 2, pricingPrice: 12.5, priceDifference: 3, quantity: 2 },
+        { sourceRow: 37, pricingPrice: null, priceDifference: null, quantity: null, quantityError: "SKU关系无法计算" },
+      ],
+      errors: [],
+      warnings: ["1 行数量无法计算，需要确认"],
+    }));
+    const quantityDetailsButton = await screen.findByRole("button", { name: "查看数量异常详情" });
+    expect(quantityDetailsButton).toHaveTextContent("详情");
+    fireEvent.click(quantityDetailsButton);
+    expect(screen.getByText("第 37 行")).toBeInTheDocument();
+    expect(screen.getByText("SKU关系无法计算")).toBeInTheDocument();
+    fireEvent.click(quantityDetailsButton);
+    expect(screen.queryByText("第 37 行")).not.toBeInTheDocument();
     const callsBeforeManualValidation = vi.mocked(api.validatePriceMapping).mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "重新试算" }));
     await waitFor(() => expect(api.validatePriceMapping).toHaveBeenCalledTimes(callsBeforeManualValidation + 1));

@@ -47,6 +47,7 @@ const skuPairShadeStrengths = [38, 32, 26, 20, 14];
 const searchInputMinimumCharacters = 18;
 const searchInputPlaceholder = "逗号=且，竖线=或";
 const writebackColumnHeaders = ["核价[财务]", "金额差", "数量"] as const;
+const totalRowLabels = new Set(["total", "合计", "总计"]);
 
 type SkuPairStyle = CSSProperties & { "--sku-pair-strength": string };
 
@@ -103,18 +104,21 @@ function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetN
   return "";
 }
 
-function isEditableSkuGroupColumn(
+function isEditableOrderSourceColumn(
   mapping: PriceCheckMapping | null | undefined,
   sheetName: string,
   column: number,
 ): boolean {
   if (!mapping) return false;
   return sheetName === mapping.orderSheet
-    && mapping.skuQtyPairs.some((pair) => (
-      pair.qtyColumn === column
-      || pair.skuColumn === column
-      || pair.mergedQtyColumn === column
-    ));
+    && (
+      mapping.orderPriceColumn === column
+      || mapping.skuQtyPairs.some((pair) => (
+        pair.qtyColumn === column
+        || pair.skuColumn === column
+        || pair.mergedQtyColumn === column
+      ))
+    );
 }
 
 function mappedColumnIsNumeric(
@@ -210,6 +214,28 @@ function targetColumn(mapping: PriceCheckMapping | null | undefined, target: Map
   const tierMatch = /^quantityTierColumns\.(\d+)\.column$/.exec(target);
   if (tierMatch) return mapping.quantityTierColumns[Number(tierMatch[1])]?.column ?? null;
   return (mapping[target as keyof PriceCheckMapping] as number | null | undefined) ?? null;
+}
+
+function existingWritebackTotalRow(
+  sheet: ExcelPreviewSheet | null,
+  mapping: PriceCheckMapping | null | undefined,
+  writebackRows: PricePreviewWritebackRow[] | undefined,
+): number | null {
+  if (!sheet || !mapping?.businessOrderNumberColumn || sheet.truncatedRows || !writebackRows?.length) return null;
+  const orderNumberColumnIndex = mapping.businessOrderNumberColumn - sheet.startColumn - 1;
+  if (orderNumberColumnIndex < 0 || orderNumberColumnIndex >= sheet.displayedColumnCount) return null;
+  const lastOrderRow = Math.max(mapping.orderHeaderRow, ...writebackRows.map((row) => row.sourceRow));
+  const candidates = sheet.rows
+    .map((row, index) => ({ row, absoluteRow: sheet.startRow + index + 1 }))
+    .filter(({ row, absoluteRow }) => (
+      absoluteRow > lastOrderRow
+      && !(row[orderNumberColumnIndex] ?? "").trim()
+      && row.some((value) => value.trim())
+    ));
+  const labeled = [...candidates].reverse().find(({ row }) => (
+    row.some((value) => totalRowLabels.has(value.trim().toLocaleLowerCase()))
+  ));
+  return labeled?.absoluteRow ?? candidates.at(-1)?.absoluteRow ?? null;
 }
 
 function PreviewState({ icon, title, detail, loading = false }: { icon: React.JSX.Element; title: string; detail: string; loading?: boolean }): React.JSX.Element {
@@ -357,10 +383,10 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     workbook?.sheets.find((sheet) => sheet.name === activeSheetName) ?? null
   ), [activeSheetName, workbook]);
   const showsWritebackColumns = Boolean(activeSheet && mapping && activeSheet.name === mapping.orderSheet);
-  const showsWritebackTotalRow = showsWritebackColumns
-    && !activeSheet?.truncatedRows
-    && (writebackRows?.length ?? 0) > 0;
-  const previewRowCount = (activeSheet?.rows.length ?? 0) + (showsWritebackTotalRow ? 1 : 0);
+  const writebackTotalRow = showsWritebackColumns
+    ? existingWritebackTotalRow(activeSheet, mapping, writebackRows)
+    : null;
+  const previewRowCount = activeSheet?.rows.length ?? 0;
   const searchMatches = useMemo<ExcelPreviewSearchMatch[]>(() => {
     let matches = findExcelPreviewMatches(activeSheet?.rows ?? [], searchQuery);
     if (activeSheet && activeSheet.name === mapping?.pricingSheet && pricingLookupFilter) {
@@ -906,9 +932,9 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
               </div> : null}
               <div className="excel-preview-rows" style={{ height: `${rowsHeight}px`, width: `${gridWidth}px` }}>
                 {renderedRows.map((virtualRow) => {
-                  const isWritebackTotalRow = showsWritebackTotalRow && virtualRow.index === activeSheet.rows.length;
-                  const row = isWritebackTotalRow ? [] : activeSheet.rows[virtualRow.index] ?? [];
+                  const row = activeSheet.rows[virtualRow.index] ?? [];
                   const absoluteRow = activeSheet.startRow + virtualRow.index + 1;
+                  const isWritebackTotalRow = writebackTotalRow === absoluteRow;
                   const isMatchedOrderRow = activeSheet.name === mapping?.orderSheet && matchedOrderRowSet.has(absoluteRow);
                   const isActiveUnmatchedRow = activeSheet.name === mapping?.orderSheet && activeUnmatchedRow === absoluteRow;
                   const isSearchMatchedRow = searchMatchedRowSet.has(virtualRow.index);
@@ -938,16 +964,14 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                       >{absoluteRow}</span>
                       {orderedColumnIndexes.map((columnIndex) => {
                         const writebackColumnIndex = columnIndex - sourceColumnCount;
-                        const totalCell = isWritebackTotalRow
-                          ? columnIndex === orderPriceColumnIndex
-                            ? "合计"
-                            : writebackColumnIndex === 0
-                              ? formatPreviewNumber(writebackTotals.pricingPrice)
-                              : writebackColumnIndex === 1
-                                ? formatPreviewNumber(writebackTotals.priceDifference)
-                                : writebackColumnIndex === 2
-                                  ? String(writebackTotals.quantity)
-                                  : ""
+                        const totalCell = isWritebackTotalRow && isWritebackColumn(columnIndex)
+                          ? writebackColumnIndex === 0
+                            ? formatPreviewNumber(writebackTotals.pricingPrice)
+                            : writebackColumnIndex === 1
+                              ? formatPreviewNumber(writebackTotals.priceDifference)
+                              : writebackColumnIndex === 2
+                                ? String(writebackTotals.quantity)
+                                : ""
                           : null;
                         const cell = totalCell ?? cellValue(row, columnIndex, absoluteRow);
                         const absoluteColumn = activeSheet.startColumn + columnIndex + 1;
@@ -992,7 +1016,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           && !isWritebackTotalRow
                           && !isHeaderRow
                           && !selectingColumn
-                          && isEditableSkuGroupColumn(mapping, activeSheet.name, absoluteColumn);
+                          && isEditableOrderSourceColumn(mapping, activeSheet.name, absoluteColumn);
                         const isEditing = editingWritebackCell?.sourceRow === absoluteRow
                           && editingWritebackCell.columnIndex === writebackColumnIndex;
                         const isEditingSourceCell = editableSourceCell

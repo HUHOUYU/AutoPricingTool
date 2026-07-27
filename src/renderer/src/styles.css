@@ -3726,6 +3726,51 @@ html:not(.dark) .cyber-log-drawer {
   color: #008d5c;
   background: color-mix(in srgb, #00b878 7%, var(--cyber-panel));
 }
+.issue-status-message-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 8px;
+}
+.issue-status-message-row > span {
+  min-width: 0;
+}
+.issue-status-message-row > button {
+  min-width: 36px;
+  height: 20px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: inherit;
+  background: transparent;
+  font-size: 8px;
+  cursor: pointer;
+}
+.issue-status-message-row > button:hover,
+.issue-status-message-row > button:focus-visible {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.issue-status-quantity-details {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 3px;
+  max-height: 96px;
+  margin: 2px 0 0;
+  overflow: auto;
+  padding: 5px 0 0;
+  border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  list-style: none;
+}
+.issue-status-quantity-details li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  color: inherit;
+  font-size: 8px;
+}
+.issue-status-quantity-details b {
+  white-space: nowrap;
+}
 .decision-reasons.is-compact {
   gap: 4px;
   margin: 0;

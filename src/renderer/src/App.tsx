@@ -278,9 +278,27 @@ function DecisionMappingText({ value }: { value: string }): React.JSX.Element {
   );
 }
 
-function DecisionReason({ reason, bestScore, runnerUpScore, scoreKind }: { reason: string; bestScore?: number | null; runnerUpScore?: number | null; scoreKind?: "field" | "sheet" | null }): React.JSX.Element {
+function DecisionReason({
+  reason,
+  bestScore,
+  runnerUpScore,
+  scoreKind,
+  quantityIssues,
+}: {
+  reason: string;
+  bestScore?: number | null;
+  runnerUpScore?: number | null;
+  scoreKind?: "field" | "sheet" | null;
+  quantityIssues: PricePreviewWritebackRow[];
+}): React.JSX.Element {
   const comparison = /^(.*?)(?:：|:)\s*最优\s*\[(.*?)\]\s*[；;]\s*次优\s*\[(.*?)\]\s*$/.exec(reason);
-  if (!comparison) return <li className="decision-reason is-plain">{reason}</li>;
+  if (!comparison) {
+    return (
+      <li className="decision-reason is-plain">
+        <ValidationMessage message={reason} quantityIssues={quantityIssues} />
+      </li>
+    );
+  }
   const score = (value: number | null | undefined): React.JSX.Element | null => value == null ? null : <small>{scoreKind === "sheet" ? "Sheet" : "字段"} {value.toFixed(1)} 分</small>;
   return (
     <li className="decision-reason is-comparison">
@@ -288,6 +306,42 @@ function DecisionReason({ reason, bestScore, runnerUpScore, scoreKind }: { reaso
       <div className="decision-candidate is-best"><span><b>最优</b>{score(bestScore)}</span><DecisionMappingText value={comparison[2]} /></div>
       <div className="decision-candidate is-alternate"><span><b>次选</b>{score(runnerUpScore)}</span><DecisionMappingText value={comparison[3]} /></div>
     </li>
+  );
+}
+
+function ValidationMessage({
+  message,
+  quantityIssues,
+}: {
+  message: string;
+  quantityIssues: PricePreviewWritebackRow[];
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const hasQuantityDetails = message.includes("数量无法计算") && quantityIssues.length > 0;
+  return (
+    <div className="issue-status-message-row">
+      <span>{message}</span>
+      {hasQuantityDetails ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label="查看数量异常详情"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? "收起" : "详情"}
+        </button>
+      ) : null}
+      {expanded && hasQuantityDetails ? (
+        <ul className="issue-status-quantity-details">
+          {quantityIssues.map((issue) => (
+            <li key={`${issue.sourceRow}-${issue.quantityError}`}>
+              <b>第 {issue.sourceRow} 行</b>
+              <span>{issue.quantityError}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 
@@ -2222,6 +2276,9 @@ export function App(): React.JSX.Element {
                     const trialMatched = liveValidation?.matchedRows ?? detailAnalysis?.automationDecision.matchedRows;
                     const trialEvaluated = liveValidation?.evaluatedRows ?? detailAnalysis?.automationDecision.evaluatedRows;
                     const trialCoverage = liveValidation?.coverage ?? detailAnalysis?.automationDecision.coverage;
+                    const quantityIssues = detailWritebackRows.filter((row) => row.quantityError);
+                    const decisionHasQuantityWarning = detailAnalysis?.automationDecision.reasons
+                      .some((reason) => reason.includes("数量无法计算")) ?? false;
                     const trialTone = !liveValidation
                       ? "is-idle"
                       : validationErrors.length
@@ -2273,7 +2330,13 @@ export function App(): React.JSX.Element {
                         {detailResult?.message ? <p className="issue-status-message">{detailResult.message}</p> : null}
                         {validationMessages.length > 0 ? (
                           <div className={`issue-status-messages ${trialTone}`}>
-                            {validationMessages.map((message) => <span key={message}>{message}</span>)}
+                            {validationMessages.map((message) => (
+                              <ValidationMessage
+                                message={message}
+                                quantityIssues={decisionHasQuantityWarning ? [] : quantityIssues}
+                                key={message}
+                              />
+                            ))}
                           </div>
                         ) : null}
                         {detailAnalysis && detailAnalysis.automationDecision.reasons.length > 0 ? (
@@ -2284,6 +2347,7 @@ export function App(): React.JSX.Element {
                                 bestScore={detailAnalysis.automationDecision.candidateScore}
                                 runnerUpScore={detailAnalysis.automationDecision.runnerUpScore}
                                 scoreKind={detailAnalysis.automationDecision.scoreKind}
+                                quantityIssues={quantityIssues}
                                 key={reason}
                               />
                             ))}
