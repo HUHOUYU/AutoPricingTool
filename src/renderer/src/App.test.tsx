@@ -1687,11 +1687,27 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(revealSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(revealSwitch);
     expect(revealSwitch).toHaveAttribute("aria-checked", "true");
+    const singleShipmentSwitch = screen.getByRole("switch", { name: "启用单独发货价格匹配" });
+    const recipientNameField = screen.getByRole("checkbox", { name: "收件人姓名" });
+    const phoneField = screen.getByRole("checkbox", { name: "电话" });
+    const postalCodeField = screen.getByRole("checkbox", { name: "邮编" });
+    expect(singleShipmentSwitch).toHaveAttribute("aria-checked", "false");
+    expect(recipientNameField).toBeChecked();
+    expect(recipientNameField).toBeDisabled();
+    fireEvent.click(singleShipmentSwitch);
+    expect(singleShipmentSwitch).toHaveAttribute("aria-checked", "true");
+    expect(recipientNameField).toBeEnabled();
+    fireEvent.click(postalCodeField);
+    expect(recipientNameField).toBeDisabled();
+    expect(phoneField).toBeDisabled();
     const source = screen.getByRole("textbox", { name: "JSON 源码" }) as HTMLTextAreaElement;
     expect(source.value).toContain('"extension_field"');
     expect(source.value).toContain('"processing_workers": 4');
     expect(source.value).toContain('"template_match_priority": true');
     expect(source.value).toContain('"auto_reveal_manual_result": true');
+    expect(source.value).toContain('"single_shipment_matching_enabled": true');
+    expect(source.value).toContain('"single_shipment_match_fields"');
+    expect(source.value).not.toContain('"postal_code"');
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(api.saveConfigDocument).toHaveBeenCalledWith(expect.objectContaining({
       path: "C:\\config.json",

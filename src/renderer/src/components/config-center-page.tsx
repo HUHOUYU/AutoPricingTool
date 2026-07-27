@@ -6,10 +6,20 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ConfigDocument, ConfigValidationResult, DesktopAPI, ProcessingCapacity } from "../../../preload";
 
 type JsonObject = Record<string, unknown>;
+type SingleShipmentMatchField = "recipient_name" | "phone" | "postal_code" | "address" | "email";
 
 type ConfigCenterPageProps = {
   api: DesktopAPI | null;
 };
+
+const SINGLE_SHIPMENT_MATCH_FIELD_OPTIONS: Array<{ value: SingleShipmentMatchField; label: string }> = [
+  { value: "recipient_name", label: "收件人姓名" },
+  { value: "phone", label: "电话" },
+  { value: "postal_code", label: "邮编" },
+  { value: "address", label: "完整地址" },
+  { value: "email", label: "邮箱" },
+];
+const DEFAULT_SINGLE_SHIPMENT_MATCH_FIELDS: SingleShipmentMatchField[] = ["recipient_name", "phone", "postal_code"];
 
 function asObject(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
@@ -97,6 +107,16 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
   const updateField = (section: string, key: string, value: unknown): void => {
     const next = cloneConfig(parsed);
     next[section] = { ...asObject(next[section]), [key]: value };
+    const nextSource = `${JSON.stringify(next, null, 2)}\n`;
+    setParsed(next);
+    setSource(nextSource);
+    setDirty(nextSource !== document?.content);
+    setValidation({ valid: true, issues: [] });
+  };
+
+  const updateFields = (section: string, fields: JsonObject): void => {
+    const next = cloneConfig(parsed);
+    next[section] = { ...asObject(next[section]), ...fields };
     const nextSource = `${JSON.stringify(next, null, 2)}\n`;
     setParsed(next);
     setSource(nextSource);
@@ -192,6 +212,13 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
   const performance = useMemo(() => asObject(parsed.performance), [parsed]);
   const automation = useMemo(() => asObject(parsed.automation), [parsed]);
   const pricing = useMemo(() => asObject(parsed.pricing), [parsed]);
+  const singleShipmentMatchingEnabled = Boolean(pricing.single_shipment_matching_enabled);
+  const singleShipmentMatchFields = (
+    Array.isArray(pricing.single_shipment_match_fields)
+      ? pricing.single_shipment_match_fields
+      : DEFAULT_SINGLE_SHIPMENT_MATCH_FIELDS
+  ).filter((value): value is SingleShipmentMatchField =>
+    SINGLE_SHIPMENT_MATCH_FIELD_OPTIONS.some((option) => option.value === value));
   const sourceLineCount = source.split(/\r?\n/).length;
   const sourceLineNumbers = useMemo(() => Array.from({ length: sourceLineCount }, (_, index) => index + 1).join("\n"), [sourceLineCount]);
 
@@ -273,6 +300,47 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
               <label>数量策略<select value={String(pricing.quantity_policy ?? "exact")} onChange={(event) => updateField("pricing", "quantity_policy", event.currentTarget.value)}><option value="exact">精确匹配</option><option value="nearest">邻近档位</option></select></label>
               <label className="config-check"><input type="checkbox" checked={Boolean(pricing.multiply_quantity_by_price)} onChange={(event) => updateField("pricing", "multiply_quantity_by_price", event.currentTarget.checked)} />数量乘以单价</label>
               <label className="config-check"><input type="checkbox" checked={Boolean(pricing.zero_price_is_valid)} onChange={(event) => updateField("pricing", "zero_price_is_valid", event.currentTarget.checked)} />零价格视为有效</label>
+              <div className="config-switch-row">
+                <span><strong>启用单独发货价格匹配</strong><small>默认使用通用价格；只有联合字段完整、仅对应一个订单且订单只有一个有效主要 SKU 时才使用单独发货价</small></span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="启用单独发货价格匹配"
+                  aria-checked={singleShipmentMatchingEnabled}
+                  className="config-switch"
+                  onClick={() => {
+                    const enabled = !singleShipmentMatchingEnabled;
+                    updateFields("pricing", {
+                      single_shipment_matching_enabled: enabled,
+                      single_shipment_match_fields: enabled && singleShipmentMatchFields.length < 2
+                        ? DEFAULT_SINGLE_SHIPMENT_MATCH_FIELDS
+                        : singleShipmentMatchFields,
+                    });
+                  }}
+                ><i /></button>
+              </div>
+              <div className={`config-match-fields${singleShipmentMatchingEnabled ? "" : " is-disabled"}`}>
+                <span>联合判断表头<small>至少保留两项；字段缺失或判断不明确时使用通用价格</small></span>
+                <div>
+                  {SINGLE_SHIPMENT_MATCH_FIELD_OPTIONS.map((option) => {
+                    const checked = singleShipmentMatchFields.includes(option.value);
+                    return <label className="config-check" key={option.value}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={!singleShipmentMatchingEnabled || (checked && singleShipmentMatchFields.length <= 2)}
+                        onChange={(event) => {
+                          const fields = event.currentTarget.checked
+                            ? [...new Set([...singleShipmentMatchFields, option.value])]
+                            : singleShipmentMatchFields.filter((field) => field !== option.value);
+                          updateField("pricing", "single_shipment_match_fields", fields);
+                        }}
+                      />
+                      {option.label}
+                    </label>;
+                  })}
+                </div>
+              </div>
             </fieldset>
           </div>
         </section>

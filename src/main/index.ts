@@ -82,6 +82,15 @@ type HeaderTemplateRecord = {
   mappings: HeaderTemplateFieldMapping[];
 };
 
+const SINGLE_SHIPMENT_MATCH_FIELDS = new Set([
+  "recipient_name",
+  "phone",
+  "postal_code",
+  "address",
+  "email",
+]);
+const DEFAULT_SINGLE_SHIPMENT_MATCH_FIELDS = ["recipient_name", "phone", "postal_code"];
+
 const rootDir = resolve(__dirname, "../..");
 const resourceRootDir = app.isPackaged ? process.resourcesPath : rootDir;
 const writableRootDir = app.isPackaged ? app.getPath("userData") : rootDir;
@@ -424,21 +433,52 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
   }
 
   const pricing = config.pricing as Record<string, unknown> | undefined;
-  if (pricing?.country_identity !== undefined) {
-    const countryIdentity = pricing.country_identity;
-    const allowedCountryIdentities = new Set(["iso2", "english", "chinese"]);
-    if (!Array.isArray(countryIdentity)) {
-      issues.push({ path: "pricing.country_identity", message: "必须是数组" });
-    } else if (countryIdentity.length === 0) {
-      issues.push({ path: "pricing.country_identity", message: "至少需要保留一个国家身份字段" });
-    } else {
-      countryIdentity.forEach((value, index) => {
-        if (typeof value !== "string" || !allowedCountryIdentities.has(value)) {
-          issues.push({
-            path: `pricing.country_identity[${index}]`,
-            message: "仅支持 iso2、english、chinese",
-          });
-        }
+  if (pricing) {
+    if (pricing.country_identity !== undefined) {
+      const countryIdentity = pricing.country_identity;
+      const allowedCountryIdentities = new Set(["iso2", "english", "chinese"]);
+      if (!Array.isArray(countryIdentity)) {
+        issues.push({ path: "pricing.country_identity", message: "必须是数组" });
+      } else if (countryIdentity.length === 0) {
+        issues.push({ path: "pricing.country_identity", message: "至少需要保留一个国家身份字段" });
+      } else {
+        countryIdentity.forEach((value, index) => {
+          if (typeof value !== "string" || !allowedCountryIdentities.has(value)) {
+            issues.push({
+              path: `pricing.country_identity[${index}]`,
+              message: "仅支持 iso2、english、chinese",
+            });
+          }
+        });
+      }
+    }
+    if (pricing.single_shipment_matching_enabled !== undefined
+      && typeof pricing.single_shipment_matching_enabled !== "boolean") {
+      issues.push({ path: "pricing.single_shipment_matching_enabled", message: "必须是布尔值" });
+    }
+    const configuredMatchFields = pricing.single_shipment_match_fields;
+    let validMatchFields = DEFAULT_SINGLE_SHIPMENT_MATCH_FIELDS;
+    if (configuredMatchFields !== undefined) {
+      if (!Array.isArray(configuredMatchFields)) {
+        issues.push({ path: "pricing.single_shipment_match_fields", message: "必须是数组" });
+        validMatchFields = [];
+      } else {
+        validMatchFields = configuredMatchFields.filter((value): value is string => typeof value === "string" && SINGLE_SHIPMENT_MATCH_FIELDS.has(value));
+        configuredMatchFields.forEach((value, index) => {
+          if (typeof value !== "string" || !SINGLE_SHIPMENT_MATCH_FIELDS.has(value)) {
+            issues.push({
+              path: `pricing.single_shipment_match_fields[${index}]`,
+              message: "仅支持 recipient_name、phone、postal_code、address、email",
+            });
+          }
+        });
+      }
+    }
+    if (pricing.single_shipment_matching_enabled === true
+      && new Set(validMatchFields).size < 2) {
+      issues.push({
+        path: "pricing.single_shipment_match_fields",
+        message: "启用单独发货匹配时至少选择两个不同字段",
       });
     }
   }
