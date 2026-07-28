@@ -8,6 +8,19 @@ import { availableParallelism, userInfo } from "node:os";
 import { assertTrustedIpcSender, isTrustedRendererUrl } from "./security";
 import { readExcelPreviewFile } from "./excel-preview-file";
 import { resolveLocalProcessorExecutable } from "./processor-path";
+import { TaskHistoryStore, TASK_HISTORY_SCHEMA_VERSION } from "./task-history-store";
+import type {
+  TaskAnalyticsQuery,
+  TaskFileResult,
+  TaskHistoryEvent,
+  TaskHistoryExportRequest,
+  TaskHistoryQuery,
+  TaskHistoryRecord,
+  TaskHistoryStatus,
+  TaskIssueSummary,
+  TaskRunDiagnostics,
+} from "../shared/task-history";
+import { TASK_ISSUE_LABELS } from "../shared/task-history";
 import {
   initialWindowSize,
   MIN_WINDOW_SIZE,
@@ -46,22 +59,6 @@ type ConfigDocument = {
   content: string;
   modifiedAt: number;
   isDefault: boolean;
-};
-
-type TaskHistoryStatus = "running" | "completed" | "failed" | "stopped" | "interrupted";
-
-type TaskHistoryRecord = {
-  id: string;
-  startedAt: string;
-  completedAt?: string;
-  status: TaskHistoryStatus;
-  totalFiles: number;
-  completedFiles: number;
-  failedFiles: number;
-  totalRows: number;
-  matchedRows: number;
-  exceptionRows: number;
-  outputDir?: string;
 };
 
 type HeaderTemplateFieldMapping = {
@@ -121,6 +118,8 @@ const defaultExtractConfigPath = join(writableRootDir, "config", "extract_rules.
 const legacyRuntimeConfigPath = join(writableRootDir, "runtime", "app_config.json");
 const runtimeLogPath = join(writableRootDir, "runtime", "logs", "app.log");
 const taskHistoryPath = join(writableRootDir, "runtime", "task-history.jsonl");
+const taskHistoryDetailsDir = join(writableRootDir, "runtime", "task-details");
+const taskHistoryStore = new TaskHistoryStore(taskHistoryPath, taskHistoryDetailsDir);
 const templateStoreDir = join(app.getPath("userData"), "templates");
 const templateStorePath = join(templateStoreDir, "templates.json");
 const windowPreferencesPath = join(app.getPath("userData"), "window-preferences.json");
@@ -146,6 +145,7 @@ const productionContentSecurityPolicy = [
 const outputArtifactDirs = ["汇总", "正式命名", "待确认", "异常"];
 const supportedExcelExtensions = new Set([".xlsx", ".xlsm", ".xlsb", ".xls"]);
 const MAX_INPUT_FILES = 5_000;
+const TASK_PROGRESS_PERSIST_FILE_INTERVAL = 10;
 const defaultWindowBackgroundColor = "#EEF3F8";
 const windowResizeSaveDelayMs = 300;
 const detectedProcessingThreads = availableParallelism();
@@ -153,6 +153,9 @@ const maxConfiguredProcessingWorkers = Math.max(0, detectedProcessingThreads - 1
 let processor: ChildProcessWithoutNullStreams | null = null;
 let processorActivity: "scan" | "start" | "merge" | "price-analyze" | "price-validate" | "price-run" | null = null;
 let activeTask: TaskHistoryRecord | null = null;
+let activeTaskEventSequence = 0;
+let activeTaskLastPersistedFiles = 0;
+const activeTaskFiles = new Map<string, TaskFileResult>();
 let windowPreferences: WindowPreferences = { rememberSize: false };
 let windowPreferencesWriteQueue: Promise<void> = Promise.resolve();
 
@@ -633,86 +636,9 @@ async function restoreDefaultConfig(): Promise<ConfigDocument> {
   return atomicWriteConfig(current.path, JSON.stringify(bundled));
 }
 
-async function readTaskHistory(): Promise<TaskHistoryRecord[]> {
-  let content = "";
-  try {
-    content = await readFile(taskHistoryPath, "utf8");
-  } catch {
-    return [];
-  }
-  const latest = new Map<string, TaskHistoryRecord>();
-  for (const line of content.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const record = JSON.parse(line) as TaskHistoryRecord;
-      if (record && typeof record.id === "string") latest.set(record.id, record);
-    } catch {
-      // Ignore a truncated final line so one interrupted write cannot hide valid history.
-    }
-  }
-  return [...latest.values()].sort((left, right) => right.startedAt.localeCompare(left.startedAt));
-}
-
-async function persistTaskRecord(record: TaskHistoryRecord): Promise<void> {
-  await mkdir(dirname(taskHistoryPath), { recursive: true });
-  await appendFile(taskHistoryPath, `${JSON.stringify(record)}\n`, "utf8");
-  const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000;
-  const retained = (await readTaskHistory())
-    .filter((item) => Date.parse(item.startedAt) >= cutoff)
-    .slice(0, 1_000)
-    .reverse();
-  await writeFile(taskHistoryPath, retained.map((item) => JSON.stringify(item)).join("\n") + (retained.length ? "\n" : ""), "utf8");
-}
-
-async function markInterruptedTasks(): Promise<void> {
-  const running = (await readTaskHistory()).filter((record) => record.status === "running");
-  for (const record of running) {
-    await persistTaskRecord({ ...record, status: "interrupted", completedAt: new Date().toISOString() });
-  }
-}
-
-function localDateKey(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-async function getTaskHistorySummary(): Promise<{
-  today: { files: number; tasks: number; matchRate: number; exceptions: number };
-  trend: Array<{ date: string; files: number; matchedRows: number; totalRows: number; exceptions: number }>;
-  recent: TaskHistoryRecord[];
-}> {
-  const history = await readTaskHistory();
-  const todayKey = localDateKey(new Date());
-  const completed = history.filter((record) => record.status !== "running");
-  const today = completed.filter((record) => localDateKey(new Date(record.startedAt)) === todayKey);
-  const totalRows = today.reduce((sum, record) => sum + record.totalRows, 0);
-  const matchedRows = today.reduce((sum, record) => sum + record.matchedRows, 0);
-  const trend = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (6 - index));
-    const dateKey = localDateKey(date);
-    const records = completed.filter((record) => localDateKey(new Date(record.startedAt)) === dateKey);
-    return {
-      date: dateKey,
-      files: records.reduce((sum, record) => sum + record.totalFiles, 0),
-      matchedRows: records.reduce((sum, record) => sum + record.matchedRows, 0),
-      totalRows: records.reduce((sum, record) => sum + record.totalRows, 0),
-      exceptions: records.reduce((sum, record) => sum + record.exceptionRows, 0),
-    };
-  });
-  return {
-    today: {
-      files: today.reduce((sum, record) => sum + record.totalFiles, 0),
-      tasks: today.length,
-      matchRate: totalRows > 0 ? matchedRows / totalRows : 0,
-      exceptions: today.reduce((sum, record) => sum + record.exceptionRows, 0),
-    },
-    trend,
-    recent: history.slice(0, 8),
-  };
-}
+const persistTaskRecord = (record: TaskHistoryRecord): Promise<void> => taskHistoryStore.persistTaskRecord(record);
+const markInterruptedTasks = (): Promise<void> => taskHistoryStore.markInterruptedTasks();
+const getTaskHistorySummary = () => taskHistoryStore.getTaskHistorySummary();
 
 async function readConfigFile(configPath: string): Promise<Record<string, unknown>> {
   const text = await readFile(configPath, "utf8");
@@ -864,6 +790,62 @@ async function exportRuntimeLog(): Promise<string | null> {
   return result.filePath;
 }
 
+function validateTaskHistoryQuery(value: unknown): TaskHistoryQuery {
+  if (value === undefined) return {};
+  const input = requireRecord(value, "历史查询参数");
+  const statuses = Array.isArray(input.statuses)
+    ? input.statuses.filter((status): status is TaskHistoryStatus =>
+        status === "running"
+        || status === "completed"
+        || status === "failed"
+        || status === "stopped"
+        || status === "interrupted")
+    : undefined;
+  return {
+    ...(typeof input.from === "string" ? { from: input.from.slice(0, 10) } : {}),
+    ...(typeof input.to === "string" ? { to: input.to.slice(0, 10) } : {}),
+    ...(statuses ? { statuses } : {}),
+    ...(typeof input.search === "string" ? { search: input.search.slice(0, 512) } : {}),
+    ...(Number.isSafeInteger(input.page) ? { page: Number(input.page) } : {}),
+    ...(Number.isSafeInteger(input.pageSize) ? { pageSize: Number(input.pageSize) } : {}),
+  };
+}
+
+function validateBatchId(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
+    throw new TypeError("批次 ID 无效");
+  }
+  return value;
+}
+
+async function exportTaskHistory(value: unknown): Promise<string | null> {
+  const input = requireRecord(value, "历史导出参数") as Partial<TaskHistoryExportRequest>;
+  if (input.format === "json") {
+    const batchId = validateBatchId(input.batchId);
+    const content = await taskHistoryStore.exportBatchJson(batchId);
+    if (content === null) throw new Error("批次不存在");
+    const result = await dialog.showSaveDialog({
+      defaultPath: `pricing-batch-${batchId}.json`,
+      filters: [{ name: "JSON 文件", extensions: ["json"] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    await writeFile(result.filePath, content, "utf8");
+    return result.filePath;
+  }
+  if (input.format === "csv") {
+    const query = validateTaskHistoryQuery(input.query);
+    const content = await taskHistoryStore.exportHistoryCsv(query);
+    const result = await dialog.showSaveDialog({
+      defaultPath: `pricing-batches-${new Date().toISOString().slice(0, 10)}.csv`,
+      filters: [{ name: "CSV 文件", extensions: ["csv"] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    await writeFile(result.filePath, `\uFEFF${content}`, "utf8");
+    return result.filePath;
+  }
+  throw new TypeError("不支持的历史导出格式");
+}
+
 async function clearOutputArtifacts(event: Electron.IpcMainInvokeEvent, outputDir: string): Promise<string[]> {
   requireTrustedIpc(event);
   if (!outputDir || typeof outputDir !== "string") {
@@ -1004,13 +986,145 @@ function broadcastProcessorEvent(event: unknown): void {
   }
 }
 
+function appendActiveTaskEvent(
+  level: TaskHistoryEvent["level"],
+  phase: TaskHistoryEvent["phase"],
+  message: string,
+  filePath?: string,
+): void {
+  if (!activeTask) return;
+  activeTaskEventSequence += 1;
+  const event: TaskHistoryEvent = {
+    id: `${activeTask.id}-${activeTaskEventSequence}`,
+    sequence: activeTaskEventSequence,
+    time: new Date().toISOString(),
+    level,
+    phase,
+    message,
+    ...(filePath ? { filePath } : {}),
+  };
+  void taskHistoryStore.appendEvent(activeTask.id, event);
+}
+
+function saveActiveTaskFile(file: TaskFileResult): void {
+  if (!activeTask) return;
+  activeTaskFiles.set(file.path, file);
+  void taskHistoryStore.appendFileResult(activeTask.id, file);
+}
+
+function completeActiveTask(status: TaskHistoryStatus, message: string): void {
+  if (!activeTask) return;
+  const completedAt = new Date().toISOString();
+  for (const file of activeTaskFiles.values()) {
+    if (file.status !== "queued" && file.status !== "running") continue;
+    saveActiveTaskFile({
+      ...file,
+      status: "stopped",
+      completedAt,
+      durationMs: file.startedAt ? Math.max(0, Date.parse(completedAt) - Date.parse(file.startedAt)) : undefined,
+    });
+  }
+  appendActiveTaskEvent(
+    status === "completed" ? "success" : status === "stopped" ? "warning" : "error",
+    "batch",
+    message,
+  );
+  const completed: TaskHistoryRecord = {
+    ...activeTask,
+    status,
+    completedAt,
+    durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(activeTask.startedAt)),
+  };
+  activeTask = null;
+  activeTaskFiles.clear();
+  activeTaskEventSequence = 0;
+  activeTaskLastPersistedFiles = 0;
+  void persistTaskRecord(completed);
+}
+
+function normalizeTaskDiagnostics(value: unknown): Map<string, TaskIssueSummary[]> {
+  const result = new Map<string, TaskIssueSummary[]>();
+  if (!Array.isArray(value)) return result;
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const diagnostic = item as Partial<TaskRunDiagnostics>;
+    if (typeof diagnostic.inputPath !== "string" || !Array.isArray(diagnostic.issueSummaries)) continue;
+    result.set(resolve(diagnostic.inputPath), diagnostic.issueSummaries);
+  }
+  return result;
+}
+
 function trackProcessorEvent(event: unknown): void {
   if (!activeTask || !event || typeof event !== "object" || Array.isArray(event)) return;
   const payload = event as Record<string, unknown>;
+  if (payload.type === "price-progress" && typeof payload.path === "string" && payload.path) {
+    const path = resolve(payload.path);
+    const file = activeTaskFiles.get(path);
+    if (file?.status === "queued") {
+      const startedAt = new Date().toISOString();
+      saveActiveTaskFile({ ...file, status: "running", startedAt });
+      appendActiveTaskEvent("info", "file", `开始处理 ${file.fileName}`, path);
+    }
+  }
+  if (payload.type === "log" && typeof payload.message === "string") {
+    const level = payload.level === "success" || payload.level === "warning" || payload.level === "error"
+      ? payload.level
+      : "info";
+    appendActiveTaskEvent(level, "processor", payload.message);
+  }
+  if (payload.type === "error" && typeof payload.message === "string") {
+    appendActiveTaskEvent("error", "processor", payload.message);
+  }
   if (payload.type === "price-file-result") {
+    const path = typeof payload.path === "string" ? resolve(payload.path) : "";
+    const currentFile = activeTaskFiles.get(path);
     const totalRows = typeof payload.totalRows === "number" ? payload.totalRows : 0;
     const matchedRows = typeof payload.matchedRows === "number" ? payload.matchedRows : 0;
     const exceptionRows = typeof payload.exceptionRows === "number" ? payload.exceptionRows : 0;
+    const completedAt = new Date().toISOString();
+    if (currentFile) {
+      const startedAt = currentFile.startedAt ?? activeTask.startedAt;
+      const status = payload.status === "completed" ? "completed" : "failed";
+      const issueSummaries = status === "failed"
+        ? [
+            ...currentFile.issueSummaries,
+            {
+              code: "file_processing" as const,
+              label: TASK_ISSUE_LABELS.file_processing,
+              count: 1,
+              samples: [{
+                sourceRow: 0,
+                country: "",
+                sku: "",
+                quantity: null,
+                reason: String(payload.message ?? "文件处理失败"),
+              }],
+            },
+          ]
+        : currentFile.issueSummaries;
+      saveActiveTaskFile({
+        ...currentFile,
+        status,
+        startedAt,
+        completedAt,
+        durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)),
+        totalRows,
+        matchedRows,
+        exceptionRows,
+        issueSummaries,
+        ...(typeof payload.coverage === "number" ? { coverage: payload.coverage } : {}),
+        ...(typeof payload.outputPath === "string" ? { outputPath: payload.outputPath } : {}),
+        ...(typeof payload.message === "string" ? { message: payload.message } : {}),
+      });
+      appendActiveTaskEvent(
+        status === "completed" ? (exceptionRows > 0 ? "warning" : "success") : "error",
+        "file",
+        status === "completed"
+          ? `${currentFile.fileName} 处理完成：匹配 ${matchedRows}/${totalRows} 行，异常 ${exceptionRows} 行`
+          : `${currentFile.fileName} 处理失败：${String(payload.message ?? "未知错误")}`,
+        path,
+      );
+    }
     activeTask = {
       ...activeTask,
       completedFiles: activeTask.completedFiles + (payload.status === "completed" ? 1 : 0),
@@ -1019,15 +1133,25 @@ function trackProcessorEvent(event: unknown): void {
       matchedRows: activeTask.matchedRows + matchedRows,
       exceptionRows: activeTask.exceptionRows + exceptionRows,
     };
+    const processedFiles = activeTask.completedFiles + activeTask.failedFiles;
+    if (
+      processedFiles === activeTask.totalFiles
+      || processedFiles - activeTaskLastPersistedFiles >= TASK_PROGRESS_PERSIST_FILE_INTERVAL
+    ) {
+      activeTaskLastPersistedFiles = processedFiles;
+      void persistTaskRecord(activeTask);
+    }
   }
   if (payload.type === "price-done" && payload.mode === "run") {
-    const completed = {
-      ...activeTask,
-      status: (payload.stopped ? "stopped" : activeTask.failedFiles > 0 ? "failed" : "completed") as TaskHistoryStatus,
-      completedAt: new Date().toISOString(),
-    };
-    activeTask = null;
-    void persistTaskRecord(completed);
+    const status = payload.stopped ? "stopped" : activeTask.failedFiles > 0 ? "failed" : "completed";
+    completeActiveTask(
+      status,
+      status === "completed"
+        ? "批次处理完成"
+        : status === "stopped"
+          ? "批次已停止"
+          : `批次完成，但有 ${activeTask.failedFiles} 个文件失败`,
+    );
   }
 }
 
@@ -1120,15 +1244,7 @@ function stopProcessorProcess(): Promise<void> {
         broadcastProcessorEvent({ type: "done", stopped: true, summaryPath: null, outputFiles: [], failures: [] });
       } else if (stoppedActivity === "price-run") {
         broadcastProcessorEvent({ type: "price-done", mode: "run", stopped: true, files: [], failures: [] });
-        if (activeTask) {
-          const stoppedTask: TaskHistoryRecord = {
-            ...activeTask,
-            status: "stopped",
-            completedAt: new Date().toISOString(),
-          };
-          activeTask = null;
-          void persistTaskRecord(stoppedTask);
-        }
+        completeActiveTask("stopped", "批次已由用户停止");
       } else if (stoppedActivity === "price-analyze") {
         broadcastProcessorEvent({ type: "price-done", mode: "analysis", stopped: true, files: [] });
       }
@@ -1221,6 +1337,24 @@ app.whenReady().then(async () => {
   ipcMain.handle("history:get-summary", (event) => {
     requireTrustedIpc(event);
     return getTaskHistorySummary();
+  });
+  ipcMain.handle("history:list", (event, query: unknown) => {
+    requireTrustedIpc(event);
+    return taskHistoryStore.listTaskHistory(validateTaskHistoryQuery(query));
+  });
+  ipcMain.handle("history:get-detail", (event, batchId: unknown) => {
+    requireTrustedIpc(event);
+    return taskHistoryStore.getTaskHistoryDetail(validateBatchId(batchId));
+  });
+  ipcMain.handle("history:get-analytics", (event, query: unknown) => {
+    requireTrustedIpc(event);
+    const validated = validateTaskHistoryQuery(query);
+    const analyticsQuery: TaskAnalyticsQuery = { from: validated.from, to: validated.to };
+    return taskHistoryStore.getTaskAnalytics(analyticsQuery);
+  });
+  ipcMain.handle("history:export", (event, request: unknown) => {
+    requireTrustedIpc(event);
+    return exportTaskHistory(request);
   });
   ipcMain.handle("templates:list", (event) => {
     requireTrustedIpc(event);
@@ -1342,9 +1476,12 @@ app.whenReady().then(async () => {
     requireTrustedIpc(event);
     const validated = await validatePricePayload(payload);
     const files = validated.files as string[];
+    const startedAt = new Date().toISOString();
+    const diagnostics = normalizeTaskDiagnostics(validated.diagnostics);
     activeTask = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-      startedAt: new Date().toISOString(),
+      schemaVersion: TASK_HISTORY_SCHEMA_VERSION,
+      startedAt,
       status: "running",
       totalFiles: files.length,
       completedFiles: 0,
@@ -1352,11 +1489,34 @@ app.whenReady().then(async () => {
       totalRows: 0,
       matchedRows: 0,
       exceptionRows: 0,
+      fileNames: files.map((path) => basename(path)),
+      detailAvailable: true,
       ...(typeof validated.outputDir === "string" ? { outputDir: validated.outputDir } : {}),
     };
+    activeTaskEventSequence = 0;
+    activeTaskLastPersistedFiles = 0;
+    activeTaskFiles.clear();
     await persistTaskRecord(activeTask);
+    appendActiveTaskEvent("info", "batch", `批次开始，共 ${files.length} 个文件`);
+    for (const path of files) {
+      const file: TaskFileResult = {
+        path,
+        fileName: basename(path),
+        status: "queued",
+        totalRows: 0,
+        matchedRows: 0,
+        exceptionRows: diagnostics.get(path)?.reduce((sum, issue) => sum + issue.count, 0) ?? 0,
+        issueSummaries: diagnostics.get(path) ?? [],
+      };
+      saveActiveTaskFile(file);
+    }
     processorActivity = "price-run";
-    sendProcessorCommand({ ...validated, headerTemplates: await readHeaderTemplates(), action: "price-check-run" });
+    try {
+      sendProcessorCommand({ ...validated, headerTemplates: await readHeaderTemplates(), action: "price-check-run" });
+    } catch (error) {
+      completeActiveTask("failed", `批次提交失败：${String(error)}`);
+      throw error;
+    }
   });
   ipcMain.handle("processor:price-check-validate", async (event, payload: unknown) => {
     requireTrustedIpc(event);
@@ -1372,14 +1532,17 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("processor:pause", (event) => {
     requireTrustedIpc(event);
+    appendActiveTaskEvent("warning", "batch", "用户暂停批次");
     sendProcessorCommand({ action: "pause" });
   });
   ipcMain.handle("processor:resume", (event) => {
     requireTrustedIpc(event);
+    appendActiveTaskEvent("info", "batch", "用户继续批次");
     sendProcessorCommand({ action: "resume" });
   });
   ipcMain.handle("processor:stop", (event) => {
     requireTrustedIpc(event);
+    appendActiveTaskEvent("warning", "batch", "用户请求停止批次");
     return stopProcessorProcess();
   });
 

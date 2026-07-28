@@ -1,4 +1,33 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type {
+  TaskAnalyticsQuery,
+  TaskAnalyticsSummary,
+  TaskHistoryDetail,
+  TaskHistoryExportRequest,
+  TaskHistoryPage,
+  TaskHistoryQuery,
+  TaskHistorySummary,
+  TaskRunDiagnostics,
+} from "../shared/task-history";
+
+export type {
+  TaskAnalyticsQuery,
+  TaskAnalyticsSummary,
+  TaskEventLevel,
+  TaskFileResult,
+  TaskHistoryDetail,
+  TaskHistoryEvent,
+  TaskHistoryExportRequest,
+  TaskHistoryPage,
+  TaskHistoryQuery,
+  TaskHistoryRecord,
+  TaskHistoryStatus,
+  TaskHistorySummary,
+  TaskIssueCode,
+  TaskIssueSample,
+  TaskIssueSummary,
+  TaskRunDiagnostics,
+} from "../shared/task-history";
 
 export type RuntimeConfig = {
   recent_input_dir?: string;
@@ -31,25 +60,6 @@ export type ConfigValidationIssue = { path: string; message: string };
 export type ConfigValidationResult = { valid: boolean; issues: ConfigValidationIssue[] };
 export type ConfigDocument = { path: string; content: string; modifiedAt: number; isDefault: boolean };
 export type ProcessingCapacity = { detectedThreads: number; maxWorkers: number };
-export type TaskHistoryRecord = {
-  id: string;
-  startedAt: string;
-  completedAt?: string;
-  status: "running" | "completed" | "failed" | "stopped" | "interrupted";
-  totalFiles: number;
-  completedFiles: number;
-  failedFiles: number;
-  totalRows: number;
-  matchedRows: number;
-  exceptionRows: number;
-  outputDir?: string;
-};
-export type TaskHistorySummary = {
-  today: { files: number; tasks: number; matchRate: number; exceptions: number };
-  trend: Array<{ date: string; files: number; matchedRows: number; totalRows: number; exceptions: number }>;
-  recent: TaskHistoryRecord[];
-};
-
 export type HeaderTemplateFieldMapping = {
   fieldKey: string;
   label: string;
@@ -257,6 +267,7 @@ export type PriceCheckRunPayload = {
   files: string[];
   outputDir: string;
   configPath?: string;
+  diagnostics?: TaskRunDiagnostics[];
   mappings: Array<{
     inputPath: string;
     mapping: PriceCheckMapping;
@@ -281,6 +292,10 @@ const desktopAPI = {
   saveConfigDocumentAs: (content: string): Promise<ConfigDocument | null> => ipcRenderer.invoke("config:save-document-as", content),
   restoreDefaultConfig: (): Promise<ConfigDocument> => ipcRenderer.invoke("config:restore-default"),
   getTaskHistorySummary: (): Promise<TaskHistorySummary> => ipcRenderer.invoke("history:get-summary"),
+  listTaskHistory: (query: TaskHistoryQuery): Promise<TaskHistoryPage> => ipcRenderer.invoke("history:list", query),
+  getTaskHistoryDetail: (batchId: string): Promise<TaskHistoryDetail | null> => ipcRenderer.invoke("history:get-detail", batchId),
+  getTaskAnalytics: (query: TaskAnalyticsQuery): Promise<TaskAnalyticsSummary> => ipcRenderer.invoke("history:get-analytics", query),
+  exportTaskHistory: (request: TaskHistoryExportRequest): Promise<string | null> => ipcRenderer.invoke("history:export", request),
   listHeaderTemplates: (): Promise<HeaderTemplateRecord[]> => ipcRenderer.invoke("templates:list"),
   createHeaderTemplate: (): Promise<HeaderTemplateRecord | null> => ipcRenderer.invoke("templates:create"),
   updateHeaderTemplateMappings: (payload: { id: string; mappings: HeaderTemplateFieldMapping[] }): Promise<HeaderTemplateRecord> =>
