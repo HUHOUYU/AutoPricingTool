@@ -1,5 +1,10 @@
 import { ChevronDown, Plus, Trash2 } from "lucide-react";
-import type { PriceAnalysisFile, PriceCheckMapping, PriceMappingValidation } from "../../../preload";
+import type {
+  PriceAnalysisFile,
+  PriceCheckMapping,
+  PriceMappingValidation,
+  SingleShipmentMatchField,
+} from "../../../preload";
 import type { ExcelPreviewSheet, ExcelPreviewWorkbook } from "../lib/excel-preview";
 import { Button } from "./ui/button";
 
@@ -10,6 +15,7 @@ export type MappingFieldTarget =
   | "countryEnglishColumn"
   | "countryChineseColumn"
   | "singleShipmentColumn"
+  | `singleShipmentFields.${number}.column`
   | "orderPriceColumn"
   | "pricingHeaderRow"
   | "pricingQuantityHeaderRow"
@@ -43,6 +49,13 @@ type ColumnOption = { value: number; label: string };
 
 /** 无表头文案时在字段映射下拉/选中态中显示 */
 const EMPTY_HEADER_LABEL = "空表头";
+const SINGLE_SHIPMENT_FIELD_LABELS: Record<SingleShipmentMatchField, string> = {
+  recipient_name: "收件人姓名",
+  phone: "电话",
+  postal_code: "邮编",
+  address: "完整地址",
+  email: "邮箱",
+};
 
 function excelColumnLabel(column: number): string {
   let value = column;
@@ -155,6 +168,11 @@ export function MappingEditor({
   const update = (patch: Partial<PriceCheckMapping>): void => onMappingChange({ ...mapping, ...patch });
   const validationErrors = validation.result?.errors ?? [];
   const canConfirm = validation.status === "ready" && validationErrors.length === 0;
+  const singleShipmentMatching =
+    validation.result?.singleShipmentMatching ?? analysis.singleShipmentMatching;
+  const editableSingleShipmentFields = mapping.singleShipmentFields?.length
+    ? mapping.singleShipmentFields
+    : singleShipmentMatching?.fields ?? [];
 
   return (
     <section className="mapping-editor" aria-label="字段映射编辑器">
@@ -179,22 +197,67 @@ export function MappingEditor({
           <FieldSelect label="原始价格" value={mapping.orderPriceColumn} options={orderOptions} target="orderPriceColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("orderPriceColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
         </div>
         <div className="mapping-repeat-list">
-          {mapping.skuQtyPairs.map((pair, index) => <div className="mapping-repeat-row" key={index}>
-            <b>数量/SKU/合并数量 {index + 1}</b>
-            <FieldSelect label={`原始数量 ${index + 1}`} value={pair.qtyColumn || null} options={orderOptions} target={`skuQtyPairs.${index}.qtyColumn`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange(`skuQtyPairs.${index}.qtyColumn`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
+          {mapping.skuQtyPairs.map((pair, index) => <div className="mapping-repeat-row is-sku-quantity" key={index}>
+            <b>SKU/数量 {index + 1}</b>
             <FieldSelect label={`SKU ${index + 1}`} value={pair.skuColumn || null} options={orderOptions} target={`skuQtyPairs.${index}.skuColumn`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange(`skuQtyPairs.${index}.skuColumn`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
-            <FieldSelect label={`合并数量 ${index + 1}`} value={pair.mergedQtyColumn || null} options={orderOptions} target={`skuQtyPairs.${index}.mergedQtyColumn`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange(`skuQtyPairs.${index}.mergedQtyColumn`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
-            <button type="button" aria-label={`删除数量/SKU/合并数量 ${index + 1}`} disabled={mapping.skuQtyPairs.length === 1} onClick={() => update({ skuQtyPairs: mapping.skuQtyPairs.filter((_, pairIndex) => pairIndex !== index) })}><Trash2 /></button>
+            <FieldSelect label={`数量 ${index + 1}`} value={pair.mergedQtyColumn || null} options={orderOptions} target={`skuQtyPairs.${index}.mergedQtyColumn`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange(`skuQtyPairs.${index}.mergedQtyColumn`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
           </div>)}
-          <Button type="button" variant="outline" size="sm" onClick={() => update({ skuQtyPairs: [...mapping.skuQtyPairs, { skuColumn: 0, qtyColumn: 0, mergedQtyColumn: 0, skuHeader: "", qtyHeader: "", mergedQtyHeader: "" }] })}><Plus />添加数量/SKU/合并数量</Button>
         </div>
       </details>
 
-      <details onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.orderSheet); }}>
-        <summary>单独发货字段</summary>
-        <div className="mapping-fields">
-          <FieldSelect label="单独发货字段" value={mapping.singleShipmentColumn} options={orderOptions} target="singleShipmentColumn" activeTarget={activeTarget} optional onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange("singleShipmentColumn", column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
+      <details className="single-shipment-mapping" onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.orderSheet); }}>
+        <summary>
+          <span>单独发货判断</span>
+          <em className={singleShipmentMatching?.ready ? "is-ready" : "is-general"}>
+            {singleShipmentMatching?.ready ? "可匹配" : "通用价格"}
+          </em>
+        </summary>
+        <div className="single-shipment-status">
+          <strong>
+            {singleShipmentMatching
+              ? singleShipmentMatching.enabled
+                ? "配置已开启"
+                : "配置未开启"
+              : "配置状态待重新分析"}
+          </strong>
+          <p>{singleShipmentMatching?.reason ?? "请重新分析文件以读取当前配置状态"}</p>
+          {singleShipmentMatching?.fields.length ? (
+            <ul aria-label="单独发货联合字段识别结果">
+              {singleShipmentMatching.fields.map((field) => (
+                <li className={field.columns.length > 0 ? "is-found" : "is-missing"} key={field.field}>
+                  <span>{SINGLE_SHIPMENT_FIELD_LABELS[field.field]}</span>
+                  <b>
+                    {field.columns.length > 0
+                      ? field.columns.map((column, index) =>
+                        formatColumnOptionLabel(column, field.headers[index])).join(" + ")
+                      : "未识别"}
+                  </b>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
+        {editableSingleShipmentFields.length ? (
+          <div className="mapping-fields">
+            {editableSingleShipmentFields.map((field, index) => (
+              <FieldSelect
+                label={SINGLE_SHIPMENT_FIELD_LABELS[field.field]}
+                value={field.columns[0] ?? null}
+                options={orderOptions}
+                target={`singleShipmentFields.${index}.column`}
+                activeTarget={activeTarget}
+                optional
+                onActiveTargetChange={onActiveTargetChange}
+                onChange={(column) => onColumnChange(
+                  `singleShipmentFields.${index}.column`,
+                  column,
+                  headerText(orderSheet, mapping.orderHeaderRow, column ?? 0),
+                )}
+                key={field.field}
+              />
+            ))}
+          </div>
+        ) : null}
       </details>
 
       <details onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.pricingSheet); }}>

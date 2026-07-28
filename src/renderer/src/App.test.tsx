@@ -24,6 +24,11 @@ function createAnalysis(path: string): PriceAnalysisFile {
       mergedQtyHeader: "Merged Qty",
     }],
     singleShipmentColumn: 11,
+    singleShipmentFields: [
+      { field: "recipient_name" as const, columns: [11], headers: ["Name"] },
+      { field: "phone" as const, columns: [12], headers: ["Phone"] },
+      { field: "postal_code" as const, columns: [13], headers: ["Code"] },
+    ],
     orderPriceColumn: 10,
     pricingSheet: "核价",
     pricingHeaderRow: 1,
@@ -45,6 +50,7 @@ function createAnalysis(path: string): PriceAnalysisFile {
       countryChineseColumn: 6,
       skuQtyPairs: mapping.skuQtyPairs,
       singleShipmentColumn: 11,
+      singleShipmentFields: mapping.singleShipmentFields,
       priceColumn: 10,
       validOrderRows: 2,
       countryCoverage: 1,
@@ -65,6 +71,16 @@ function createAnalysis(path: string): PriceAnalysisFile {
     coverage: 1,
     matchedOrderRows: [2],
     writebackRows: [{ sourceRow: 2, pricingPrice: 9.5, priceDifference: 0, quantity: 1 }],
+    singleShipmentMatching: {
+      enabled: true,
+      ready: true,
+      fields: [
+        { field: "recipient_name", columns: [11], headers: ["Name"] },
+        { field: "phone", columns: [12], headers: ["Phone"] },
+        { field: "postal_code", columns: [13], headers: ["Code"] },
+      ],
+      reason: "联合字段完整；仅证据充分的单主 SKU 订单使用单独发货价格",
+    },
     requiresConfirmation: false,
     automationDecision: {
       status: "eligible",
@@ -105,7 +121,7 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
     exportRuntimeLog: vi.fn(async () => null),
     openPath: vi.fn(async () => ""),
     selectDirectory: vi.fn(async (purpose) => purpose === "input" ? "C:\\input-selected" : "C:\\output-selected"),
-    selectExcelFile: vi.fn(async () => null),
+    selectExcelFiles: vi.fn(async () => null),
     selectConfig: vi.fn(async () => "C:\\config-selected.json"),
     listExcelFiles: vi.fn(async () => ({ files: [], skippedTemporary: 0, skippedUnsupported: 0, skippedOutput: 0 })),
     readExcelPreviewFile: vi.fn(async () => ({ bytes: new Uint8Array(), size: 0, modifiedAt: 0 })),
@@ -297,6 +313,7 @@ describe("AutoPricingTool cyber workstation", () => {
 
     const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
     expect(fileInput).not.toBeNull();
+    expect(fileInput).toHaveAttribute("multiple");
     expect(screen.queryByLabelText("自动处理流程")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("快捷操作")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("文件状态统计")).not.toBeInTheDocument();
@@ -304,19 +321,20 @@ describe("AutoPricingTool cyber workstation", () => {
     const importSwitch = screen.getByRole("switch", { name: "导入模式：单文件" });
     expect(importSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(document.querySelector(".cyber-dropzone")!);
-    expect(api.selectExcelFile).not.toHaveBeenCalled();
+    expect(api.selectExcelFiles).not.toHaveBeenCalled();
     fireEvent.doubleClick(document.querySelector(".cyber-dropzone")!);
-    await waitFor(() => expect(api.selectExcelFile).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.selectExcelFiles).toHaveBeenCalledTimes(1));
 
     dropFiles([
       new File(["xlsx"], "one.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
       new File(["xlsx"], "two.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
     ]);
-    expect(await screen.findByText("单文件模式一次只能导入 1 个 Excel 文件")).toBeInTheDocument();
+    expect(await screen.findByText("已导入 2 个文件")).toBeInTheDocument();
 
-    await act(async () => { fireEvent.click(importSwitch); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "导入模式：单文件" }));
+    });
     expect(screen.getByRole("switch", { name: "导入模式：文件夹" })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByText("拖拽文件夹到此处")).toBeInTheDocument();
 
     dropFiles([new File(["xlsx"], "loose.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
     expect(await screen.findByText("文件夹模式只接受 1 个完整文件夹")).toBeInTheDocument();
@@ -334,16 +352,20 @@ describe("AutoPricingTool cyber workstation", () => {
     await waitFor(() => expect(api.selectDirectory).toHaveBeenCalledWith("input"));
   });
 
-  it("imports a workbook selected through the native file dialog", async () => {
+  it("imports multiple workbooks selected through the native file dialog", async () => {
     const api = createDesktopAPI();
-    vi.mocked(api.selectExcelFile).mockResolvedValue("C:\\orders\\2ZAH order 02-JUN.xlsx");
+    vi.mocked(api.selectExcelFiles).mockResolvedValue([
+      "C:\\orders\\2ZAH order 02-JUN.xlsx",
+      "C:\\orders\\3ZAH order 02-JUN.xlsx",
+    ]);
     installAPI(api);
     render(<App />);
     openFileProcessing();
 
     fireEvent.doubleClick(document.querySelector(".cyber-dropzone")!);
     expect(await screen.findByText("2ZAH order 02-JUN.xlsx")).toBeInTheDocument();
-    expect(screen.getByText("已导入 1 个文件")).toBeInTheDocument();
+    expect(screen.getByText("3ZAH order 02-JUN.xlsx")).toBeInTheDocument();
+    expect(screen.getByText("已导入 2 个文件")).toBeInTheDocument();
   });
 
   it("reports a missing disk path separately from an unsupported extension", async () => {
@@ -437,7 +459,7 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(screen.getByRole("button", { name: "重置本批" }));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "重置本批" }));
-    await waitFor(() => expect(screen.getByText("拖拽单个 Excel 文件到此处")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("拖拽一个或多个 Excel 文件到此处")).toBeInTheDocument());
     await waitFor(() => expect(screen.queryByLabelText("批次处理进度")).not.toBeInTheDocument());
     expect(screen.queryByLabelText("文件状态统计")).not.toBeInTheDocument();
   });
@@ -938,7 +960,8 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByRole("button", { name: "加载全部数据" })).toHaveTextContent("加载全部");
     const unmatchedSwitch = screen.getByRole("switch", { name: "未匹配定位" });
     expect(unmatchedSwitch).toHaveAttribute("aria-checked", "false");
-    fireEvent.click(unmatchedSwitch);
+    expect(unmatchedSwitch).toHaveAttribute("aria-keyshortcuts", "Control+E");
+    fireEvent.keyDown(document, { key: "e", ctrlKey: true });
     expect(unmatchedSwitch).toHaveAttribute("aria-checked", "true");
     // 开启未匹配定位时触发一次 loadAll（订单+核价完整数据）
     await waitFor(() => expect(FakeExcelPreviewWorker.instances).toHaveLength(2));
@@ -1268,16 +1291,20 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(document.querySelectorAll(".excel-preview-header .is-sku-qty-column").length).toBeGreaterThan(0);
     expect(document.querySelectorAll(".excel-preview-header .is-price-column").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("冻结表头，第 1 行")).toHaveTextContent("订单号");
-    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("数量/SKU/合并数量 1价格字段常规匹配字段");
+    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("SKU/数量 1价格字段常规匹配字段");
     expect(screen.queryByLabelText("预览状态")).not.toBeInTheDocument();
     expect(screen.queryByText(/已显示全部数据范围/)).not.toBeInTheDocument();
     expect(document.querySelector(".cyber-footer")).not.toBeInTheDocument();
-    const rawQuantitySelect = screen.getByLabelText("原始数量 1");
-    await waitFor(() => expect((rawQuantitySelect as HTMLSelectElement).options.length).toBeGreaterThan(1));
+    expect(screen.queryByLabelText("原始数量 1")).not.toBeInTheDocument();
     expect(screen.getByLabelText("SKU 1")).toBeInTheDocument();
-    expect(screen.getByLabelText("合并数量 1")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("单独发货字段", { selector: "summary" }));
-    await waitFor(() => expect(screen.getByLabelText("单独发货字段")).toHaveValue("11"));
+    expect(screen.getByLabelText("数量 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("单独发货判断", { selector: "summary span" }));
+    expect(screen.getByText("配置已开启")).toBeInTheDocument();
+    expect(screen.getByText("L · Phone")).toBeInTheDocument();
+    expect(screen.getByText("M · Code")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("收件人姓名")).toHaveValue("11"));
+    expect(screen.getByLabelText("电话")).toHaveValue("12");
+    expect(screen.getByLabelText("邮编")).toHaveValue("13");
     const confirm = screen.getByRole("button", { name: "确认并处理此文件" });
     expect(confirm).toBeDisabled();
     await waitFor(() => expect(api.validatePriceMapping).toHaveBeenCalled());
@@ -1416,16 +1443,53 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(document.querySelector(".excel-preview-row-number.is-matched-row")).toHaveTextContent("2");
     await act(async () => api.emit({ type: "price-validation", inputPath: request.inputPath, requestVersion: 0, evaluatedRows: 1, matchedRows: 0, coverage: 0, errors: [], warnings: ["过期结果"] }));
     expect(screen.queryByText("过期结果")).not.toBeInTheDocument();
-    const quantitySelect = screen.getByLabelText("原始数量 1");
-    fireEvent.change(quantitySelect, { target: { value: "1" } });
+    const skuSelect = screen.getByLabelText("SKU 1");
+    fireEvent.change(skuSelect, { target: { value: "3" } });
     await waitFor(() => expect(vi.mocked(api.validatePriceMapping).mock.calls.some(([payload]) => (
-      payload.mapping.skuQtyPairs[0].qtyColumn === 1
+      payload.mapping.skuQtyPairs[0].skuColumn === 3
     ))).toBe(true));
     expect(document.querySelector(".excel-preview-row-number.is-matched-row")).not.toBeInTheDocument();
     const staleWritebackCells = document.querySelectorAll(".excel-preview-rows .is-writeback-column:not(.is-header-cell)");
     expect(staleWritebackCells).toHaveLength(3);
     staleWritebackCells.forEach((cell) => expect(cell).toHaveTextContent(""));
   }, 15_000);
+
+  it("allows every configured single-shipment field column to be changed manually", async () => {
+    vi.stubGlobal("Worker", FakeExcelPreviewWorker);
+    const api = createDesktopAPI();
+    vi.mocked(api.readExcelPreviewFile).mockResolvedValue({
+      bytes: new Uint8Array([1, 2, 3]),
+      size: 3,
+      modifiedAt: 1,
+    });
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    dropFiles([new File(["xlsx"], "order.xlsx")]);
+    expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
+    const analysis = createAnalysis("C:\\orders\\order.xlsx");
+    analysis.requiresConfirmation = true;
+    analysis.automationDecision = {
+      ...analysis.automationDecision,
+      status: "confirm",
+      reasons: ["需要确认映射"],
+    };
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: analysis });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "待确认1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "详情" }));
+    await screen.findByText("订单-数据");
+    fireEvent.click(screen.getByText("单独发货判断", { selector: "summary span" }));
+
+    const phoneSelect = await screen.findByLabelText("电话");
+    fireEvent.change(phoneSelect, { target: { value: "2" } });
+
+    await waitFor(() => expect(vi.mocked(api.validatePriceMapping).mock.calls.some(([payload]) => (
+      payload.mapping.singleShipmentFields?.find((field) => field.field === "phone")?.columns[0] === 2
+    ))).toBe(true));
+  });
 
   it("uses one shade for each SKU and quantity pair and different shades between pairs", async () => {
     vi.stubGlobal("Worker", FakeExcelPreviewWorker);
@@ -1459,14 +1523,18 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(column("I")).toHaveClass("is-sku-qty-column");
     expect(column("C")).toHaveClass("is-sku-qty-column");
     expect(column("D")).toHaveClass("is-sku-qty-column");
+    expect(column("B")).not.toHaveClass("is-sku-qty-column");
+    expect(column("G")).not.toHaveClass("is-sku-qty-column");
     expect(shade("H")).toBe(shade("I"));
     expect(shade("C")).toBe(shade("D"));
+    expect(shade("B")).toBe("");
+    expect(shade("G")).toBe("");
     expect(shade("H")).not.toBe(shade("C"));
     expect(Number.parseInt(shade("H"), 10)).toBeGreaterThan(Number.parseInt(shade("C"), 10));
     const skuBodyCell = screen.getByText("GOOD-1", { selector: ".excel-preview-row > span" });
     expect(skuBodyCell).not.toHaveClass("is-sku-qty-column");
     expect(skuBodyCell.style.getPropertyValue("--sku-pair-strength")).toBe("");
-    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("数量/SKU/合并数量 1数量/SKU/合并数量 2");
+    expect(screen.getByLabelText("字段颜色说明")).toHaveTextContent("SKU/数量 1SKU/数量 2");
   });
 
   it("highlights only contiguous duplicate order numbers", async () => {
@@ -1818,6 +1886,9 @@ describe("AutoPricingTool cyber workstation", () => {
     render(<App />);
     fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[0]);
     const workers = await screen.findByRole("spinbutton", { name: "处理线程数" });
+    expect(screen.queryByText("数量策略")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "数量乘以单价" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "零价格视为有效" })).not.toBeInTheDocument();
     expect(await screen.findByText("最大线程数：8")).toBeInTheDocument();
     expect(workers).toHaveAttribute("max", "7");
     fireEvent.change(workers, { target: { value: "99" } });
@@ -1855,6 +1926,41 @@ describe("AutoPricingTool cyber workstation", () => {
       expectedModifiedAt: 10,
       content: expect.stringContaining('"extension_field"'),
     })));
+  });
+
+  it("re-analyzes imported files after saving pricing configuration", async () => {
+    const api = createDesktopAPI();
+    const content = JSON.stringify({
+      pricing: {
+        single_shipment_matching_enabled: false,
+        single_shipment_match_fields: ["recipient_name", "phone", "postal_code"],
+      },
+    }, null, 2) + "\n";
+    vi.mocked(api.getConfigDocument).mockResolvedValue({
+      path: "C:\\config.json",
+      content,
+      modifiedAt: 10,
+      isDefault: false,
+    });
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    dropFiles([new File(["xlsx"], "linked.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    })]);
+    expect(await screen.findByText("linked.xlsx")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[0]);
+    const singleShipmentSwitch = await screen.findByRole("switch", {
+      name: "启用单独发货价格匹配",
+    });
+    fireEvent.click(singleShipmentSwitch);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(api.analyzePriceFiles).toHaveBeenCalledWith({
+      files: ["C:\\orders\\linked.xlsx"],
+      configPath: "C:\\config.json",
+    }));
   });
 
   it("formats valid JSON source without changing its data", async () => {

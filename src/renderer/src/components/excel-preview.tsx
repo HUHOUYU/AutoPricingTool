@@ -92,7 +92,6 @@ function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetN
   if (sheetName === mapping.orderSheet) {
     if (mapping.skuQtyPairs.some((pair) => (
       pair.skuColumn === column
-      || pair.qtyColumn === column
       || pair.mergedQtyColumn === column
     ))) return " is-sku-qty-column";
     if (mapping.orderPriceColumn === column) return " is-price-column";
@@ -164,7 +163,6 @@ function skuPairStyle(mapping: PriceCheckMapping | null | undefined, sheetName: 
   const pairIndex = skuQtyPairsByPriority(mapping)
     .findIndex((pair) => (
       pair.skuColumn === column
-      || pair.qtyColumn === column
       || pair.mergedQtyColumn === column
     ));
   if (pairIndex < 0) return undefined;
@@ -383,6 +381,16 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     .map((row) => row.sourceRow)
     .filter((row) => !matchedOrderRowSet.has(row))))
     .sort((left, right) => left - right), [matchedOrderRowSet, writebackRows]);
+  const toggleUnmatchedNavigation = useCallback((): void => {
+    if (activeSheetName !== mapping?.orderSheet || unmatchedOrderRows.length === 0) return;
+    setUnmatchedNavigationEnabled((current) => {
+      const enabling = !current;
+      // 开启未匹配定位时加载全部；已加载则不重复触发
+      if (enabling && !loadAll) setLoadAll(true);
+      return enabling;
+    });
+    setActiveUnmatchedRow(null);
+  }, [activeSheetName, loadAll, mapping?.orderSheet, unmatchedOrderRows.length]);
   const shouldVirtualizeRows = previewRowCount > 100;
   const rowVirtualizer = useVirtualizer({
     count: shouldVirtualizeRows ? previewRowCount : 0,
@@ -475,6 +483,21 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     document.addEventListener("keydown", handleFindShortcut);
     return () => document.removeEventListener("keydown", handleFindShortcut);
   }, [activeSheet, searchOpen]);
+
+  useEffect(() => {
+    const handleUnmatchedShortcut = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLocaleLowerCase() !== "e") return;
+      if (activeSheetName !== mapping?.orderSheet || unmatchedOrderRows.length === 0) return;
+      const target = event.target;
+      if (target instanceof HTMLElement
+        && (target.matches("input, textarea, select, [contenteditable='true']")
+          || target.closest("input, textarea, select, [contenteditable='true']"))) return;
+      event.preventDefault();
+      toggleUnmatchedNavigation();
+    };
+    document.addEventListener("keydown", handleUnmatchedShortcut);
+    return () => document.removeEventListener("keydown", handleUnmatchedShortcut);
+  }, [activeSheetName, mapping?.orderSheet, toggleUnmatchedNavigation, unmatchedOrderRows.length]);
 
   const sourceColumnCount = activeSheet?.displayedColumnCount ?? 0;
   const columnCount = sourceColumnCount + (showsWritebackColumns ? writebackColumnHeaders.length : 0);
@@ -735,17 +758,11 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
           role="switch"
           aria-checked={unmatchedNavigationEnabled}
           aria-label="未匹配定位"
+          aria-keyshortcuts="Control+E"
+          title="Ctrl+E 开启或关闭未匹配定位"
           className={`excel-preview-unmatched-switch${unmatchedNavigationEnabled ? " is-enabled" : ""}`}
           disabled={activeSheetName !== mapping?.orderSheet || unmatchedOrderRows.length === 0}
-          onClick={() => {
-            setUnmatchedNavigationEnabled((current) => {
-              const enabling = !current;
-              // 开启未匹配定位时加载全部；已加载则不重复触发
-              if (enabling && !loadAll) setLoadAll(true);
-              return enabling;
-            });
-            setActiveUnmatchedRow(null);
-          }}
+          onClick={toggleUnmatchedNavigation}
           onKeyDown={(event) => {
             if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
             event.preventDefault();
@@ -1058,7 +1075,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
         <footer className="excel-preview-legend" aria-label="字段颜色说明">
           <div className="excel-preview-legend-colors">
             {mapping && activeSheet.name === mapping.orderSheet
-              ? skuQtyPairsByPriority(mapping).map((pair, index) => <span key={`${pair.qtyColumn}-${pair.skuColumn}-${pair.mergedQtyColumn}`}><i className="is-sku-qty" style={{ "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(index, skuPairShadeStrengths.length - 1)]}%` } as SkuPairStyle} />数量/SKU/合并数量 {index + 1}</span>)
+              ? skuQtyPairsByPriority(mapping).map((pair, index) => <span key={`${pair.skuColumn}-${pair.mergedQtyColumn}`}><i className="is-sku-qty" style={{ "--sku-pair-strength": `${skuPairShadeStrengths[Math.min(index, skuPairShadeStrengths.length - 1)]}%` } as SkuPairStyle} />SKU/数量 {index + 1}</span>)
               : <span><i className="is-sku" />SKU 字段</span>}
             <span><i className="is-price" />价格字段</span>
             <span><i className="is-mapped" />常规匹配字段</span>

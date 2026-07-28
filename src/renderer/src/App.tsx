@@ -65,6 +65,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useUIStore, type FileTab, type WorkbenchPage } from "@/stores/ui-store";
 import type { ExcelPreviewWorkbook } from "@/lib/excel-preview";
 import type {
+  ConfigDocument,
   DesktopAPI,
   PriceAnalysisCandidate,
   PriceAnalysisFile,
@@ -246,6 +247,7 @@ function buildMapping(order: PriceAnalysisCandidate, pricing: PriceAnalysisCandi
     countryChineseColumn: order.countryChineseColumn ?? null,
     skuQtyPairs: order.skuQtyPairs ?? [],
     singleShipmentColumn: order.singleShipmentColumn ?? null,
+    singleShipmentFields: order.singleShipmentFields ?? [],
     orderPriceColumn: order.priceColumn ?? null,
     pricingSheet: pricing.sheetName,
     pricingHeaderRow: pricing.headerRow,
@@ -532,6 +534,27 @@ function applyMappingColumn(mapping: PriceCheckMapping, target: MappingFieldTarg
       quantityTierColumns: mapping.quantityTierColumns.map((tier, index) => index === tierIndex ? { ...tier, column: column ?? 0, header } : tier),
     };
   }
+  const singleShipmentMatch = /^singleShipmentFields\.(\d+)\.column$/.exec(target);
+  if (singleShipmentMatch) {
+    const fieldIndex = Number(singleShipmentMatch[1]);
+    const singleShipmentFields = (mapping.singleShipmentFields ?? []).map((field, index) =>
+      index === fieldIndex
+        ? {
+            ...field,
+            columns: column ? [column] : [],
+            headers: column ? [header] : [],
+          }
+        : field,
+    );
+    const editedField = singleShipmentFields[fieldIndex];
+    return {
+      ...mapping,
+      singleShipmentFields,
+      singleShipmentColumn: editedField?.field === "recipient_name"
+        ? column
+        : mapping.singleShipmentColumn,
+    };
+  }
   if (target.endsWith("HeaderRow")) return mapping;
   if (target === "pricingSkuColumn" || target === "pricingCountryColumn") return { ...mapping, [target]: column ?? 0 };
   return { ...mapping, [target]: column };
@@ -553,6 +576,10 @@ function mappingTargetLabel(target: MappingFieldTarget | null): string {
     pricingCountryColumn: "核价国家",
   };
   if (labels[target]) return labels[target];
+  const singleShipment = /^singleShipmentFields\.(\d+)\.column$/.exec(target);
+  if (singleShipment) {
+    return `单独发货联合字段 ${Number(singleShipment[1]) + 1}`;
+  }
   const pair = /^skuQtyPairs\.(\d+)\.(skuColumn|qtyColumn|mergedQtyColumn)$/.exec(target);
   if (pair) {
     const label = pair[2] === "skuColumn"
@@ -568,6 +595,18 @@ function mappingTargetLabel(target: MappingFieldTarget | null): string {
 
 function mappingColumnConflict(mapping: PriceCheckMapping, target: MappingFieldTarget, column: number): string | null {
   const pricingTarget = target.startsWith("pricing") || target.startsWith("quantityTierColumns");
+  const singleShipmentEntries: Array<[MappingFieldTarget, number]> = (
+    mapping.singleShipmentFields?.length
+      ? mapping.singleShipmentFields.flatMap((field, index) =>
+          field.columns.map((fieldColumn) => [
+            `singleShipmentFields.${index}.column` as MappingFieldTarget,
+            fieldColumn,
+          ] as [MappingFieldTarget, number]),
+        )
+      : mapping.singleShipmentColumn
+        ? [["singleShipmentColumn", mapping.singleShipmentColumn]]
+        : []
+  );
   const entries: Array<[MappingFieldTarget, number | null | undefined]> = pricingTarget
     ? [
         ["pricingSkuColumn", mapping.pricingSkuColumn],
@@ -579,7 +618,7 @@ function mappingColumnConflict(mapping: PriceCheckMapping, target: MappingFieldT
         ["countryCodeColumn", mapping.countryCodeColumn],
         ["countryEnglishColumn", mapping.countryEnglishColumn],
         ["countryChineseColumn", mapping.countryChineseColumn],
-        ["singleShipmentColumn", mapping.singleShipmentColumn],
+        ...singleShipmentEntries,
         ["orderPriceColumn", mapping.orderPriceColumn],
         ...mapping.skuQtyPairs.flatMap((pair, index) => [
           [`skuQtyPairs.${index}.skuColumn` as MappingFieldTarget, pair.skuColumn] as [MappingFieldTarget, number],
@@ -854,6 +893,7 @@ export function App(): React.JSX.Element {
                 matchedOrderRows: analysis.matchedOrderRows ?? [],
                 writebackRows: analysis.writebackRows ?? [],
                 unmatchedRows: analysis.unmatchedRows ?? [],
+                singleShipmentMatching: analysis.singleShipmentMatching ?? null,
                 errors: [],
                 warnings: analysis.automationDecision.reasons,
               },
@@ -1123,11 +1163,6 @@ export function App(): React.JSX.Element {
   const addFiles = useCallback(async (incoming: File[]): Promise<void> => {
     const api = getDesktopAPI();
     if (!api) return;
-    if (incoming.length !== 1) {
-      appendLog("单文件模式一次只能导入 1 个 Excel 文件", "warning");
-      toast.warning("单文件模式一次只能导入 1 个 Excel 文件");
-      return;
-    }
     const supportedFiles = incoming.filter(isExcelFile);
     if (supportedFiles.length === 0) {
       appendLog("没有发现支持的 Excel 文件（xlsx、xlsm、xlsb、xls）", "warning");
@@ -1150,17 +1185,17 @@ export function App(): React.JSX.Element {
     registerPaths(paths, "file");
   }, [appendLog, ensureOutputDirectory, registerPaths]);
 
-  const chooseInputFile = useCallback(async (): Promise<void> => {
+  const chooseInputFiles = useCallback(async (): Promise<void> => {
     const api = getDesktopAPI();
     if (!api || batchStarted) return;
-    const selected = await api.selectExcelFile();
-    if (!selected) return;
-    if (!isExcelPath(selected)) {
+    const selected = await api.selectExcelFiles();
+    if (!selected?.length) return;
+    const supportedPaths = selected.filter(isExcelPath);
+    if (supportedPaths.length !== selected.length) {
       appendLog("所选文件不是支持的 Excel 格式", "warning");
       toast.warning("仅支持 Excel 文件（xlsx、xlsm、xlsb、xls）");
-      return;
     }
-    registerPaths([selected], "file");
+    if (supportedPaths.length > 0) registerPaths(supportedPaths, "file");
   }, [appendLog, batchStarted, registerPaths]);
 
   const scanInputDirectory = useCallback(async (directoryPath: string): Promise<void> => {
@@ -1227,18 +1262,17 @@ export function App(): React.JSX.Element {
       "application/vnd.ms-excel": [".xls"],
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx", ".xlsm", ".xlsb"],
     } : undefined,
-    maxFiles: importSourceMode === "file" ? 1 : 0,
-    multiple: importSourceMode === "folder",
+    maxFiles: 0,
+    multiple: true,
     disabled: batchStarted,
     getFilesFromEvent: importSourceMode === "file" ? getNativeFilesFromEvent : undefined,
     noClick: true,
     noKeyboard: true,
     onDrop: (acceptedFiles, rejections) => {
-      const hasTooManyFiles = rejections.some((rejection) => rejection.errors.some((error) => error.code === "too-many-files"));
       if (rejections.length > 0) {
-        const message = hasTooManyFiles
-          ? importSourceMode === "file" ? "单文件模式一次只能导入 1 个 Excel 文件" : "文件夹模式一次只能导入 1 个文件夹"
-          : importSourceMode === "file" ? "仅支持 Excel 文件（xlsx、xlsm、xlsb、xls）" : "文件夹模式只接受文件夹";
+        const message = importSourceMode === "file"
+          ? "仅支持 Excel 文件（xlsx、xlsm、xlsb、xls）"
+          : "文件夹模式只接受文件夹";
         appendLog(message, "warning");
         toast.warning(message);
         return;
@@ -1254,7 +1288,10 @@ export function App(): React.JSX.Element {
     [files, selectedPaths.length, selectedSet],
   );
 
-  const analyzeFiles = async (targetFiles: string[] = actionFiles): Promise<void> => {
+  const analyzeFiles = async (
+    targetFiles: string[] = actionFiles,
+    configPathOverride?: string,
+  ): Promise<void> => {
     const api = getDesktopAPI();
     if (!api || targetFiles.length === 0 || isAnalyzing || isRunning) return;
     setBatchStarted(true);
@@ -1285,11 +1322,28 @@ export function App(): React.JSX.Element {
     setProgress({ current: 0, total: targetFiles.length, phase: "analyze", path: "" });
     appendLog("开始分析 " + targetFiles.length + " 个文件");
     try {
-      await api.analyzePriceFiles({ files: targetFiles, ...(configPath ? { configPath } : {}) });
+      const effectiveConfigPath = configPathOverride ?? configPath;
+      await api.analyzePriceFiles({
+        files: targetFiles,
+        ...(effectiveConfigPath ? { configPath: effectiveConfigPath } : {}),
+      });
     } catch (error) {
       setIsAnalyzing(false);
       appendLog("提交分析失败：" + String(error), "error");
     }
+  };
+
+  const handleConfigDocumentSaved = async (document: ConfigDocument): Promise<void> => {
+    setConfigPath(document.path);
+    if (files.length === 0) return;
+    if (isAnalyzing || isRunning) {
+      appendLog("配置已保存；当前任务结束后请重新分析，使新配置应用到现有文件", "warning");
+      toast.warning("配置已保存，当前任务结束后需要重新分析");
+      return;
+    }
+    appendLog("配置已保存，正在按新配置重新分析已导入文件");
+    toast.info("配置已生效，正在重新分析已导入文件");
+    await analyzeFiles(files, document.path);
   };
 
   const runPricing = async (targetFiles: string[] = actionFiles): Promise<void> => {
@@ -2481,7 +2535,7 @@ export function App(): React.JSX.Element {
               dark={theme === "dark"}
               currentFileCount={files.length}
               outputDir={outputDir}
-              onNewProcessing={() => { setActivePage("files"); if (!batchStarted) void chooseInputFile(); }}
+              onNewProcessing={() => { setActivePage("files"); if (!batchStarted) void chooseInputFiles(); }}
               onOpenFiles={() => setActivePage("files")}
               onOpenConfig={() => setActivePage("config")}
             />
@@ -2502,19 +2556,19 @@ export function App(): React.JSX.Element {
                 </header>
                 <div {...getRootProps({
                   className: "cyber-dropzone" + (isDragActive ? " is-dragging" : ""),
-                  onDoubleClick: () => importSourceMode === "file" ? void chooseInputFile() : void chooseInputDirectory(),
+                  onDoubleClick: () => importSourceMode === "file" ? void chooseInputFiles() : void chooseInputDirectory(),
                   onKeyDown: (event) => {
                     if (event.key !== "Enter" && event.key !== " ") return;
                     event.preventDefault();
-                    if (importSourceMode === "file") void chooseInputFile();
+                    if (importSourceMode === "file") void chooseInputFiles();
                     else void chooseInputDirectory();
                   },
                 })}>
                   <input {...getInputProps()} />
                   <div className="cyber-wave" aria-hidden="true" />
                   <div className="cyber-upload-visual" aria-hidden="true">{importSourceMode === "file" ? <FileUp /> : <FolderOpen />}</div>
-                  <strong>{importSourceMode === "file" ? "拖拽单个 Excel 文件到此处" : "拖拽文件夹到此处"}</strong>
-                  <span>{importSourceMode === "file" ? "或双击选择单个本地文件" : "或双击选择本地文件夹"}</span>
+                  <strong>{importSourceMode === "file" ? "拖拽一个或多个 Excel 文件到此处" : "拖拽文件夹到此处"}</strong>
+                  <span>{importSourceMode === "file" ? "或双击选择本地文件" : "或双击选择本地文件夹"}</span>
                   <small>{importSourceMode === "file" ? "支持格式：.xlsx、.xls、.xlsm、.xlsb" : "将自动扫描文件夹中的 Excel 文件"}</small>
                   <button
                     type="button"
@@ -2534,7 +2588,7 @@ export function App(): React.JSX.Element {
                 <input {...getInputProps()} />
                 <div className="cyber-upload-summary">
                   <span className="panel-icon"><FileCheck2 /></span>
-                  <div><strong id="upload-title">已导入 {files.length} 个文件</strong><small>可继续拖入{importSourceMode === "file" ? "单个 Excel 文件" : "一个文件夹"}</small></div>
+                  <div><strong id="upload-title">已导入 {files.length} 个文件</strong><small>可继续拖入{importSourceMode === "file" ? "一个或多个 Excel 文件" : "一个文件夹"}</small></div>
                 </div>
                 <div className="cyber-pipeline" aria-label="自动处理流程">
                   <span className="is-done"><b>1</b>导入<em>{files.length}</em></span>
@@ -2553,7 +2607,7 @@ export function App(): React.JSX.Element {
                 >
                   <span>单文件</span><i aria-hidden="true" /><span>文件夹</span>
                 </button>
-                <button type="button" className="cyber-continue-import" onClick={() => importSourceMode === "file" ? void chooseInputFile() : void chooseInputDirectory()}><FilePlus2 />继续添加</button>
+                <button type="button" className="cyber-continue-import" onClick={() => importSourceMode === "file" ? void chooseInputFiles() : void chooseInputDirectory()}><FilePlus2 />继续添加</button>
                 {!sidebarCollapsed ? renderTaskActions("cyber-workbench-actions cyber-banner-actions", true) : null}
               </div>}
             </motion.section> : null}
@@ -2693,7 +2747,7 @@ export function App(): React.JSX.Element {
             </footer>
           </section>
           </> : activePage === "config" ? (
-            <ConfigCenterPage api={getDesktopAPI()} />
+            <ConfigCenterPage api={getDesktopAPI()} onDocumentSaved={handleConfigDocumentSaved} />
           ) : activePage === "templates" ? (
             <TemplateManagementPage api={getDesktopAPI()} />
           ) : (

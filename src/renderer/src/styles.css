@@ -3757,15 +3757,15 @@ html:not(.dark) .cyber-log-drawer {
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: clamp(8px, 2vw, 24px);
   background: rgb(28 25 22 / 42%);
   backdrop-filter: blur(4px);
 }
 
 .issue-details-dialog {
   display: grid;
-  width: min(850px, 100%);
-  max-height: min(680px, calc(100vh - 48px));
+  width: min(1080px, 100%);
+  max-height: min(760px, calc(100vh - 16px));
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -3777,17 +3777,17 @@ html:not(.dark) .cyber-log-drawer {
 
 .issue-details-dialog > header {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 32px;
+  grid-template-columns: 38px minmax(0, 1fr) 32px;
   align-items: start;
-  gap: 13px;
-  padding: 20px 20px 16px;
+  gap: 11px;
+  padding: 14px 16px 12px;
   border-bottom: 1px solid var(--border);
 }
 
 .issue-details-dialog-icon {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   place-items: center;
   border-radius: 13px;
   color: var(--cyber-amber);
@@ -3841,7 +3841,7 @@ html:not(.dark) .cyber-log-drawer {
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
-  padding: 16px 20px;
+  padding: 12px 16px;
 }
 
 .issue-details-dialog-count {
@@ -3924,7 +3924,7 @@ html:not(.dark) .cyber-log-drawer {
   border-spacing: 0;
   table-layout: fixed;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.35;
 }
 
 .issue-details-dialog-table-scroll col.is-source-row {
@@ -3938,7 +3938,7 @@ html:not(.dark) .cyber-log-drawer {
 .issue-details-dialog-table-scroll th,
 .issue-details-dialog-table-scroll td {
   min-width: 0;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: middle;
@@ -4101,7 +4101,7 @@ html:not(.dark) .cyber-log-drawer {
 .issue-details-dialog > footer {
   display: flex;
   justify-content: flex-end;
-  padding: 14px 20px 18px;
+  padding: 10px 16px 12px;
   border-top: 1px solid var(--border);
 }
 
@@ -4586,7 +4586,7 @@ html.dark .issue-details-dialog {
 .excel-preview-legend i.is-unmatched-row { background: color-mix(in srgb, var(--cyber-amber) 42%, var(--cyber-panel)); border: 1px solid color-mix(in srgb, var(--cyber-amber) 55%, transparent); border-radius: 999px; }
 
 @media (max-width: 1280px) {
-  .excel-preview-legend {
+  .excel-preview-panel > footer.excel-preview-legend {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
@@ -4620,6 +4620,20 @@ html.dark .issue-details-dialog {
 .mapping-editor input:focus { border-color: var(--cyber-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--cyber-primary) 12%, transparent); }
 .mapping-editor details { border: 1px solid var(--cyber-border-soft); border-radius: 9px; background: var(--cyber-panel); }
 .mapping-editor summary { padding: 8px 9px; color: var(--cyber-text); font-size: 10px; font-weight: 700; cursor: pointer; }
+.single-shipment-mapping > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.single-shipment-mapping > summary em { border-radius: 999px; padding: 2px 7px; font-size: 8px; font-style: normal; font-weight: 700; }
+.single-shipment-mapping > summary em.is-ready { color: var(--cyber-green); background: color-mix(in srgb, var(--cyber-green) 11%, transparent); }
+.single-shipment-mapping > summary em.is-general { color: var(--cyber-muted); background: var(--cyber-panel-soft); }
+.single-shipment-status { display: grid; gap: 5px; border-top: 1px solid var(--cyber-border-soft); padding: 8px; }
+.single-shipment-status > strong { color: var(--cyber-text); font-size: 10px; }
+.single-shipment-status > p { margin: 0; color: var(--cyber-muted); font-size: 9px; line-height: 1.5; }
+.single-shipment-status ul { display: grid; gap: 4px; margin: 2px 0 0; padding: 0; list-style: none; }
+.single-shipment-status li { display: grid; min-width: 0; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 6px; border-radius: 6px; padding: 5px 7px; background: var(--cyber-panel-soft); font-size: 9px; }
+.single-shipment-status li span { color: var(--cyber-muted); }
+.single-shipment-status li b { min-width: 0; overflow: hidden; color: var(--cyber-text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.single-shipment-status li.is-found b { color: var(--cyber-green); }
+.single-shipment-status li.is-missing b { color: var(--cyber-red); }
+.single-shipment-status + .mapping-fields { padding-top: 3px; }
 .mapping-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; border-top: 1px solid var(--cyber-border-soft); padding: 8px; }
 .mapping-field { display: grid; min-width: 0; gap: 4px; border-radius: 8px; padding: 4px; color: var(--cyber-muted); font-size: 9px; cursor: pointer; }
 .mapping-field:hover { background: color-mix(in srgb, var(--cyber-primary) 5%, var(--cyber-panel)); }
@@ -4638,6 +4652,7 @@ html.dark .issue-details-dialog {
 .mapping-editor .mapping-field-fallback select { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; padding: 0; opacity: 0; cursor: pointer; }
 .mapping-repeat-list { display: grid; gap: 7px; padding: 0 8px 8px; }
 .mapping-repeat-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 26px; align-items: end; gap: 5px; border-radius: 8px; padding: 6px; background: var(--cyber-panel-soft); }
+.mapping-repeat-row.is-sku-quantity { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .mapping-repeat-row.is-tier { grid-template-columns: 80px minmax(0, 1fr) 26px; }
 .mapping-repeat-row > b { grid-column: 1 / -1; align-self: center; color: var(--cyber-primary); font-size: 9px; }
 .mapping-repeat-row > button { display: grid; width: 26px; height: 31px; place-items: center; border: 0; border-radius: 7px; color: var(--cyber-muted); background: transparent; }
