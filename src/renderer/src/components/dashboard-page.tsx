@@ -22,6 +22,7 @@ const emptySummary: TaskHistorySummary = {
 
 const statusLabels: Record<TaskHistorySummary["recent"][number]["status"], string> = {
   running: "处理中",
+  awaiting_confirmation: "待处理",
   completed: "已完成",
   failed: "失败",
   stopped: "已停止",

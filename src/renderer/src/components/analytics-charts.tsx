@@ -15,10 +15,19 @@ type AnalyticsChartProps = {
 
 const STATUS_LABELS: Record<TaskAnalyticsSummary["statuses"][number]["status"], string> = {
   running: "处理中",
+  awaiting_confirmation: "待处理",
   completed: "已完成",
   failed: "失败",
   stopped: "已停止",
   interrupted: "已中断",
+};
+const STATUS_COLORS: Record<TaskAnalyticsSummary["statuses"][number]["status"], string> = {
+  running: "#3e8ed0",
+  awaiting_confirmation: "#d8932f",
+  completed: "#4f6fdf",
+  failed: "#9dce2b",
+  stopped: "#d8932f",
+  interrupted: "#d94a3a",
 };
 
 export function AnalyticsChart({ data, dark, kind }: AnalyticsChartProps): React.JSX.Element {
@@ -69,19 +78,41 @@ export function AnalyticsChart({ data, dark, kind }: AnalyticsChartProps): React
         ],
       });
     } else if (kind === "status") {
+      const statusCountByLabel = new Map(data.statuses.map((item) => [STATUS_LABELS[item.status], item.count]));
       chart.setOption({
         animationDuration: 450,
         tooltip: { trigger: "item" },
-        legend: { bottom: 0, textStyle: { color: textColor } },
+        legend: {
+          bottom: 0,
+          textStyle: { color: textColor },
+          formatter: (name: string) => `${name} ${statusCountByLabel.get(name) ?? 0}`,
+        },
         series: [{
           type: "pie",
-          radius: ["48%", "72%"],
-          center: ["50%", "43%"],
-          label: { color: textColor, formatter: "{b}\n{c}" },
+          radius: ["40%", "62%"],
+          center: ["50%", "46%"],
+          label: { show: false },
+          labelLine: { show: false },
           itemStyle: { borderColor: dark ? "#24211e" : "#fffdf9", borderWidth: 3 },
           data: data.statuses.filter((item) => item.count > 0).map((item) => ({
             name: STATUS_LABELS[item.status],
             value: item.count,
+            itemStyle: {
+              color: STATUS_COLORS[item.status],
+              borderWidth: item.status === "completed" ? 3 : 1,
+            },
+            label: {
+              show: item.status !== "completed",
+              formatter: "{c}",
+              color: textColor,
+              position: "outside",
+              distanceToLabelLine: 2,
+            },
+            labelLine: {
+              show: item.status !== "completed",
+              length: 6,
+              length2: 4,
+            },
           })),
         }],
       });

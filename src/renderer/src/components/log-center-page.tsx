@@ -8,6 +8,7 @@ import {
   FileClock,
   FileText,
   FolderOpen,
+  Pencil,
   RefreshCw,
   Search,
 } from "lucide-react";
@@ -33,6 +34,7 @@ type LogCenterPageProps = {
 
 const STATUS_LABELS: Record<TaskHistoryStatus, string> = {
   running: "处理中",
+  awaiting_confirmation: "待处理",
   completed: "已完成",
   failed: "失败",
   stopped: "已停止",
@@ -46,6 +48,7 @@ const EVENT_LEVEL_LABELS: Record<TaskEventLevel, string> = {
 };
 const HISTORY_PAGE_SIZE = 30;
 const RUNNING_BATCH_REFRESH_INTERVAL_MS = 2_000;
+const COMPACT_BATCH_FILE_COUNT = 4;
 
 function dateInputValue(daysAgo: number): string {
   const date = new Date();
@@ -71,6 +74,7 @@ function formatRate(matched: number, total: number): string {
 }
 
 function batchTitle(record: TaskHistoryRecord): string {
+  if (record.name?.trim()) return record.name.trim();
   const names = record.fileNames ?? [];
   if (names.length === 0) return `批次 ${record.id.slice(-8)}`;
   if (names.length === 1) return names[0];
@@ -101,6 +105,10 @@ export function LogCenterPage({
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
   const [fileSort, setFileSort] = useState<{ key: keyof TaskFileResult; desc: boolean }>({ key: "fileName", desc: false });
   const [liveRefreshTick, setLiveRefreshTick] = useState(0);
+  const [editingMetadata, setEditingMetadata] = useState(false);
+  const [metadataName, setMetadataName] = useState("");
+  const [metadataNote, setMetadataNote] = useState("");
+  const [metadataSaving, setMetadataSaving] = useState(false);
 
   const loadRecords = useCallback(async (): Promise<void> => {
     if (!api) return;
@@ -160,6 +168,12 @@ export function LogCenterPage({
     return () => { cancelled = true; };
   }, [api, liveRefreshTick, revision, selectedBatchId]);
 
+  useEffect(() => {
+    setMetadataName(detail?.record.name ?? (detail ? batchTitle(detail.record) : ""));
+    setMetadataNote(detail?.record.note ?? "");
+    setEditingMetadata(false);
+  }, [detail?.record.id]);
+
   const page = query.page ?? 1;
   const pageCount = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
   const selectedFile = detail?.files.find((file) => file.path === selectedFilePath) ?? null;
@@ -188,6 +202,25 @@ export function LogCenterPage({
     setQuery((current) => ({ ...current, ...patch, page: patch.page ?? 1 }));
   };
 
+  const saveMetadata = async (): Promise<void> => {
+    if (!api || !detail) return;
+    setMetadataSaving(true);
+    try {
+      const updated = await api.updateTaskBatchMetadata({
+        batchId: detail.record.id,
+        name: metadataName,
+        note: metadataNote,
+      });
+      setDetail(updated);
+      setRecords((current) => current.map((record) => record.id === updated.record.id ? updated.record : record));
+      setEditingMetadata(false);
+    } catch (reason) {
+      setError(`保存批次名称和备注失败：${String(reason)}`);
+    } finally {
+      setMetadataSaving(false);
+    }
+  };
+
   return (
     <div className={`history-page log-center-page${mobileDetailOpen ? " is-detail-open" : ""}`} role="region" aria-label="日志中心">
       <section className="history-filter-bar" aria-label="批次筛选">
@@ -200,7 +233,7 @@ export function LogCenterPage({
             <SelectContent><SelectItem value="all">全部状态</SelectItem>{Object.entries(STATUS_LABELS).map(([status, label]) => <SelectItem value={status} key={status}>{label}</SelectItem>)}</SelectContent>
           </Select>
         </div>
-        <label className="history-search"><span>文件名</span><div><Search /><input value={query.search ?? ""} placeholder="搜索文件名或输出目录" onChange={(event) => updateQuery({ search: event.target.value })} /></div></label>
+        <label className="history-search"><span>关键词</span><div><Search /><input value={query.search ?? ""} placeholder="搜索批次名称、备注或文件名" onChange={(event) => updateQuery({ search: event.target.value })} /></div></label>
         <div className="history-filter-actions">
           <Button variant="outline" onClick={() => void api?.exportTaskHistory({ format: "csv", query })} disabled={!api || records.length === 0}><Download />导出列表</Button>
           <Button variant="outline" onClick={() => void loadRecords()} disabled={loading}><RefreshCw className={loading ? "is-spinning" : undefined} />刷新</Button>
@@ -218,15 +251,20 @@ export function LogCenterPage({
               <button
                 type="button"
                 className={record.id === selectedBatchId ? "is-selected" : undefined}
+                aria-current={record.id === selectedBatchId ? "true" : undefined}
                 key={record.id}
                 onClick={() => {
                   setSelectedBatchId(record.id);
                   setMobileDetailOpen(true);
                 }}
               >
-                <div><strong title={batchTitle(record)}>{batchTitle(record)}</strong><span className={`history-status is-${record.status}`}>{STATUS_LABELS[record.status]}</span></div>
-                <time>{new Date(record.startedAt).toLocaleString("zh-CN", { hour12: false })}</time>
-                <p><span className="is-info">{record.completedFiles + record.failedFiles}/{record.totalFiles} 文件</span><span className="is-success">{formatRate(record.matchedRows, record.totalRows)}</span><span className="is-confirm">{formatDuration(record.durationMs)}</span></p>
+                <div className="batch-list-heading"><strong title={batchTitle(record)}>{batchTitle(record)}</strong><span className={`history-status is-${record.status}`}>{STATUS_LABELS[record.status]}</span></div>
+                <div className="batch-list-identity"><time>{new Date(record.startedAt).toLocaleString("zh-CN", { hour12: false })}</time><code>{record.id.slice(-8)}</code></div>
+                <p className="batch-list-metrics">
+                  <span className="is-info"><small>文件</small><b>{record.completedFiles + record.failedFiles}/{record.totalFiles}</b></span>
+                  <span className="is-success"><small>匹配率</small><b>{formatRate(record.matchedRows, record.totalRows)}</b></span>
+                  <span className="is-confirm"><small>耗时</small><b>{formatDuration(record.durationMs)}</b></span>
+                </p>
                 {!record.detailAvailable ? <em>仅有汇总</em> : null}
               </button>
             ))}
@@ -240,17 +278,28 @@ export function LogCenterPage({
 
         <main className="batch-detail" aria-label="批次详情">
           <button className="batch-detail-back" type="button" onClick={() => setMobileDetailOpen(false)}><ArrowLeft />返回批次列表</button>
-          {detailLoading ? <div className="history-empty"><RefreshCw className="is-spinning" /><strong>正在读取批次详情</strong></div> : null}
+          {detailLoading ? detail
+            ? <div className="batch-detail-loading-indicator" role="status"><RefreshCw className="is-spinning" /><span>正在切换批次</span></div>
+            : <div className="history-empty"><RefreshCw className="is-spinning" /><strong>正在读取批次详情</strong></div>
+            : null}
           {!detailLoading && !detail ? <div className="history-empty"><FileClock /><strong>请选择一个批次</strong><span>右侧将显示文件结果和事件时间线</span></div> : null}
           {detail ? (
-            <>
+            <div className={`batch-detail-content${detailLoading ? " is-updating" : ""}`} key={detail.record.id}>
               <header className="batch-detail-header">
                 <div><span className={`history-status is-${detail.record.status}`}>{STATUS_LABELS[detail.record.status]}</span><h2>{batchTitle(detail.record)}</h2><small>{detail.record.id}</small></div>
                 <div>
+                  <Button variant="outline" size="sm" onClick={() => setEditingMetadata((current) => !current)}><Pencil />名称与备注</Button>
                   {detail.record.outputDir ? <Button variant="outline" size="sm" onClick={() => void api?.openPath(detail.record.outputDir ?? "")}><FolderOpen />结果目录</Button> : null}
                   <Button variant="outline" size="sm" onClick={() => void api?.exportTaskHistory({ format: "json", batchId: detail.record.id })}><Download />导出详情</Button>
                 </div>
               </header>
+              {editingMetadata ? (
+                <section className="batch-metadata-editor" aria-label="编辑批次名称和备注">
+                  <label><span>批次名称</span><input value={metadataName} maxLength={120} onChange={(event) => setMetadataName(event.target.value)} /></label>
+                  <label><span>备注</span><input value={metadataNote} maxLength={1000} placeholder="可选，用于记录业务说明" onChange={(event) => setMetadataNote(event.target.value)} /></label>
+                  <div><Button variant="ghost" size="sm" onClick={() => setEditingMetadata(false)}>取消</Button><Button variant="outline" size="sm" disabled={metadataSaving} onClick={() => void saveMetadata()}>{metadataSaving ? "保存中" : "保存"}</Button></div>
+                </section>
+              ) : detail.record.note ? <p className="batch-detail-note"><span>备注</span>{detail.record.note}</p> : null}
               <section className="batch-metrics" aria-label="批次指标">
                 <article className="is-info"><span>处理文件</span><strong>{detail.record.totalFiles}</strong></article>
                 <article className="is-primary"><span>总行数</span><strong>{detail.record.totalRows || "—"}</strong></article>
@@ -260,10 +309,10 @@ export function LogCenterPage({
               </section>
 
               {detail.legacy ? <div className="legacy-history-notice">该批次由旧版本创建，历史版本未记录文件明细。</div> : (
-                <>
+                <div className={`batch-detail-body${detail.files.length <= COMPACT_BATCH_FILE_COUNT ? " is-compact" : ""}`}>
                   <section className="batch-section batch-file-section">
                     <header><div><h3>文件结果</h3><span>{selectedFile ? `已筛选：${selectedFile.fileName}` : `${detail.files.length} 个文件`}</span></div>{selectedFile ? <Button variant="ghost" size="sm" onClick={() => setSelectedFilePath(null)}>查看全部</Button> : null}</header>
-                    <div className="batch-table-wrap">
+                    <div className="batch-table-wrap batch-file-table-wrap" role="region" aria-label="文件结果表格" tabIndex={0}>
                       <table>
                         <thead><tr><th><button type="button" onClick={() => chooseFileSort("fileName")}>文件名</button></th><th><button type="button" onClick={() => chooseFileSort("status")}>状态</button></th><th><button type="button" onClick={() => chooseFileSort("totalRows")}>匹配</button></th><th><button type="button" onClick={() => chooseFileSort("exceptionRows")}>异常</button></th><th><button type="button" onClick={() => chooseFileSort("durationMs")}>耗时</button></th><th>结果</th></tr></thead>
                         <tbody>{sortedFiles.map((file) => <tr className={file.path === selectedFilePath ? "is-selected" : undefined} key={file.path} onClick={() => setSelectedFilePath((current) => current === file.path ? null : file.path)}><td title={file.path}>{file.fileName}</td><td><span className={`file-result-status is-${file.status}`}>{file.status === "queued" ? "等待" : file.status === "running" ? "处理中" : file.status === "completed" ? "完成" : file.status === "failed" ? "失败" : "停止"}</span></td><td className="history-number is-success">{file.totalRows ? `${file.matchedRows}/${file.totalRows}` : "—"}</td><td className="history-number is-error">{file.exceptionRows}</td><td className="history-number is-confirm">{formatDuration(file.durationMs)}</td><td>{file.outputPath ? <button type="button" className="file-result-open" aria-label={`打开 ${file.fileName} 结果`} title="打开结果文件" onClick={(event) => { event.stopPropagation(); void api?.openPath(file.outputPath ?? ""); }}><ExternalLink /></button> : "—"}</td></tr>)}</tbody>
@@ -274,16 +323,16 @@ export function LogCenterPage({
                   <section className="batch-lower-grid">
                     <article className="batch-section batch-issues">
                       <header><div><h3>异常分类</h3><span>{selectedFile ? selectedFile.fileName : "当前批次"}</span></div></header>
-                      {visibleIssues.length === 0 ? <div className="compact-empty">没有记录到异常</div> : visibleIssues.map((issue) => <details key={issue.code}><summary><span>{issue.label}</span><strong>{issue.count}</strong></summary>{issue.samples.length === 0 ? <p>未保存问题样例</p> : <ul>{issue.samples.map((sample, index) => <li key={`${sample.sourceRow}-${index}`}><b>{sample.sourceRow > 0 ? `第 ${sample.sourceRow} 行` : "文件级问题"}</b><span>{[sample.country, sample.sku, sample.quantity === null ? "" : `数量 ${sample.quantity}`].filter(Boolean).join(" · ")}</span><p>{sample.reason}</p></li>)}</ul>}</details>)}
+                      {visibleIssues.length === 0 ? <div className="compact-empty">没有记录到异常</div> : visibleIssues.map((issue) => <details key={issue.code}><summary><span>{issue.label}</span><strong>{issue.count}</strong></summary>{issue.samples.length === 0 ? <p>未保存问题样例</p> : <ul>{issue.samples.map((sample, index) => <li key={`${sample.sourceRow}-${index}`}><b className="batch-issue-row">{sample.sourceRow > 0 ? `第 ${sample.sourceRow} 行` : "文件级问题"}</b><span className="batch-issue-context">{sample.country ? <em className="is-country">{sample.country}</em> : null}{sample.sku ? <em className="is-sku">{sample.sku}</em> : null}{sample.quantity !== null ? <em className="is-quantity">数量 {sample.quantity}</em> : null}</span><p><strong>原因</strong>{sample.reason}</p></li>)}</ul>}</details>)}
                     </article>
                     <article className="batch-section batch-events">
                       <header><div><h3>事件时间线</h3><span>{visibleEvents.length} 条</span></div><Select value={eventLevel} onValueChange={(value) => setEventLevel(value as "all" | TaskEventLevel)}><SelectTrigger className="history-event-select" aria-label="事件级别"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部级别</SelectItem>{Object.entries(EVENT_LEVEL_LABELS).map(([level, label]) => <SelectItem value={level} key={level}>{label}</SelectItem>)}</SelectContent></Select></header>
                       {visibleEvents.length === 0 ? <div className="compact-empty">当前筛选下没有事件</div> : <ol>{visibleEvents.map((event) => <li className={`is-${event.level}`} key={event.id}><i /><time>{new Date(event.time).toLocaleTimeString("zh-CN", { hour12: false })}</time><span>{event.message}</span></li>)}</ol>}
                     </article>
                   </section>
-                </>
+                </div>
               )}
-            </>
+            </div>
           ) : null}
         </main>
       </section>
