@@ -243,6 +243,7 @@ pub(crate) struct PriceAnalysisFile {
     pub(crate) coverage: f64,
     pub(crate) matched_order_rows: Vec<usize>,
     pub(crate) writeback_rows: Vec<PricePreviewWritebackRow>,
+    pub(crate) unmatched_rows: Vec<UnmatchedPriceIssue>,
     pub(crate) requires_confirmation: bool,
     pub(crate) automation_decision: AutomationDecision,
     pub(crate) issues: Vec<String>,
@@ -312,6 +313,7 @@ struct CountryInfo {
     code: String,
     english: String,
     chinese: String,
+    routes: Vec<String>,
     conflict: bool,
     reason: String,
 }
@@ -342,6 +344,7 @@ pub(crate) struct AggregatedOrderSku {
     pub(crate) country_code: String,
     pub(crate) country_english_name: String,
     pub(crate) country_chinese_name: String,
+    pub(crate) country_routes: Vec<String>,
     pub(crate) single_shipment: bool,
     pub(crate) original_sku: String,
     pub(crate) matched_sku: String,
@@ -375,6 +378,8 @@ struct PriceEntry {
 struct PriceIndex {
     entries: HashMap<String, Vec<PriceEntry>>,
     quantity_keys: HashSet<String>,
+    country_routes: HashSet<String>,
+    source_sheet: String,
     single_shipment: Option<Box<PriceIndex>>,
 }
 
@@ -394,7 +399,19 @@ struct MappingValidationResult {
     coverage: f64,
     matched_order_rows: Vec<usize>,
     writeback_rows: Vec<PricePreviewWritebackRow>,
+    unmatched_rows: Vec<UnmatchedPriceIssue>,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UnmatchedPriceIssue {
+    source_row: usize,
+    sku_column: usize,
+    sku: String,
+    country: String,
+    quantity: f64,
+    reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -629,6 +646,7 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
             "coverage": validation.coverage,
             "matchedOrderRows": validation.matched_order_rows,
             "writebackRows": validation.writeback_rows,
+            "unmatchedRows": validation.unmatched_rows,
             "errors": [],
             "warnings": validation.warnings,
         })),
@@ -641,6 +659,7 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
             "coverage": 0.0,
             "matchedOrderRows": [],
             "writebackRows": [],
+            "unmatchedRows": [],
             "errors": errors,
             "warnings": [],
         })),
@@ -823,6 +842,7 @@ fn validate_price_mapping(
         read_order_lines(order_sheet, mapping, config);
     let evaluated_rows = lines.len();
     let (matched_rows, matched_order_rows) = evaluate_matches(&index, &lines);
+    let unmatched_rows = unmatched_price_issues(&index, mapping, &lines);
     let writeback_rows = calculate_preview_writeback_rows(
         order_sheet,
         mapping,
@@ -861,16 +881,47 @@ fn validate_price_mapping(
         coverage,
         matched_order_rows,
         writeback_rows,
+        unmatched_rows,
         warnings,
     })
+}
+
+fn unmatched_price_issues(
+    index: &PriceIndex,
+    mapping: &PriceCheckMapping,
+    lines: &[OrderLine],
+) -> Vec<UnmatchedPriceIssue> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let lookup = index.lookup_routes_with_single_shipment_preference(
+                &line.country.routes,
+                &line.matched_sku,
+                line.quantity.round() as i64,
+                line.single_shipment,
+            );
+            (lookup.status != "matched").then(|| UnmatchedPriceIssue {
+                source_row: line.source_row,
+                sku_column: mapping
+                    .sku_qty_pairs
+                    .get(line.sku_pair_priority)
+                    .map(|pair| pair.sku_column)
+                    .unwrap_or_default(),
+                sku: line.matched_sku.clone(),
+                country: line.country.routes.join(" / "),
+                quantity: line.quantity,
+                reason: format!("{}：{}", lookup.status, lookup.reason),
+            })
+        })
+        .collect()
 }
 
 fn evaluate_matches(index: &PriceIndex, lines: &[OrderLine]) -> (usize, Vec<usize>) {
     let mut matched_rows = 0;
     let mut order_row_matches = HashMap::new();
     for line in lines {
-        let lookup = index.lookup_with_single_shipment_preference(
-            &line.country.code,
+        let lookup = index.lookup_routes_with_single_shipment_preference(
+            &line.country.routes,
             &line.matched_sku,
             line.quantity.round() as i64,
             line.single_shipment,
@@ -901,8 +952,8 @@ fn calculate_preview_writeback_rows(
 ) -> Vec<PricePreviewWritebackRow> {
     let mut matched_candidates = HashMap::new();
     for item in aggregate_lines(lines) {
-        let lookup = index.lookup_with_single_shipment_preference(
-            &item.country_code,
+        let lookup = index.lookup_routes_with_single_shipment_preference(
+            &item.country_routes,
             &item.matched_sku,
             item.total_quantity.round() as i64,
             item.single_shipment,
@@ -1225,7 +1276,7 @@ fn analyze_path_with_templates(
             coverage * 100.0
         ));
     }
-    let writeback_rows = suggested_mapping
+    let (writeback_rows, unmatched_rows) = suggested_mapping
         .as_ref()
         .and_then(|mapping| {
             let order_sheet = workbook
@@ -1238,12 +1289,15 @@ fn analyze_path_with_templates(
                 .find(|sheet| sheet.name == mapping.pricing_sheet)?;
             let index = build_price_index(pricing_sheet, mapping, &config.pricing);
             let (lines, _, resolved_quantities) = read_order_lines(order_sheet, mapping, config);
-            Some(calculate_preview_writeback_rows(
-                order_sheet,
-                mapping,
-                &index,
-                &lines,
-                &resolved_quantities,
+            Some((
+                calculate_preview_writeback_rows(
+                    order_sheet,
+                    mapping,
+                    &index,
+                    &lines,
+                    &resolved_quantities,
+                ),
+                unmatched_price_issues(&index, mapping, &lines),
             ))
         })
         .unwrap_or_default();
@@ -1260,6 +1314,7 @@ fn analyze_path_with_templates(
         coverage,
         matched_order_rows,
         writeback_rows,
+        unmatched_rows,
         requires_confirmation,
         automation_decision,
         issues,
@@ -2904,6 +2959,10 @@ fn country_lookup(value: &str) -> Option<(&'static str, &'static str, &'static s
         })
 }
 
+fn country_route_token(value: &str) -> String {
+    value.trim().to_uppercase()
+}
+
 fn normalize_country_fields(code: &str, english: &str, chinese: &str) -> CountryInfo {
     // 国家字段按整格识别，不再从「UNITED STATES-hold」一类字符串拆物流后缀
     let inputs = [code, english, chinese];
@@ -2935,6 +2994,11 @@ fn normalize_country_fields(code: &str, english: &str, chinese: &str) -> Country
                 .unwrap_or_default(),
             english: english.trim().to_string(),
             chinese: chinese.trim().to_string(),
+            routes: inputs
+                .iter()
+                .map(|value| country_route_token(value))
+                .filter(|value| !value.is_empty())
+                .collect(),
             conflict: true,
             reason: format!("国家三要素冲突: code={code}, en={english}, cn={chinese}"),
         };
@@ -2953,6 +3017,11 @@ fn normalize_country_fields(code: &str, english: &str, chinese: &str) -> Country
         } else {
             resolved_cn
         },
+        routes: inputs
+            .iter()
+            .map(|value| country_route_token(value))
+            .filter(|value| !value.is_empty())
+            .collect(),
         conflict: false,
         reason: if resolved_code_empty {
             "无法识别国家".to_string()
@@ -2968,23 +3037,46 @@ fn normalize_order_country_fields(
     chinese: &str,
     rules: &PricingRules,
 ) -> CountryInfo {
-    normalize_country_fields(
-        if rules.uses_country_identity(CountryIdentity::Iso2) {
-            code
+    let enabled_values = [
+        (rules.uses_country_identity(CountryIdentity::Iso2), code),
+        (
+            rules.uses_country_identity(CountryIdentity::English),
+            english,
+        ),
+        (
+            rules.uses_country_identity(CountryIdentity::Chinese),
+            chinese,
+        ),
+    ];
+    let mut country = normalize_country_fields(
+        if enabled_values[0].0 {
+            enabled_values[0].1
         } else {
             ""
         },
-        if rules.uses_country_identity(CountryIdentity::English) {
-            english
+        if enabled_values[1].0 {
+            enabled_values[1].1
         } else {
             ""
         },
-        if rules.uses_country_identity(CountryIdentity::Chinese) {
-            chinese
+        if enabled_values[2].0 {
+            enabled_values[2].1
         } else {
             ""
         },
-    )
+    );
+    country.routes = enabled_values
+        .into_iter()
+        .filter(|(enabled, _)| *enabled)
+        .map(|(_, value)| country_route_token(value))
+        .filter(|value| !value.is_empty())
+        .fold(Vec::new(), |mut routes, route| {
+            if !routes.contains(&route) {
+                routes.push(route);
+            }
+            routes
+        });
+    country
 }
 
 fn highest_priority_sku_qty_pair(mapping: &PriceCheckMapping) -> Option<(usize, &SkuQtyPair)> {
@@ -3557,12 +3649,13 @@ fn insert_price_row(
 ) {
     let raw_sku = cell_text(row, Some(mapping.pricing_sku_column));
     let raw_country = cell_text(row, Some(mapping.pricing_country_column));
-    if raw_sku.is_empty() || raw_country.is_empty() {
+    let country_route = country_route_token(&raw_country);
+    if country_route.is_empty() {
         return;
     }
-    // 国家列整格识别（如 UNITED STATES-hold 不会被拆成 US+hold）
-    let country = normalize_country_fields(&raw_country, "", "");
-    if country.code.is_empty() {
+    index.source_sheet = sheet.name.clone();
+    index.country_routes.insert(country_route.clone());
+    if raw_sku.is_empty() {
         return;
     }
     let sku = normalize_sku(&raw_sku);
@@ -3575,8 +3668,8 @@ fn insert_price_row(
                 .unwrap_or_default(),
             sheet_name: sheet.name.clone(),
         };
-        let key = full_key(&country.code, &sku, tier.quantity);
-        index.quantity_keys.insert(prefix_key(&country.code, &sku));
+        let key = full_key(&country_route, &sku, tier.quantity);
+        index.quantity_keys.insert(prefix_key(&country_route, &sku));
         index.entries.entry(key).or_default().push(entry);
     }
 }
@@ -3587,7 +3680,10 @@ fn aggregate_lines(lines: &[OrderLine]) -> Vec<AggregatedOrderSku> {
     for line in lines {
         let key = format!(
             "{}\u{1f}{}\u{1f}{}\u{1f}{}",
-            line.business_order_number, line.country.code, line.matched_sku, line.single_shipment
+            line.business_order_number,
+            line.country.routes.join("\u{1e}"),
+            line.matched_sku,
+            line.single_shipment
         );
         if let Some(position) = positions.get(&key).copied() {
             let row = &mut result[position];
@@ -3622,6 +3718,7 @@ fn aggregate_lines(lines: &[OrderLine]) -> Vec<AggregatedOrderSku> {
                 country_code: line.country.code.clone(),
                 country_english_name: line.country.english.clone(),
                 country_chinese_name: line.country.chinese.clone(),
+                country_routes: line.country.routes.clone(),
                 single_shipment: line.single_shipment,
                 original_sku: line.original_sku.clone(),
                 matched_sku: line.matched_sku.clone(),
@@ -3783,8 +3880,8 @@ fn process_price_file(
         if state.should_stop() {
             break;
         }
-        let lookup = index.lookup_with_single_shipment_preference(
-            &item.country_code,
+        let lookup = index.lookup_routes_with_single_shipment_preference(
+            &item.country_routes,
             &item.matched_sku,
             item.total_quantity.round() as i64,
             item.single_shipment,
@@ -3944,6 +4041,7 @@ fn apply_writeback_overrides(
 }
 
 impl PriceIndex {
+    #[cfg(test)]
     fn lookup_with_single_shipment_preference(
         &self,
         country: &str,
@@ -3951,27 +4049,94 @@ impl PriceIndex {
         quantity: i64,
         prefer_single_shipment: bool,
     ) -> Lookup {
-        if prefer_single_shipment && let Some(single_shipment) = &self.single_shipment {
-            let lookup = single_shipment.lookup(country, sku, quantity);
-            if lookup.status != "SKU或国家无法匹配" {
-                return lookup;
-            }
-        }
-        self.lookup(country, sku, quantity)
+        self.lookup_routes_with_single_shipment_preference(
+            &[country_route_token(country)],
+            sku,
+            quantity,
+            prefer_single_shipment,
+        )
     }
 
+    fn lookup_routes_with_single_shipment_preference(
+        &self,
+        country_routes: &[String],
+        sku: &str,
+        quantity: i64,
+        prefer_single_shipment: bool,
+    ) -> Lookup {
+        if prefer_single_shipment
+            && let Some(single_shipment) = &self.single_shipment
+            && single_shipment.has_route_sku(country_routes, sku)
+        {
+            return single_shipment.lookup_routes(country_routes, sku, quantity);
+        }
+        self.lookup_routes(country_routes, sku, quantity)
+    }
+
+    #[cfg(test)]
     fn lookup(&self, country: &str, sku: &str, quantity: i64) -> Lookup {
-        if country.is_empty() || sku.is_empty() {
+        self.lookup_routes(&[country_route_token(country)], sku, quantity)
+    }
+
+    fn has_route_sku(&self, country_routes: &[String], sku: &str) -> bool {
+        country_routes
+            .iter()
+            .any(|route| self.quantity_keys.contains(&prefix_key(route, sku)))
+    }
+
+    fn lookup_routes(&self, country_routes: &[String], sku: &str, quantity: i64) -> Lookup {
+        let country_routes = country_routes
+            .iter()
+            .map(|route| country_route_token(route))
+            .filter(|route| !route.is_empty())
+            .collect::<Vec<_>>();
+        if country_routes.is_empty() || sku.is_empty() {
             return Lookup {
                 status: "SKU或国家缺失",
                 price: None,
                 matched_sku: sku.to_string(),
-                source_sheet: String::new(),
-                reason: "国家或 SKU 无法标准化".to_string(),
+                source_sheet: self.source_sheet.clone(),
+                reason: "订单国家原值或 SKU 缺失".to_string(),
             };
         }
-        let saw_quantity_key = self.quantity_keys.contains(&prefix_key(country, sku));
-        let key = full_key(country, sku, quantity);
+        let route = country_routes
+            .iter()
+            .find(|route| self.quantity_keys.contains(&prefix_key(route, sku)));
+        let Some(route) = route else {
+            let existing_routes = country_routes
+                .iter()
+                .filter(|route| self.country_routes.contains(*route))
+                .cloned()
+                .collect::<Vec<_>>();
+            let (status, reason) = if existing_routes.is_empty() {
+                (
+                    "国家路由不存在",
+                    format!(
+                        "核价 Sheet {} 没有国家路由 [{}]",
+                        self.source_sheet,
+                        country_routes.join(" / ")
+                    ),
+                )
+            } else {
+                (
+                    "SKU不存在",
+                    format!(
+                        "核价 Sheet {} 的国家路由 [{}] 没有 SKU {}",
+                        self.source_sheet,
+                        existing_routes.join(" / "),
+                        sku
+                    ),
+                )
+            };
+            return Lookup {
+                status,
+                price: None,
+                matched_sku: sku.to_string(),
+                source_sheet: self.source_sheet.clone(),
+                reason,
+            };
+        };
+        let key = full_key(route, sku, quantity);
         if let Some(entries) = self.entries.get(&key) {
             if entries.len() != 1 {
                 let entry = &entries[0];
@@ -3980,7 +4145,10 @@ impl PriceIndex {
                     price: None,
                     matched_sku: sku.to_string(),
                     source_sheet: entry.sheet_name.clone(),
-                    reason: "相同国家、SKU、数量对应多个价格，未静默选择".to_string(),
+                    reason: format!(
+                        "核价 Sheet {} 中国家路由 {}、SKU {}、数量 {} 对应多个价格",
+                        entry.sheet_name, route, sku, quantity
+                    ),
                 };
             }
             let entry = &entries[0];
@@ -3998,23 +4166,21 @@ impl PriceIndex {
                 price: None,
                 matched_sku: sku.to_string(),
                 source_sheet: entry.sheet_name.clone(),
-                reason: format!("核价单元格不可用: {}", entry.raw_price),
+                reason: format!(
+                    "核价 Sheet {} 中国家路由 {}、SKU {}、数量 {} 的价格不可用: {}",
+                    entry.sheet_name, route, sku, quantity, entry.raw_price
+                ),
             };
         }
         Lookup {
-            status: if saw_quantity_key {
-                "数量无对应档位"
-            } else {
-                "SKU或国家无法匹配"
-            },
+            status: "数量档位不存在",
             price: None,
             matched_sku: sku.to_string(),
-            source_sheet: String::new(),
-            reason: if saw_quantity_key {
-                format!("核价表没有数量 {} 对应的档位", quantity)
-            } else {
-                "核价表没有对应的国家和 SKU".to_string()
-            },
+            source_sheet: self.source_sheet.clone(),
+            reason: format!(
+                "核价 Sheet {} 的国家路由 {}、SKU {} 没有数量 {} 对应的档位",
+                self.source_sheet, route, sku, quantity
+            ),
         }
     }
 }
@@ -4842,12 +5008,12 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
 
         let index = build_price_index(&sheet, &mapping, &PricingRules::default());
         let lookup = index.lookup("US", "CORDLESSSNOWBLOWER", 1);
-        assert_eq!(lookup.status, "SKU或国家无法匹配");
+        assert_eq!(lookup.status, "SKU不存在");
         assert_eq!(index.lookup("US", "QY2600223", 1).price, Some(112.0));
     }
 
     #[test]
-    fn country_column_matches_whole_cell_without_suffix_split() {
+    fn pricing_country_routes_require_the_same_original_value() {
         // 国家列整格匹配：UNITED STATES-hold 不是「美国+物流 hold」，不能识别为 US
         let hold_only = SheetData {
             name: "price".to_string(),
@@ -4878,11 +5044,15 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         let index_hold = build_price_index(&hold_only, &mapping, &PricingRules::default());
         assert_eq!(
             index_hold.lookup("US", "ABC123", 1).status,
-            "SKU或国家无法匹配",
-            "hold 国名整格不可拆成 US"
+            "国家路由不存在",
+            "核价表原值不能被程序转换为标准国家代码"
+        );
+        assert_eq!(
+            index_hold.lookup("UNITED STATES-hold", "ABC123", 1).price,
+            Some(9.0)
         );
 
-        // 正式英文国名整格可识别为 US，与订单二字码匹配
+        // 英文国名同样只接受订单原值精确路由，不再转换为 US。
         let formal = SheetData {
             name: "price".to_string(),
             rows: vec![
@@ -4905,9 +5075,139 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         };
         let index_formal = build_price_index(&formal, &mapping, &PricingRules::default());
         assert_eq!(
-            index_formal.lookup("US", "ABC123", 1).price,
+            index_formal.lookup("US", "ABC123", 1).status,
+            "国家路由不存在"
+        );
+        assert_eq!(
+            index_formal.lookup("UNITED STATES", "ABC123", 1).price,
             Some(8.79),
-            "仅正式 UNITED STATES 行应进索引并命中"
+            "订单与核价表国家原值一致时应命中"
+        );
+    }
+
+    #[test]
+    fn exact_country_route_wins_without_standard_country_fallback() {
+        let sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                    CellValue::string("2"),
+                ],
+                vec![
+                    CellValue::string("AL2500463-LA1-5"),
+                    CellValue::string(" FR-D "),
+                    CellValue::string("4.39"),
+                    CellValue::string("5.19"),
+                ],
+                vec![
+                    CellValue::string("AL2500463-LA1-5"),
+                    CellValue::string("FR"),
+                    CellValue::string("1.5"),
+                    CellValue::string("3"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![
+                PriceTierColumn {
+                    quantity: 1,
+                    column: 3,
+                    header: "1".to_string(),
+                },
+                PriceTierColumn {
+                    quantity: 2,
+                    column: 4,
+                    header: "2".to_string(),
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+        let index = build_price_index(&sheet, &mapping, &PricingRules::default());
+
+        let fairtex_price = index
+            .lookup_routes(
+                &["fr-d".to_string(), "FRANCE".to_string(), "法国".to_string()],
+                "AL2500463-LA1-5",
+                2,
+            )
+            .price
+            .expect("FR-D quantity 2 price");
+        assert_eq!(fairtex_price, 5.19);
+        assert!((fairtex_price + 3.5 - 8.69).abs() < PRICE_DIFFERENCE_ZERO_EPSILON);
+        assert_eq!(
+            index
+                .lookup_routes(
+                    &["FRANCE".to_string(), "法国".to_string()],
+                    "AL2500463-LA1-5",
+                    2,
+                )
+                .status,
+            "国家路由不存在"
+        );
+    }
+
+    #[test]
+    fn existing_country_route_does_not_fallback_on_sku_or_tier_failure() {
+        let sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                    CellValue::string("2"),
+                ],
+                vec![
+                    CellValue::string("OTHER-SKU"),
+                    CellValue::string("FR-D"),
+                    CellValue::string("4.39"),
+                    CellValue::string("5.19"),
+                ],
+                vec![
+                    CellValue::string("TARGET-SKU"),
+                    CellValue::string("FR"),
+                    CellValue::string("1.5"),
+                    CellValue::string("3"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![
+                PriceTierColumn {
+                    quantity: 1,
+                    column: 3,
+                    header: "1".to_string(),
+                },
+                PriceTierColumn {
+                    quantity: 2,
+                    column: 4,
+                    header: "2".to_string(),
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+        let index = build_price_index(&sheet, &mapping, &PricingRules::default());
+
+        assert_eq!(
+            index
+                .lookup_routes(&["FR-D".to_string()], "TARGET-SKU", 2)
+                .status,
+            "SKU不存在"
+        );
+        assert_eq!(
+            index
+                .lookup_routes(&["FR-D".to_string()], "OTHER-SKU", 4)
+                .status,
+            "数量档位不存在"
         );
     }
 
@@ -4957,6 +5257,46 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].total_quantity, 3.0);
         assert_eq!(rows[0].source_rows, vec![2, 3]);
+    }
+
+    #[test]
+    fn mapping_validation_preserves_unmatched_row_details() {
+        let mapping = PriceCheckMapping {
+            sku_qty_pairs: vec![SkuQtyPair {
+                qty_column: 10,
+                sku_column: 11,
+                merged_qty_column: 12,
+                ..SkuQtyPair::default()
+            }],
+            ..PriceCheckMapping::default()
+        };
+        let lines = vec![OrderLine {
+            business_order_number: "ORDER-1".to_string(),
+            country: normalize_country_fields("US", "United States", "美国"),
+            single_shipment: false,
+            original_sku: "TC2500348".to_string(),
+            matched_sku: "TC2500348".to_string(),
+            quantity: 4.0,
+            original_price: Some(12.0),
+            source_sheet: "订单".to_string(),
+            source_row: 37,
+            sku_pair_priority: 0,
+        }];
+
+        let issues = unmatched_price_issues(&PriceIndex::default(), &mapping, &lines);
+
+        assert_eq!(
+            issues,
+            vec![UnmatchedPriceIssue {
+                source_row: 37,
+                sku_column: 11,
+                sku: "TC2500348".to_string(),
+                country: "US / UNITED STATES / 美国".to_string(),
+                quantity: 4.0,
+                reason: "国家路由不存在：核价 Sheet  没有国家路由 [US / UNITED STATES / 美国]"
+                    .to_string(),
+            }]
+        );
     }
 
     #[test]
