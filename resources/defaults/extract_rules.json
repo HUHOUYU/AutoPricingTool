@@ -58,21 +58,6 @@
       "recipient_name",
       "phone",
       "postal_code"
-    ],
-    "sku_qty_pair_selection": "max_match_coverage",
-    "quantity_policy": "nearest",
-    "multiply_quantity_by_price": true,
-    "zero_price_is_valid": true,
-    "unavailable_price_tokens": [
-      "/",
-      "未核价",
-      "#VALUE!",
-      "#N/A"
-    ],
-    "output_sheets": [
-      "核价结果",
-      "核价异常",
-      "字段映射"
     ]
   },
   "runtime": {
@@ -199,6 +184,21 @@
         "negative_headers": [
           "Product shipping VAT tax"
         ]
+      },
+      "recipient_name": {
+        "header_aliases": ["Name", "收件人", "收货人", "收件人姓名", "收货人姓名"]
+      },
+      "phone": {
+        "header_aliases": ["Phone", "Phone number", "Telephone", "Mobile", "电话", "联系电话", "手机", "手机号码", "收件人电话"]
+      },
+      "postal_code": {
+        "header_aliases": ["Zip code", "Zipcode", "Postal code", "Postcode", "Code", "邮编", "邮政编码"]
+      },
+      "address": {
+        "header_aliases": ["Address", "Address1", "Address2", "Street", "Street address", "地址", "地址1", "地址2", "详细地址"]
+      },
+      "email": {
+        "header_aliases": ["Email", "BuyerEmail", "收件人邮箱", "邮箱"]
       }
     },
     "pricing": {
