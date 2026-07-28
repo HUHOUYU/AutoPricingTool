@@ -139,7 +139,13 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
     analyzePriceFiles: vi.fn(async () => undefined),
     validatePriceMapping: vi.fn(async () => undefined),
     recalculatePriceRow: vi.fn(async () => undefined),
-    runPriceCheck: vi.fn(async () => undefined),
+    runPriceCheck: vi.fn(async () => ({ batchId: "test-batch" })),
+    updateTaskBatchMetadata: vi.fn(async () => {
+      throw new Error("测试未配置批次元数据");
+    }),
+    finishTaskBatch: vi.fn(async () => {
+      throw new Error("测试未配置批次结束");
+    }),
     pauseProcessing: vi.fn(async () => undefined),
     resumeProcessing: vi.fn(async () => undefined),
     stopProcessing: vi.fn(async () => undefined),
@@ -452,7 +458,7 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(container.querySelector(".cyber-batch-file")).toHaveTextContent("1/2 个文件 · first.xlsx");
   });
 
-  it("keeps a completed batch locked until reset", async () => {
+  it("keeps a stopped batch available until the user successfully selects the next batch", async () => {
     const api = createDesktopAPI();
     installAPI(api);
     render(<App />);
@@ -465,13 +471,20 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByLabelText("批次处理进度")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("button", { name: "继续添加" })).not.toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "暂停任务" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "重置本批" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "重置本批" }));
+    expect(screen.getByRole("button", { name: "继续未完成" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "结束本批并处理下一批" }));
     const dialog = await screen.findByRole("alertdialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "重置本批" }));
-    await waitFor(() => expect(screen.getByText("拖拽一个或多个 Excel 文件到此处")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(screen.getByText("completed.xlsx")).toBeInTheDocument();
+
+    vi.mocked(api.selectExcelFiles).mockResolvedValue(["C:\\orders\\next.xlsx"]);
+    fireEvent.click(screen.getByRole("button", { name: "结束本批并处理下一批" }));
+    const nextDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(nextDialog).getByRole("button", { name: "结束并选择下一批" }));
+    expect(await screen.findByText("next.xlsx")).toBeInTheDocument();
+    expect(screen.queryByText("completed.xlsx")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.queryByLabelText("批次处理进度")).not.toBeInTheDocument());
-    expect(screen.queryByLabelText("文件状态统计")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始处理" })).toBeEnabled();
   });
 
   it("centers the empty state independently from the table columns", () => {
@@ -695,6 +708,17 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(useUIStore.getState().activeTab).toBe("success");
     expect(screen.getByText(/1\/1 个文件/)).toBeInTheDocument();
     expect(screen.queryByText(/1\/14 个文件/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "处理下一批" }));
+    await waitFor(() => expect(api.selectExcelFiles).toHaveBeenCalled());
+    expect(screen.getAllByText("order.xlsx").length).toBeGreaterThan(0);
+
+    vi.mocked(api.selectExcelFiles).mockResolvedValue(["C:\\orders\\next-order.xlsx"]);
+    fireEvent.click(screen.getByRole("button", { name: "处理下一批" }));
+    expect(await screen.findByText("next-order.xlsx")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTitle("C:\\orders\\order.xlsx")).not.toBeInTheDocument());
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始处理" })).toBeEnabled();
   });
 
   it("asks for and persists an output directory before importing a dropped workbook", async () => {
@@ -810,6 +834,16 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "确认并处理此文件" }));
     await waitFor(() => expect(api.runPriceCheck).toHaveBeenCalledTimes(2));
     expect(vi.mocked(api.runPriceCheck).mock.calls[1][0].files).toEqual(["C:\\orders\\other.xlsx"]);
+    expect(vi.mocked(api.runPriceCheck).mock.calls[0][0]).toEqual(expect.objectContaining({
+      executionType: "manual",
+      batchFiles: ["C:\\orders\\order.xlsx", "C:\\orders\\other.xlsx"],
+    }));
+    expect(vi.mocked(api.runPriceCheck).mock.calls[0][0]).not.toHaveProperty("batchId");
+    expect(vi.mocked(api.runPriceCheck).mock.calls[1][0]).toEqual(expect.objectContaining({
+      batchId: "test-batch",
+      executionType: "manual",
+      batchFiles: ["C:\\orders\\order.xlsx", "C:\\orders\\other.xlsx"],
+    }));
     await act(async () => {
       api.emit({ type: "price-file-result", path: "C:\\orders\\other.xlsx", status: "completed", totalRows: 8, matchedRows: 8, exceptionRows: 0 });
       api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ totalRows: 8, matchedRows: 8, exceptionRows: 0 }] });
@@ -876,7 +910,8 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(screen.getByRole("button", { name: "待确认1" }));
     fireEvent.click(await screen.findByRole("button", { name: "详情" }));
     expect(await screen.findByRole("dialog", { name: "文件处理详情" })).toBeInTheDocument();
-    expect(screen.getAllByText("候选差距不足")).toHaveLength(2);
+    expect(screen.getByRole("status", { name: "正在准备文件详情" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("候选差距不足")).toHaveLength(2));
     expect(screen.getByText("同一 Sheet 组合下，字段列候选差距不足")).toBeInTheDocument();
     expect(screen.getByText("最优").closest(".decision-candidate")).toHaveClass("is-best");
     expect(screen.getByText("次选").closest(".decision-candidate")).toHaveClass("is-alternate");
@@ -945,6 +980,8 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "详情" }));
 
     const dialog = await screen.findByRole("dialog", { name: "文件处理详情" });
+    expect(screen.getByRole("status", { name: "正在准备文件详情" })).toBeInTheDocument();
+    await screen.findByLabelText("字段映射编辑器");
     expect(screen.queryByLabelText("处理时间线")).not.toBeInTheDocument();
     const drawerContent = dialog.querySelector(".issue-drawer-content");
     expect(drawerContent?.firstElementChild).toHaveClass("excel-preview-panel");
@@ -995,15 +1032,15 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(unmatchedSwitch).toHaveAttribute("aria-checked", "true");
     await waitFor(() => expect(unmatchedSwitch).toHaveFocus());
     // 开启未匹配定位时触发一次 loadAll（订单+核价完整数据）
-    await waitFor(() => expect(FakeExcelPreviewWorker.instances).toHaveLength(2));
-    expect(FakeExcelPreviewWorker.instances[1].request).toEqual(expect.objectContaining({
+    await waitFor(() => expect(FakeExcelPreviewWorker.instances[0].request).toEqual(expect.objectContaining({
       loadAll: true,
       candidates: expect.arrayContaining([
         expect.objectContaining({ name: "订单" }),
         expect.objectContaining({ name: "核价" }),
       ]),
-    }));
-    expect(FakeExcelPreviewWorker.instances[1].request?.candidates.map((candidate) => candidate.name)).not.toContain("报价二");
+    })));
+    expect(FakeExcelPreviewWorker.instances).toHaveLength(1);
+    expect(FakeExcelPreviewWorker.instances[0].request?.candidates.map((candidate) => candidate.name)).not.toContain("报价二");
     expect(await screen.findByText("已加载全部")).toBeInTheDocument();
     const pricingTab = screen.getByText("核价", { selector: ".excel-preview-tabs button strong" }).closest("button")!;
     fireEvent.click(pricingTab);
@@ -1104,11 +1141,11 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(loadAllButton).toBeDisabled();
     expect(loadAllButton).toHaveTextContent("已加载全部");
     fireEvent.click(loadAllButton);
-    expect(FakeExcelPreviewWorker.instances).toHaveLength(2);
+    expect(FakeExcelPreviewWorker.instances).toHaveLength(1);
     // 再次开启未匹配定位：已 loadAll 则不额外请求
     fireEvent.click(screen.getByRole("switch", { name: "未匹配定位" }));
     expect(screen.getByRole("switch", { name: "未匹配定位" })).toHaveAttribute("aria-checked", "true");
-    expect(FakeExcelPreviewWorker.instances).toHaveLength(2);
+    expect(FakeExcelPreviewWorker.instances).toHaveLength(1);
     fireEvent.click(screen.getByRole("switch", { name: "未匹配定位" }));
     fireEvent.click(screen.getByRole("button", { name: "冻结 C 列" }));
     fireEvent.click(screen.getByRole("button", { name: "冻结 A 列" }));

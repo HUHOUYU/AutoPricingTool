@@ -52,6 +52,66 @@ const searchInputMinimumCharacters = 18;
 const searchInputPlaceholder = "逗号=且，竖线=或";
 const writebackColumnHeaders = ["核价[财务]", "金额差", "数量"] as const;
 const totalRowLabels = new Set(["total", "合计", "总计"]);
+const previewCacheLimit = 3;
+
+type PreviewCacheEntry = {
+  workbook: ExcelPreviewWorkbook;
+  lastAccessedAt: number;
+};
+
+const previewCache = new Map<string, PreviewCacheEntry>();
+const apiCacheIds = new WeakMap<object, number>();
+let nextApiCacheId = 1;
+
+function apiCacheId(api: DesktopAPI): number {
+  const existing = apiCacheIds.get(api);
+  if (existing !== undefined) return existing;
+  const id = nextApiCacheId;
+  nextApiCacheId += 1;
+  apiCacheIds.set(api, id);
+  return id;
+}
+
+function previewCacheKey(
+  api: DesktopAPI,
+  filePath: string,
+  modifiedAt: number,
+  candidates: ExcelPreviewCandidate[],
+  loadAll: boolean,
+): string {
+  const candidateKey = candidates
+    .map((candidate) => `${candidate.name}:${candidate.roles.join(",")}:${candidate.scores?.order ?? ""}:${candidate.scores?.pricing ?? ""}`)
+    .join("|");
+  return `${apiCacheId(api)}\u0000${filePath}\u0000${modifiedAt}\u0000${loadAll ? "all" : "preview"}\u0000${candidateKey}`;
+}
+
+function cachedPreview(key: string): ExcelPreviewWorkbook | null {
+  const entry = previewCache.get(key);
+  if (!entry) return null;
+  entry.lastAccessedAt = Date.now();
+  return entry.workbook;
+}
+
+function cachePreview(key: string, workbook: ExcelPreviewWorkbook): void {
+  previewCache.set(key, { workbook, lastAccessedAt: Date.now() });
+  if (previewCache.size <= previewCacheLimit) return;
+  const oldestKey = [...previewCache.entries()]
+    .sort((left, right) => left[1].lastAccessedAt - right[1].lastAccessedAt)[0]?.[0];
+  if (oldestKey) previewCache.delete(oldestKey);
+}
+
+function transferableBuffer(bytes: Uint8Array): ArrayBuffer {
+  if (
+    bytes.byteOffset === 0
+    && bytes.byteLength === bytes.buffer.byteLength
+    && bytes.buffer instanceof ArrayBuffer
+  ) {
+    return bytes.buffer;
+  }
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
 
 type SkuPairStyle = CSSProperties & { "--sku-pair-strength": string };
 
@@ -235,6 +295,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
   const searchInputRef = useRef<HTMLInputElement>(null);
   const unmatchedSwitchRef = useRef<HTMLButtonElement>(null);
   const requestIdRef = useRef(0);
+  const workerRef = useRef<Worker | null>(null);
   const lastQueriedOrderRowRef = useRef<number | null>(null);
   const orderLookupActiveRef = useRef(false);
   const [status, setStatus] = useState<PreviewStatus>(candidates.length > 0 ? "loading" : "empty");
@@ -290,6 +351,11 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     orderLookupActiveRef.current = false;
   }, [filePath]);
 
+  useEffect(() => () => {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+  }, []);
+
   const previewCandidates = useMemo(() => {
     if (!loadAll || !mapping) return candidates;
     const selectedSheetNames = new Set([mapping.orderSheet, mapping.pricingSheet]);
@@ -317,18 +383,26 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     }
 
     let cancelled = false;
-    let worker: Worker | null = null;
     const requestId = ++requestIdRef.current;
     setStatus("loading");
 
     void api.readExcelPreviewFile(filePath).then((source) => {
       if (cancelled) return;
       setFileSize(source.size);
+      const cacheKey = previewCacheKey(api, filePath, source.modifiedAt, previewCandidates, loadAll);
+      const cachedWorkbook = cachedPreview(cacheKey);
+      if (cachedWorkbook) {
+        setWorkbook(cachedWorkbook);
+        setStatus("ready");
+        return;
+      }
       if (typeof Worker === "undefined") throw new Error("Worker is unavailable");
-      worker = new Worker(new URL("../workers/excel-preview.worker.ts", import.meta.url), { type: "module" });
+      const worker = workerRef.current ?? new Worker(new URL("../workers/excel-preview.worker.ts", import.meta.url), { type: "module" });
+      workerRef.current = worker;
       worker.onmessage = (event: MessageEvent<ExcelPreviewWorkerResponse>): void => {
         if (cancelled || event.data.requestId !== requestId) return;
         if (event.data.ok) {
+          cachePreview(cacheKey, event.data.workbook);
           setWorkbook(event.data.workbook);
           setStatus("ready");
         } else {
@@ -338,10 +412,12 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
       };
       worker.onerror = (): void => {
         if (cancelled) return;
+        worker.terminate();
+        if (workerRef.current === worker) workerRef.current = null;
         setErrorMessage("Excel 预览组件运行失败");
         setStatus("error");
       };
-      const buffer = source.bytes.slice().buffer;
+      const buffer = transferableBuffer(source.bytes);
       const request: ExcelPreviewWorkerRequest = { requestId, buffer, candidates: previewCandidates, loadAll };
       worker.postMessage(request, [buffer]);
     }).catch((error: unknown) => {
@@ -352,7 +428,6 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
 
     return () => {
       cancelled = true;
-      worker?.terminate();
     };
   }, [api, filePath, loadAll, previewCandidates]);
 

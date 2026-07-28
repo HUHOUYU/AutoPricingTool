@@ -26,11 +26,13 @@ import {
   FolderOutput,
   LayoutDashboard,
   Inbox,
+  LoaderCircle,
   Minus,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Pause,
+  Pencil,
   Pin,
   PinOff,
   Play,
@@ -78,6 +80,7 @@ import type {
   PriceUnmatchedIssue,
   ProcessorEvent,
   RuntimeConfig,
+  TaskExecutionType,
   TaskIssueSummary,
 } from "../../preload";
 import { classifyTaskIssue, TASK_ISSUE_LABELS } from "../../shared/task-history";
@@ -102,6 +105,10 @@ type ImportSourceMode = Exclude<ImportMode, "config">;
 type ImportSummary = {
   imported: number;
   duplicates: number;
+};
+
+type RegisterPathsOptions = {
+  replaceBatch?: boolean;
 };
 
 type LogEntry = {
@@ -169,6 +176,7 @@ const DETAIL_PREVIEW_MIN_WIDTH = 360;
 const DETAIL_CONTENT_HORIZONTAL_PADDING = 28;
 const DETAIL_CONTENT_RESIZER_WIDTH = 12;
 const RESULT_REVEAL_HIGHLIGHT_MS = 1_800;
+const DETAIL_CONTENT_DEFER_FRAMES = 2;
 
 function detailDrawerBounds(viewportWidth = typeof window === "undefined" ? 1440 : window.innerWidth): { min: number; max: number } {
   const max = Math.max(320, viewportWidth - DETAIL_DRAWER_EDGE_GAP);
@@ -230,6 +238,13 @@ function droppedFolderName(file: File): string | null {
 
 function fileNameFromPath(path: string): string {
   return path.split(/[\\/]/).pop() || path;
+}
+
+function defaultDraftBatchName(paths: string[], mode: ImportMode): string {
+  if (paths.length === 0) return "";
+  if (mode === "folder") return fileNameFromPath(parentDirectory(paths[0])) || "文件夹批次";
+  if (paths.length === 1) return fileNameFromPath(paths[0]);
+  return `${fileNameFromPath(paths[0])} 等 ${paths.length} 个文件`;
 }
 
 function normalizeAlternativeOrderColumns(mapping: PriceCheckMapping): PriceCheckMapping {
@@ -346,7 +361,10 @@ function ValidationMessage({
     || message.includes("试算少于")
   ) && unmatchedIssues.length > 0;
   const hasDetails = hasQuantityDetails || hasUnmatchedDetails;
-  const detailIssues = quantityIssueDetails(quantityIssues);
+  const detailIssues = useMemo(
+    () => dialogOpen && hasQuantityDetails ? quantityIssueDetails(quantityIssues) : [],
+    [dialogOpen, hasQuantityDetails, quantityIssues],
+  );
   return (
     <div className="issue-status-message-row">
       <span>{message}</span>
@@ -733,6 +751,10 @@ export function App(): React.JSX.Element {
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [batchStarted, setBatchStarted] = useState(false);
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchName, setBatchName] = useState("");
+  const [batchNote, setBatchNote] = useState("");
+  const [editingBatchName, setEditingBatchName] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
@@ -748,6 +770,7 @@ export function App(): React.JSX.Element {
   const [historyRevision, setHistoryRevision] = useState(0);
   const [requestedHistoryBatchId, setRequestedHistoryBatchId] = useState<string | null>(null);
   const [detailPath, setDetailPath] = useState<string | null>(null);
+  const [detailContentReady, setDetailContentReady] = useState(false);
   const [detailPreviewSheetName, setDetailPreviewSheetName] = useState("");
   const [detailPreviewWorkbook, setDetailPreviewWorkbook] = useState<ExcelPreviewWorkbook | null>(null);
   const [issueDetailsRequest, setIssueDetailsRequest] = useState<{
@@ -765,6 +788,7 @@ export function App(): React.JSX.Element {
   const [detailDrawerViewportWidth, setDetailDrawerViewportWidth] = useState(() => window.innerWidth);
   const [analysisCompletedToken, setAnalysisCompletedToken] = useState(0);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [nextBatchConfirmOpen, setNextBatchConfirmOpen] = useState(false);
   const detailDrawerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const detailSidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const detailDrawerCustomWidthRef = useRef(false);
@@ -778,6 +802,8 @@ export function App(): React.JSX.Element {
   const autoRunRequestedRef = useRef(false);
   const userTabLockedRef = useRef(false);
   const batchTaskWasActiveRef = useRef(false);
+  const batchIdRef = useRef<string | null>(null);
+  const batchNameEditedRef = useRef(false);
   const mappingValidationVersionsRef = useRef<Record<string, number>>({});
   const priceRowValidationVersionsRef = useRef<Record<string, number>>({});
   const mappingValidationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -789,6 +815,23 @@ export function App(): React.JSX.Element {
 
   useEffect(() => {
     setIssueDetailsRequest(null);
+  }, [detailPath]);
+
+  useEffect(() => {
+    setDetailContentReady(false);
+    if (!detailPath) return;
+    const frameIds: number[] = [];
+    const deferFrame = (remainingFrames: number): void => {
+      frameIds.push(window.requestAnimationFrame(() => {
+        if (remainingFrames > 1) {
+          deferFrame(remainingFrames - 1);
+        } else {
+          setDetailContentReady(true);
+        }
+      }));
+    };
+    deferFrame(DETAIL_CONTENT_DEFER_FRAMES);
+    return () => frameIds.forEach((frameId) => window.cancelAnimationFrame(frameId));
   }, [detailPath]);
 
   useGSAP(() => {
@@ -1155,12 +1198,14 @@ export function App(): React.JSX.Element {
     return api?.onProcessorEvent(handleProcessorEvent);
   }, [handleProcessorEvent]);
 
-  const registerPaths = useCallback((paths: string[], mode: ImportMode): ImportSummary => {
-    if (batchStarted) {
-      toast.info("当前批次已开始，请重置后导入新文件");
+  const registerPaths = useCallback((paths: string[], mode: ImportMode, options: RegisterPathsOptions = {}): ImportSummary => {
+    const replaceBatch = options.replaceBatch === true;
+    if (batchStarted && !replaceBatch) {
+      toast.info("当前批次已开始，请先完成或结束当前批次");
       return { imported: 0, duplicates: 0 };
     }
-    const existingKeys = new Set(files.map((path) => path.toLocaleLowerCase()));
+    const existingFiles = replaceBatch ? [] : files;
+    const existingKeys = new Set(existingFiles.map((path) => path.toLocaleLowerCase()));
     const uniqueIncoming = Array.from(new Map(paths.map((path) => [path.toLocaleLowerCase(), path])).values());
     const newPaths = uniqueIncoming.filter((path) => !existingKeys.has(path.toLocaleLowerCase()));
     const duplicateCount = paths.length - newPaths.length;
@@ -1168,7 +1213,7 @@ export function App(): React.JSX.Element {
       toast.info(duplicateCount > 0 ? `已跳过 ${duplicateCount} 个重复文件` : "没有发现支持的 Excel 文件");
       return { imported: 0, duplicates: duplicateCount };
     }
-    const nextFiles = [...files, ...newPaths];
+    const nextFiles = [...existingFiles, ...newPaths];
     if (nextFiles.length > MAX_INPUT_FILES) {
       appendLog(`文件数量超过上限，最多支持 ${MAX_INPUT_FILES} 个 Excel 文件`, "error");
       toast.error(`最多支持 ${MAX_INPUT_FILES} 个 Excel 文件`);
@@ -1176,6 +1221,15 @@ export function App(): React.JSX.Element {
     }
     const importedTime = new Date().toLocaleString("zh-CN", { hour12: false });
     setFiles(nextFiles);
+    if (replaceBatch) {
+      batchIdRef.current = null;
+      batchNameEditedRef.current = false;
+      setBatchId(null);
+      setBatchNote("");
+    }
+    if (replaceBatch || !batchNameEditedRef.current) {
+      setBatchName(defaultDraftBatchName(nextFiles, mode));
+    }
     setImportedAt((current) => ({ ...current, ...Object.fromEntries(newPaths.map((path) => [path, importedTime])) }));
     setImportModes((current) => ({ ...current, ...Object.fromEntries(newPaths.map((path) => [path, mode])) }));
     setSelectedPaths([]);
@@ -1201,10 +1255,16 @@ export function App(): React.JSX.Element {
     setProgress({ current: 0, total: 0, phase: "", path: "" });
     setPageIndex(0);
     setActivePath("");
+    if (replaceBatch) {
+      setBatchStarted(false);
+      setLogs([]);
+      userTabLockedRef.current = false;
+      batchTaskWasActiveRef.current = false;
+    }
     confirmedPathsRef.current = new Set();
     const modeLabel = mode === "file" ? "文件" : mode === "folder" ? "文件夹" : "配置目录";
-    appendLog(`已通过${modeLabel}模式加入 ${newPaths.length} 个 Excel 文件`);
-    toast.success(`已导入 ${newPaths.length} 个 Excel 文件${duplicateCount ? `，跳过 ${duplicateCount} 个重复文件` : ""}`);
+    appendLog(`${replaceBatch ? "下一批已通过" : "已通过"}${modeLabel}模式加入 ${newPaths.length} 个 Excel 文件`);
+    toast.success(`${replaceBatch ? "下一批已导入" : "已导入"} ${newPaths.length} 个 Excel 文件${duplicateCount ? `，跳过 ${duplicateCount} 个重复文件` : ""}`);
     return { imported: newPaths.length, duplicates: duplicateCount };
   }, [appendLog, batchStarted, files, setActiveTab]);
 
@@ -1231,6 +1291,21 @@ export function App(): React.JSX.Element {
     appendLog("输出文件夹已保存：" + selected, "success");
     return selected;
   }, [appendLog, outputDir]);
+
+  const commitBatchName = async (): Promise<void> => {
+    const nextName = batchName.trim() || defaultDraftBatchName(files, importSourceMode);
+    batchNameEditedRef.current = true;
+    setBatchName(nextName);
+    setEditingBatchName(false);
+    const api = getDesktopAPI();
+    if (!api || !batchId) return;
+    try {
+      await api.updateTaskBatchMetadata({ batchId, name: nextName });
+      setHistoryRevision((current) => current + 1);
+    } catch (error) {
+      toast.error(`批次名称保存失败：${String(error)}`);
+    }
+  };
 
   const addFiles = useCallback(async (incoming: File[]): Promise<void> => {
     const api = getDesktopAPI();
@@ -1418,7 +1493,10 @@ export function App(): React.JSX.Element {
     await analyzeFiles(files, document.path);
   };
 
-  const runPricing = async (targetFiles: string[] = actionFiles): Promise<void> => {
+  const runPricing = async (
+    targetFiles: string[] = actionFiles,
+    executionType: TaskExecutionType = batchIdRef.current ? "retry" : "automatic",
+  ): Promise<void> => {
     const api = getDesktopAPI();
     if (!api || targetFiles.length === 0 || isAnalyzing || isRunning) return;
     const blockedFiles = targetFiles.filter((path) => {
@@ -1462,9 +1540,18 @@ export function App(): React.JSX.Element {
     setProgress({ current: 0, total: runnableFiles.length, phase: "run", path: "" });
     appendLog("开始核价 " + runnableFiles.length + " 个文件，结果写入：" + effectiveOutputDir);
     try {
-      await api.runPriceCheck({
+      const runnableSet = new Set(runnableFiles);
+      const remainingFiles = files.filter((path) =>
+        !runnableSet.has(path) && results[path]?.status !== "completed").length;
+      const response = await api.runPriceCheck({
         files: runnableFiles,
         outputDir: effectiveOutputDir,
+        ...(batchIdRef.current ? { batchId: batchIdRef.current } : {}),
+        batchName,
+        batchNote,
+        batchFiles: files,
+        executionType,
+        remainingFiles,
         mappings: runMappings,
         diagnostics: runnableFiles.map((path) => ({
           inputPath: path,
@@ -1475,6 +1562,8 @@ export function App(): React.JSX.Element {
         })),
         ...(configPath ? { configPath } : {}),
       });
+      batchIdRef.current = response.batchId;
+      setBatchId(response.batchId);
       if (outputDir) await api.setRuntimeConfig({ recent_output_dir: outputDir });
     } catch (error) {
       setIsRunning(false);
@@ -1490,6 +1579,47 @@ export function App(): React.JSX.Element {
     await scanInputDirectory(selected);
   };
 
+  const chooseNextBatch = async (): Promise<void> => {
+    const api = getDesktopAPI();
+    if (!api || isAnalyzing || isRunning) return;
+    const finishCurrentBatch = async (): Promise<void> => {
+      const unresolvedFiles = files.filter((path) => results[path]?.status !== "completed").length;
+      if (!batchIdRef.current || unresolvedFiles === 0) return;
+      await api.finishTaskBatch(batchIdRef.current);
+      setHistoryRevision((current) => current + 1);
+    };
+    if (importSourceMode === "file") {
+      const selected = await api.selectExcelFiles();
+      if (!selected?.length) return;
+      const supportedPaths = selected.filter(isExcelPath);
+      if (supportedPaths.length !== selected.length) {
+        toast.warning("仅支持 Excel 文件（xlsx、xlsm、xlsb、xls）");
+      }
+      if (supportedPaths.length > 0) {
+        await finishCurrentBatch();
+        registerPaths(supportedPaths, "file", { replaceBatch: true });
+      }
+      return;
+    }
+    const selectedDirectory = await api.selectDirectory("input");
+    if (!selectedDirectory) return;
+    try {
+      const scan = await api.listExcelFiles(selectedDirectory);
+      if (scan.files.length === 0) {
+        toast.warning("所选文件夹中没有发现 Excel 文件");
+        return;
+      }
+      setInputDir(selectedDirectory);
+      await finishCurrentBatch();
+      registerPaths(scan.files, "folder", { replaceBatch: true });
+      const skipped = scan.skippedTemporary + scan.skippedUnsupported + scan.skippedOutput;
+      if (skipped > 0) toast.info(`下一批已跳过 ${skipped} 个无效文件`);
+    } catch (error) {
+      appendLog("扫描下一批文件夹失败：" + String(error), "error");
+      toast.error("扫描下一批文件夹失败");
+    }
+  };
+
   useEffect(() => {
     if (analysisCompletedToken === 0 || !autoRunRequestedRef.current) return;
     autoRunRequestedRef.current = false;
@@ -1502,7 +1632,7 @@ export function App(): React.JSX.Element {
       return;
     }
     toast.success(`分析完成：自动核价 ${eligibleFiles.length}，待确认 ${confirmCount}，异常 ${errorCount}`);
-    void runPricing(eligibleFiles);
+    void runPricing(eligibleFiles, batchIdRef.current ? "retry" : "automatic");
   }, [analysisCompletedToken]);
 
   const scanFiles = async (): Promise<void> => {
@@ -1593,6 +1723,12 @@ export function App(): React.JSX.Element {
     setIsRunning(false);
     setIsPaused(false);
     setBatchStarted(false);
+    batchIdRef.current = null;
+    batchNameEditedRef.current = false;
+    setBatchId(null);
+    setBatchName("");
+    setBatchNote("");
+    setEditingBatchName(false);
     setActivePath("");
     setFiles([]);
     setImportedAt({});
@@ -1621,6 +1757,7 @@ export function App(): React.JSX.Element {
     userTabLockedRef.current = false;
     batchTaskWasActiveRef.current = false;
     setResetConfirmOpen(false);
+    setNextBatchConfirmOpen(false);
     setInputDirectorySelected(false);
     setActiveTab("pending");
     setProgress({ current: 0, total: 0, phase: "", path: "" });
@@ -1746,7 +1883,7 @@ export function App(): React.JSX.Element {
     confirmedPathsRef.current.add(path);
     setDetailPath(null);
     toast.success("映射已确认，开始处理当前文件");
-    await runPricing([path]);
+    await runPricing([path], "manual");
   };
 
   const retryAnalysis = async (path: string): Promise<void> => {
@@ -2007,13 +2144,29 @@ export function App(): React.JSX.Element {
     ? matchedOrderRowsBySheet[detailPath]?.[detailMapping.orderSheet] ?? []
     : [];
   const detailWritebackRows = useMemo(() => {
-    if (!detailPath || detailValidation.status !== "ready") return [];
+    if (!detailContentReady || !detailPath || detailValidation.status !== "ready") return [];
     const baseRows = detailValidation.result?.writebackRows ?? [];
-    const editsByRow = new Map((writebackEdits[detailPath] ?? []).map((row) => [row.sourceRow, row]));
+    const edits = writebackEdits[detailPath] ?? [];
+    if (edits.length === 0) return baseRows;
+    const editsByRow = new Map(edits.map((row) => [row.sourceRow, row]));
     return baseRows.map((row) => editsByRow.get(row.sourceRow) ?? row);
-  }, [detailPath, detailValidation, writebackEdits]);
-  const detailQuantityIssues = detailWritebackRows.filter((row) => row.quantityError);
-  const detailUnmatchedIssues = detailValidation.result?.unmatchedRows ?? detailAnalysis?.unmatchedRows ?? [];
+  }, [detailContentReady, detailPath, detailValidation, writebackEdits]);
+  const detailQuantityIssues = useMemo(
+    () => detailWritebackRows.filter((row) => row.quantityError),
+    [detailWritebackRows],
+  );
+  const detailUnmatchedIssues = useMemo(
+    () => detailContentReady
+      ? detailValidation.result?.unmatchedRows ?? detailAnalysis?.unmatchedRows ?? []
+      : [],
+    [detailAnalysis?.unmatchedRows, detailContentReady, detailValidation.result?.unmatchedRows],
+  );
+  const selectedIssueDetails = useMemo(() => {
+    if (!issueDetailsRequest) return [];
+    return issueDetailsRequest.kind === "quantity"
+      ? quantityIssueDetails(detailQuantityIssues)
+      : unmatchedIssueDetails(detailUnmatchedIssues);
+  }, [detailQuantityIssues, detailUnmatchedIssues, issueDetailsRequest]);
   const openUnmatchedDetails = useCallback((summary: string, sourceRow: number | null = null): void => {
     setIssueDetailsRequest({ kind: "unmatched", sourceRow, summary });
   }, []);
@@ -2212,6 +2365,7 @@ export function App(): React.JSX.Element {
       const confirmPaths = files.filter((path) => tabForStatus(fileStatusByPath[path]) === "confirm");
       return {
         label: confirmPaths.length === 1 ? "查看详情" : "去确认",
+        icon: FileCheck2,
         className: "cyber-action is-start is-batch-next",
         onClick: () => {
           userTabLockedRef.current = true;
@@ -2223,6 +2377,7 @@ export function App(): React.JSX.Element {
     if (tabCounts.error > 0) {
       return {
         label: "查看异常",
+        icon: CircleHelp,
         className: "cyber-action is-start is-batch-next",
         onClick: () => {
           userTabLockedRef.current = true;
@@ -2230,18 +2385,35 @@ export function App(): React.JSX.Element {
         },
       };
     }
-    if (tabCounts.success > 0) {
+    if (tabCounts.pending > 0) {
       return {
-        label: "查看完成",
+        label: "继续未完成",
+        icon: Play,
         className: "cyber-action is-start is-batch-next",
         onClick: () => {
-          userTabLockedRef.current = true;
-          setActiveTab("success");
+          const unfinishedFiles = files.filter((path) => results[path]?.status !== "completed");
+          if (unfinishedFiles.length === 0) return;
+          const needsAnalysis = unfinishedFiles.some((path) => !analysesRef.current[path] && !analyses[path]);
+          userTabLockedRef.current = false;
+          if (needsAnalysis) {
+            autoRunRequestedRef.current = true;
+            void analyzeFiles(unfinishedFiles);
+          } else {
+            void runPricing(unfinishedFiles, "retry");
+          }
         },
       };
     }
+    if (tabCounts.success > 0) {
+      return {
+        label: "处理下一批",
+        icon: FilePlus2,
+        className: "cyber-action is-start is-batch-next",
+        onClick: () => { void chooseNextBatch(); },
+      };
+    }
     return null;
-  }, [batchStarted, fileStatusByPath, files, isTaskActive, setActiveTab, tabCounts]);
+  }, [analyses, batchStarted, fileStatusByPath, files, isTaskActive, results, setActiveTab, tabCounts]);
 
   const listEmptyState = useMemo(() => {
     if (files.length === 0) {
@@ -2327,19 +2499,25 @@ export function App(): React.JSX.Element {
     await api.stopProcessing();
   };
 
-  const renderTaskActions = (className: string, showReset = false, showNext = false): React.JSX.Element => (
-    <div className={className} aria-label="快捷操作">
+  const renderTaskActions = (className: string, showReset = false, showNext = false): React.JSX.Element => {
+    const BatchNextIcon = batchNextAction?.icon ?? FileCheck2;
+    return <div className={className} aria-label="快捷操作">
       {!batchStarted ? <SidebarTooltip label="开始处理" enabled={sidebarCollapsed}><button type="button" aria-label="开始处理" className="cyber-action is-start" onClick={() => { userTabLockedRef.current = false; void startCurrentTask(); }} disabled={actionFiles.length === 0 || isTaskActive}><Play /><strong>开始处理</strong></button></SidebarTooltip> : null}
       {isTaskActive ? <SidebarTooltip label={isPaused ? "继续任务" : "暂停任务"} enabled={sidebarCollapsed}><button type="button" aria-label={isPaused ? "继续任务" : "暂停任务"} className="cyber-action is-pause" onClick={() => void togglePauseTask()} disabled={!isTaskActive}>{isPaused ? <Play /> : <Pause />}<strong>{isPaused ? "继续任务" : "暂停任务"}</strong></button></SidebarTooltip> : null}
       {isTaskActive ? <SidebarTooltip label="停止任务" enabled={sidebarCollapsed}><button type="button" aria-label="停止任务" className="cyber-action is-stop" onClick={() => void stopCurrentTask()} disabled={!isTaskActive}><CircleStop /><strong>停止任务</strong></button></SidebarTooltip> : null}
       {showNext && batchNextAction ? (
         <button type="button" aria-label={batchNextAction.label} className={batchNextAction.className} onClick={batchNextAction.onClick}>
-          <FileCheck2 /><strong>{batchNextAction.label}</strong>
+          <BatchNextIcon /><strong>{batchNextAction.label}</strong>
         </button>
       ) : null}
-      {showReset ? <button type="button" aria-label="重置本批" className="cyber-action is-reset" onClick={requestResetTask} disabled={!hasResettableTaskState}><RefreshCw /><strong>重置本批</strong></button> : null}
-    </div>
-  );
+      {showReset && !batchStarted ? <button type="button" aria-label="重置本批" className="cyber-action is-reset" onClick={requestResetTask} disabled={!hasResettableTaskState}><RefreshCw /><strong>重置本批</strong></button> : null}
+      {showReset && batchStarted && !isTaskActive && tabCounts.confirm + tabCounts.error + tabCounts.pending > 0 ? (
+        <button type="button" aria-label="结束本批并处理下一批" className="cyber-action is-reset" onClick={() => setNextBatchConfirmOpen(true)}>
+          <FilePlus2 /><strong>结束并下一批</strong>
+        </button>
+      ) : null}
+    </div>;
+  };
 
   const showComingSoon = (label: string): void => {
     toast.info(label + "正在建设中");
@@ -2449,6 +2627,14 @@ export function App(): React.JSX.Element {
                 </div>
               </header>
               <div className="issue-drawer-content" style={{ gridTemplateColumns: `minmax(${DETAIL_PREVIEW_MIN_WIDTH}px, 1fr) ${DETAIL_CONTENT_RESIZER_WIDTH}px ${detailSidebarWidth}px` }}>
+                {!detailContentReady ? (
+                  <div className="issue-detail-loading" role="status" aria-label="正在准备文件详情">
+                    <LoaderCircle />
+                    <strong>正在准备文件详情</strong>
+                    <small>先打开详情窗口，再加载工作簿与字段映射</small>
+                  </div>
+                ) : (
+                  <>
                 <ExcelPreview
                   api={getDesktopAPI()}
                   filePath={detailPath}
@@ -2587,9 +2773,7 @@ export function App(): React.JSX.Element {
                           )}
                           title={issueDetailsRequest?.kind === "quantity" ? "数量计算问题" : "价格未匹配详情"}
                           summary={issueDetailsRequest?.summary ?? ""}
-                          issues={issueDetailsRequest?.kind === "quantity"
-                            ? quantityIssueDetails(quantityIssues)
-                            : unmatchedIssueDetails(unmatchedIssues)}
+                          issues={selectedIssueDetails}
                           selectedSourceRow={issueDetailsRequest?.sourceRow}
                           onClose={() => setIssueDetailsRequest(null)}
                         />
@@ -2599,6 +2783,8 @@ export function App(): React.JSX.Element {
                   {detailAnalysis && detailMapping ? <MappingEditor analysis={detailAnalysis} mapping={detailMapping} workbook={detailPreviewWorkbook} activeTarget={activeMappingTarget} validation={detailValidation} onActiveTargetChange={selectMappingTarget} onMappingChange={(mapping) => commitMapping(detailPath, mapping)} onColumnChange={(target, column, header) => changeMappingColumn(target, column, header)} onSheetChange={(orderSheet, pricingSheet, previewSheet) => { updateMapping(detailPath, orderSheet, pricingSheet); setDetailPreviewSheetName(previewSheet); }} onPreviewSheetChange={setDetailPreviewSheetName} onConfirm={() => void confirmAndContinue(detailPath)} /> : null}
                   {detailPath && fileStatusByPath[detailPath] && tabForStatus(fileStatusByPath[detailPath]) === "error" ? <section className="issue-error-section"><Button type="button" variant="outline" size="sm" onClick={() => void retryAnalysis(detailPath)}><RefreshCw />重新分析此文件</Button></section> : null}
                 </div>
+                  </>
+                )}
               </div>
             </motion.aside>
           </> : null}
@@ -2691,7 +2877,35 @@ export function App(): React.JSX.Element {
 
           <section className="cyber-table-panel">
             <header className="cyber-table-toolbar">
-              <h2>文件列表 <span>（{visibleFiles.length}）</span></h2>
+              <div className="cyber-file-list-title">
+                <h2>文件列表 <span>（{visibleFiles.length}）</span></h2>
+                {files.length > 0 ? (
+                  <div className="cyber-batch-name" title={batchId ? `批次 ID：${batchId}` : "开始核价后写入日志中心"}>
+                    <small>当前批次</small>
+                    {editingBatchName ? (
+                      <input
+                        autoFocus
+                        value={batchName}
+                        maxLength={120}
+                        aria-label="批次名称"
+                        onChange={(event) => setBatchName(event.target.value)}
+                        onBlur={() => void commitBatchName()}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") event.currentTarget.blur();
+                          if (event.key === "Escape") {
+                            setBatchName(defaultDraftBatchName(files, importSourceMode));
+                            setEditingBatchName(false);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <button type="button" onClick={() => setEditingBatchName(true)} aria-label="编辑批次名称">
+                        <span data-name={batchName || defaultDraftBatchName(files, importSourceMode)} /><Pencil />
+                      </button>
+                    )}
+                  </div>
+                ) : null}
+              </div>
               {files.length > 0 ? <div className="cyber-table-actions">
                 <div className="cyber-tabs" aria-label="文件状态统计">
                   {fileTabs.map((tab) => (
@@ -2857,6 +3071,17 @@ export function App(): React.JSX.Element {
           tone="danger"
           onCancel={() => setResetConfirmOpen(false)}
           onConfirm={() => { void resetTask(); }}
+        />
+        <ConfirmDialog
+          open={nextBatchConfirmOpen}
+          title="结束当前批次？"
+          description={`当前仍有 ${tabCounts.confirm} 个待确认、${tabCounts.error} 个异常、${tabCounts.pending} 个未完成文件。结束后已执行的核价记录仍保留在日志中心；尚未执行的文件和当前编辑状态将关闭。`}
+          confirmLabel="结束并选择下一批"
+          onCancel={() => setNextBatchConfirmOpen(false)}
+          onConfirm={() => {
+            setNextBatchConfirmOpen(false);
+            void chooseNextBatch();
+          }}
         />
       </main>
     </MotionConfig>
