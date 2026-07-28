@@ -19,7 +19,8 @@
 - **SKU 换算**：支持相同 SKU、基础子串、`+` 组合和 `*N` 倍数；复合 SKU 按共同组件比例换算，比例冲突时数量留空并进入待确认。
 - **同订单隔离**：无订单号行不参与数量或核价；吸收、同主要 SKU 合并均严格限定在同一规范化订单号内。
 - **写回金额**：匹配价格写入 `核价[财务]`；若订单表存在表头为 `EU TAX` 的列，会把税额加入核价金额后再计算金额差。
-- **预览编辑**：订单侧已映射的价格、SKU、原始数量和合并数量，以及新增三列均可在详情预览中编辑；执行时按编辑后的数据重新计算。
+- **预览编辑**：详情中只有绿色的 `核价[财务]`、`金额差`、`数量` 三列可编辑；修改数量只按源行重新核价并更新该行三列，不触发整表重算。
+- **问题定位**：数量关系问题在独立弹窗的紧凑表格中按源行展示，并用橙色、蓝色区分两个 SKU 的 Excel 列字母和值。
 - **合计复用**：只在原工作表已有合计/汇总候选行中汇总新增三列，不创建新的合计行；预览与实际写回使用同一定位规则。
 - **单独发货**：默认关闭。开启后至少选择两个联合字段；只有字段完整、联合值唯一对应一个订单且该订单只有一个有效主要 SKU 时才使用单独发货价格，否则使用通用价格。
 - **空表头与定位**：映射下拉可选择空表头列；未匹配定位会在需要时加载完整预览后跳转。
@@ -55,7 +56,7 @@
 |---|---|
 | `scan` / `start` / `merge-summaries` | 兼容扫描/批处理/合并（沿用表格工具链路） |
 | `price-check-analyze` | 识别订单/核价 Sheet、生成映射与试算 |
-| `price-check-validate` | 用户改映射后重试算 |
+| `price-check-validate` | 用户改映射后整表重试算；携带 `rowEdit` 时只重算指定行 |
 | `price-check-run` | 按映射与写回数据生成结果文件 |
 | `pause` / `resume` / `stop` / `shutdown` | 控制子进程 |
 
@@ -120,7 +121,7 @@ AutoPricingTool/
 | 精确档位查价 | `PriceIndex::lookup` |
 | EU TAX 与金额差 | `order_tax_column_index`、`build_writeback_rows` |
 | 三列写回与合计行复用 | `write_price_result`、`existing_total_row` |
-| 详情预览合计与编辑 | `existingWritebackTotalRow`、`isEditableOrderSourceColumn` |
+| 详情预览合计与绿色三列编辑 | `existingWritebackTotalRow`、`commitWritebackEdit`、`recalculatePriceRow` |
 
 修改上述行为时，应在同一功能提交中同步更新
 [`处理流程与匹配规则.md`](./处理流程与匹配规则.md)、相关测试和本索引。
