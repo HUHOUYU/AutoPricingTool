@@ -231,9 +231,12 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
   return (
     <div className="config-center-page" role="region" aria-label="配置中心">
       <div className="config-center-status">
-        <div className={validation.valid ? "is-valid" : "is-invalid"}>{validation.valid ? <CheckCircle2 /> : <AlertTriangle />}<span>{validation.valid ? "配置结构正常" : `${validation.issues.length} 项需要修复`}</span></div>
-        <div className="config-center-actions">
+        <div className={`config-validation-summary ${validation.valid ? "is-valid" : "is-invalid"}`}>
+          {validation.valid ? <CheckCircle2 /> : <AlertTriangle />}
+          <span>{validation.valid ? "配置结构正常" : `${validation.issues.length} 项需要修复`}</span>
           <Button variant="ghost" onClick={() => void validate()}>立即校验</Button>
+        </div>
+        <div className="config-center-actions">
           <Button className="is-info" variant="outline" onClick={() => void selectDocument()} disabled={loading}><FolderOpen />选择</Button>
           <Button className="is-info" variant="outline" onClick={() => void loadDocument(document?.path)} disabled={loading}><RefreshCw />重新加载</Button>
           <Button className="is-primary" variant="outline" onClick={() => void saveAs()} disabled={loading}><SaveAll />另存为</Button>

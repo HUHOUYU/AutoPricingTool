@@ -3289,6 +3289,98 @@ html:not(.dark) .cyber-log-drawer {
   }
 }
 
+/* 数据统计查询栏保留独立外观；空间充足时优先显示完整日期文案。 */
+.analytics-filter-bar .analytics-range-presets button {
+  display: grid;
+  width: auto;
+  min-width: 68px;
+  height: 34px;
+  padding: 0 12px;
+  place-items: center;
+  white-space: nowrap;
+}
+
+.analytics-range-label-compact {
+  display: none;
+}
+
+.analytics-filter-bar .analytics-search input {
+  padding-right: 10px;
+  padding-left: 34px;
+}
+
+.analytics-search svg {
+  z-index: 1;
+  pointer-events: none;
+}
+
+@media (max-width: 1220px) {
+  .analytics-filter-bar .analytics-range-presets button {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+  }
+
+  .analytics-range-label-full {
+    display: none;
+  }
+
+  .analytics-range-label-compact {
+    display: inline;
+  }
+}
+
+.cyber-file-list-title { display: flex; align-items: center; gap: 18px; min-width: 0; }
+.cyber-batch-name { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--cyber-muted); }
+.cyber-batch-name small { white-space: nowrap; }
+.cyber-batch-name button {
+  display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 360px;
+  padding: 3px 7px; border: 1px solid transparent; border-radius: 7px;
+  color: var(--cyber-text); background: transparent;
+}
+.cyber-batch-name button:hover { border-color: var(--cyber-border); }
+.cyber-batch-name button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cyber-batch-name button span::after { content: attr(data-name); }
+.cyber-batch-name button svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.cyber-batch-name input {
+  width: min(360px, 30vw); height: 30px; padding: 0 8px;
+  border: 1px solid var(--cyber-primary); border-radius: 7px;
+  color: var(--cyber-text); background: var(--cyber-surface); outline: none;
+}
+.history-status.is-awaiting_confirmation {
+  color: var(--cyber-status-confirm);
+  background: color-mix(in srgb, var(--cyber-status-confirm) 10%, transparent);
+}
+.batch-metadata-editor {
+  display: grid; grid-template-columns: minmax(180px, .8fr) minmax(240px, 1.4fr) auto;
+  align-items: end; gap: 10px; padding: 10px 12px;
+  border: 1px solid var(--cyber-border); border-radius: 10px; background: var(--cyber-surface-soft);
+}
+.batch-metadata-editor label { display: grid; gap: 5px; min-width: 0; color: var(--cyber-muted); font-size: 12px; }
+.batch-metadata-editor input {
+  min-width: 0; height: 34px; padding: 0 9px;
+  border: 1px solid var(--cyber-border); border-radius: 7px;
+  color: var(--cyber-text); background: var(--cyber-surface);
+}
+.batch-metadata-editor > div { display: flex; gap: 6px; }
+.batch-detail-note {
+  display: flex; gap: 8px; margin: 0; padding: 7px 11px;
+  border-left: 2px solid var(--cyber-primary);
+  color: var(--cyber-text); background: var(--cyber-surface-soft);
+}
+.batch-detail-note span { flex: 0 0 auto; color: var(--cyber-muted); }
+.analytics-search { position: relative; display: flex; align-items: center; width: min(300px, 24vw); }
+.analytics-search svg { position: absolute; left: 10px; width: 15px; height: 15px; color: var(--cyber-muted); }
+.analytics-search input {
+  width: 100%; height: 36px; padding: 0 10px 0 32px;
+  border: 1px solid var(--cyber-border); border-radius: 8px;
+  color: var(--cyber-text); background: var(--cyber-surface);
+}
+@media (max-width: 1100px) {
+  .cyber-batch-name small, .analytics-search { display: none; }
+  .batch-metadata-editor { grid-template-columns: 1fr; }
+}
+
 /* 批次日志与统计页面 */
 .cyber-workspace.is-logs,
 .cyber-workspace.is-analytics {
@@ -3297,6 +3389,10 @@ html:not(.dark) .cyber-log-drawer {
   min-height: 0;
   overflow: hidden;
   padding: var(--cyber-workspace-padding-top, 40px) 14px 14px;
+}
+
+.cyber-workspace.is-analytics {
+  padding-bottom: 2px;
 }
 
 .history-page {
@@ -3711,6 +3807,8 @@ html.dark .date-picker-popover {
 }
 
 .batch-list > button strong {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   font-size: 12px;
   text-overflow: ellipsis;
@@ -3783,9 +3881,66 @@ html.dark .date-picker-popover {
 }
 
 .batch-detail {
+  position: relative;
+  display: flex;
+  height: 100%;
   min-width: 0;
-  overflow: auto;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
   padding: 14px;
+}
+
+.batch-detail-content {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  animation: batch-detail-enter 150ms ease-out;
+  transition: opacity 120ms ease;
+}
+
+.batch-detail-content.is-updating {
+  opacity: .58;
+  pointer-events: none;
+}
+
+.batch-detail-loading-indicator {
+  position: absolute;
+  z-index: 5;
+  top: 12px;
+  left: 50%;
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 10px;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 8%);
+  font-size: 10px;
+  transform: translateX(-50%);
+}
+
+.batch-detail-loading-indicator svg {
+  width: 13px;
+  height: 13px;
+}
+
+@keyframes batch-detail-enter {
+  from {
+    opacity: .72;
+    transform: translateY(3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .batch-detail-content {
+    animation: none;
+    transition: none;
+  }
 }
 
 .batch-detail-back {
@@ -3916,8 +4071,25 @@ html.dark .date-picker-popover {
   background: var(--card);
 }
 
-.batch-file-section {
+.batch-detail-body {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-rows: minmax(180px, 1.15fr) minmax(160px, .85fr);
+  gap: 12px;
   margin-top: 12px;
+  overflow: hidden;
+}
+
+.batch-detail-body.is-compact {
+  grid-template-rows: auto minmax(160px, 1fr);
+}
+
+.batch-file-section {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  margin-top: 0;
 }
 
 .batch-section > header,
@@ -4024,9 +4196,19 @@ html.dark .date-picker-popover {
 
 .batch-lower-grid {
   display: grid;
+  min-height: 0;
   gap: 12px;
-  margin-top: 12px;
+  margin-top: 0;
   grid-template-columns: minmax(260px, 0.8fr) minmax(320px, 1.2fr);
+}
+
+.batch-lower-grid > .batch-section {
+  min-height: 0;
+}
+
+.batch-events {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .batch-issues details {
@@ -4073,6 +4255,33 @@ html.dark .date-picker-popover {
   color: var(--muted-foreground);
 }
 
+.batch-issue-row {
+  color: var(--cyber-status-error);
+}
+
+.batch-issue-context {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.batch-issue-context em {
+  overflow: hidden;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-issue-context .is-country { color: var(--cyber-status-confirm); }
+.batch-issue-context .is-sku { color: var(--cyber-status-info); }
+.batch-issue-context .is-quantity { color: var(--cyber-status-success); }
+
+.batch-issues li p strong {
+  margin-right: 5px;
+  color: var(--cyber-status-error);
+}
+
 .batch-events > header .history-event-select {
   width: 96px;
   height: 28px;
@@ -4080,7 +4289,8 @@ html.dark .date-picker-popover {
 }
 
 .batch-events ol {
-  max-height: 310px;
+  max-height: none;
+  min-height: 0;
   padding: 9px 11px;
 }
 
@@ -4103,6 +4313,9 @@ html.dark .date-picker-popover {
 .batch-events li.is-success i { background: #24a56a; }
 .batch-events li.is-warning i { background: #d8932f; }
 .batch-events li.is-error i { background: var(--destructive); }
+.batch-events li.is-success span { color: var(--cyber-status-success); }
+.batch-events li.is-warning span { color: var(--cyber-status-confirm); }
+.batch-events li.is-error span { color: var(--cyber-status-error); }
 .batch-events time { color: var(--muted-foreground); font-family: var(--font-code); }
 
 .history-empty,
@@ -4231,7 +4444,23 @@ html.dark .date-picker-popover {
 }
 
 .analytics-records {
+  display: grid;
+  height: clamp(320px, 48vh, 520px);
   min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.analytics-records.is-compact-page {
+  height: auto;
+}
+
+.analytics-records.is-filled-page {
+  height: auto;
+  flex: 1 0 auto;
+}
+
+.analytics-records.is-filled-page .analytics-records-table table {
+  height: 100%;
 }
 
 .analytics-records tbody tr:focus-visible {
@@ -4585,6 +4814,470 @@ html.dark .date-picker-popover {
 }
 
 .issue-drawer-content { display: grid; min-height: 0; gap: 0; overflow: hidden; padding: 12px 14px 14px; }
+.issue-detail-loading {
+  display: grid;
+  grid-column: 1 / -1;
+  min-height: 0;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--cyber-muted);
+  text-align: center;
+}
+.issue-detail-loading svg { width: 22px; height: 22px; animation: spin 900ms linear infinite; }
+.issue-detail-loading strong { color: var(--cyber-text); font-size: 12px; font-weight: 500; }
+.issue-detail-loading small { font-size: 9px; }
+
+/* 配置页顶部与主体使用同一列宽，避免校验状态和操作区错位。 */
+.config-center-status {
+  display: grid;
+  grid-template-columns: minmax(330px, .78fr) minmax(420px, 1.22fr);
+  gap: 12px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.config-center-status > div:first-child,
+.config-center-status > .config-center-actions {
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid var(--cyber-border-soft);
+  border-radius: 12px;
+  padding: 5px 12px;
+  background: var(--cyber-panel);
+  box-shadow: 0 8px 28px rgb(29 27 22 / 5%);
+}
+
+.config-center-status > .config-center-actions {
+  margin-left: 0;
+  padding-inline: 8px;
+}
+
+.config-validation-summary > button {
+  height: 32px;
+  margin-left: auto;
+  border-radius: 8px;
+  padding-inline: 10px;
+}
+
+/* 日志筛选操作默认贴右，换行时仍保持右对齐。 */
+.history-filter-actions {
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+/* 批次主列表强化层级和选中态，同时保持高密度。 */
+.batch-list > button {
+  position: relative;
+  gap: 7px;
+  padding: 10px 11px 10px 13px;
+}
+
+.batch-list > button.is-selected::before {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 0;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--primary);
+  content: "";
+}
+
+.batch-list > button.is-selected {
+  background: color-mix(in srgb, var(--primary) 7%, var(--card));
+  box-shadow: none;
+}
+
+.batch-list-heading,
+.batch-list-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.batch-list-identity code {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-code);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-list-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.batch-list-metrics > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.batch-list-metrics small {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.batch-list-metrics b {
+  overflow: hidden;
+  font-family: var(--font-code);
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 文件结果与统计明细使用统一的固定视窗和吸顶表头。 */
+.batch-file-table-wrap {
+  max-height: clamp(216px, 34vh, 360px);
+}
+
+.batch-detail-body:not(.is-compact) .batch-file-table-wrap {
+  height: 100%;
+  max-height: none;
+}
+
+.analytics-records-table {
+  max-height: none;
+}
+
+.batch-file-table-wrap,
+.analytics-records-table {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.analytics-records-table {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.analytics-records.is-compact-page .analytics-records-table {
+  overflow-y: visible;
+}
+
+.analytics-table-footer {
+  display: grid;
+  min-height: 44px;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.analytics-table-footer > div,
+.analytics-table-footer > label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.analytics-table-footer > label {
+  justify-self: end;
+}
+
+.analytics-table-footer .ui-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.analytics-table-footer .ui-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.analytics-table-footer .ui-select-trigger {
+  width: 76px;
+  height: 30px;
+}
+
+.batch-file-table-wrap thead,
+.analytics-records-table thead {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+}
+
+.batch-file-table-wrap:focus-visible,
+.analytics-records-table:focus-visible {
+  outline: 1px solid var(--cyber-primary);
+  outline-offset: -1px;
+}
+
+.batch-issues {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.batch-issues > header {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  background: var(--card);
+}
+
+@media (max-width: 1380px) {
+  .config-center-status {
+    grid-template-columns: minmax(300px, .8fr) minmax(390px, 1.2fr);
+  }
+}
+
+@media (min-width: 981px) and (max-width: 1160px) {
+  .batch-lower-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 980px) {
+  .batch-detail {
+    display: block;
+    overflow: auto;
+  }
+  .batch-detail-body {
+    display: block;
+    overflow: visible;
+  }
+  .batch-detail-body .batch-file-section,
+  .batch-detail-body .batch-lower-grid {
+    margin-top: 12px;
+  }
+  .batch-detail-body:not(.is-compact) .batch-file-table-wrap {
+    height: auto;
+    max-height: 360px;
+  }
+}
+
+@media (max-width: 820px) {
+  .config-center-status {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 矮窗口只保留核心信息，数据区内部仍可滚动但不显示整页滚动条。 */
+@media (max-height: 760px) and (min-width: 981px) {
+  .history-page {
+    gap: 8px;
+  }
+
+  .history-filter-bar,
+  .analytics-filter-bar {
+    min-height: 48px;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+  }
+
+  .history-filter-bar label > span,
+  .history-filter-bar .history-date-field > span,
+  .history-filter-bar .history-select-field > span,
+  .analytics-custom-range .history-date-field > span {
+    display: none;
+  }
+
+  .history-filter-bar .history-search {
+    display: none;
+  }
+
+  .history-filter-actions {
+    margin-left: auto;
+  }
+
+  .history-filter-bar .history-date-field,
+  .history-filter-bar .history-select-field {
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+
+  .history-filter-bar .date-picker-trigger {
+    width: clamp(126px, 14vw, 148px);
+  }
+
+  .history-filter-bar .history-select-field .ui-select-trigger {
+    width: clamp(112px, 12vw, 132px);
+  }
+
+  .batch-list > button {
+    gap: 4px;
+    padding: 8px 10px;
+  }
+
+  .batch-list-identity code,
+  .batch-list > button > em {
+    display: none;
+  }
+
+  .batch-list-identity {
+    justify-content: flex-start !important;
+  }
+
+  .batch-detail {
+    padding: 10px;
+  }
+
+  .batch-detail-header small {
+    display: none;
+  }
+
+  .batch-detail-header h2 {
+    font-size: 15px;
+  }
+
+  .batch-metrics {
+    gap: 7px;
+    margin-top: 8px;
+  }
+
+  .batch-metrics article {
+    gap: 2px;
+    border-radius: 10px;
+    padding: 7px 9px;
+  }
+
+  .batch-metrics strong {
+    font-size: 15px;
+  }
+
+  .batch-detail-body,
+  .batch-detail-body.is-compact {
+    grid-template-rows: minmax(112px, .9fr) minmax(126px, 1.1fr);
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .batch-file-table-wrap th,
+  .batch-file-table-wrap td {
+    height: 30px;
+    padding-block: 4px;
+  }
+
+  .batch-lower-grid {
+    gap: 8px;
+  }
+
+  .batch-section > header,
+  .analytics-panel > header {
+    min-height: 34px;
+    padding-block: 6px;
+  }
+
+  .batch-issues details {
+    padding-block: 6px;
+  }
+
+  .batch-events li {
+    padding-block: 3px;
+  }
+
+  .analytics-page-scroll {
+    gap: 8px;
+    overflow: hidden;
+    padding-right: 0;
+  }
+
+  .analytics-filter-tools {
+    margin-left: auto;
+  }
+
+  .analytics-metrics {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .analytics-metrics article {
+    gap: 2px;
+    border-radius: 10px;
+    padding: 7px 9px;
+  }
+
+  .analytics-metrics article > div {
+    gap: 4px;
+  }
+
+  .analytics-metrics small {
+    display: none;
+  }
+
+  .analytics-metrics strong {
+    font-size: 16px;
+  }
+
+  .analytics-grid {
+    flex: 0 0 205px;
+    gap: 8px;
+    grid-template-columns: minmax(0, 1.55fr) minmax(250px, .75fr);
+  }
+
+  .analytics-grid > :last-child {
+    display: none;
+  }
+
+  .analytics-panel {
+    min-height: 0;
+  }
+
+  .analytics-chart {
+    height: 165px;
+  }
+
+  .analytics-records,
+  .analytics-records.is-filled-page {
+    min-height: 180px;
+    height: auto;
+    flex: 1 1 0;
+  }
+
+  .analytics-records.is-compact-page {
+    flex: 0 0 auto;
+  }
+
+  .analytics-records-table th,
+  .analytics-records-table td {
+    height: 30px;
+    padding-block: 4px;
+  }
+
+  .analytics-table-footer {
+    min-height: 38px;
+    padding-block: 3px;
+  }
+
+  .analytics-page-scroll,
+  .batch-list,
+  .batch-file-table-wrap,
+  .batch-issues,
+  .batch-issues ul,
+  .batch-events ol,
+  .analytics-records-table {
+    scrollbar-width: none;
+  }
+
+  .analytics-page-scroll::-webkit-scrollbar,
+  .batch-list::-webkit-scrollbar,
+  .batch-file-table-wrap::-webkit-scrollbar,
+  .batch-issues::-webkit-scrollbar,
+  .batch-issues ul::-webkit-scrollbar,
+  .batch-events ol::-webkit-scrollbar,
+  .analytics-records-table::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 .issue-content-resizer { position: relative; z-index: 4; display: grid; width: 100%; height: 100%; cursor: ew-resize; place-items: center; outline: 0; touch-action: none; }
 .issue-content-resizer::before { position: absolute; width: 1px; height: 100%; content: ""; background: var(--cyber-border-soft); }
 .issue-content-resizer i { position: relative; width: 4px; height: 46px; border-radius: 999px; background: var(--cyber-border); box-shadow: 0 0 0 3px var(--cyber-panel); opacity: 0; transition: opacity 120ms ease, background 120ms ease; }
@@ -6896,37 +7589,41 @@ html.dark [data-sonner-toast].cyber-toast {
 .cyber-app {
   --button-primary: #b8563e;
   --button-primary-hover: #a94b35;
-  --button-primary-foreground: #fffaf7;
-  --button-surface: color-mix(in srgb, var(--cyber-panel) 94%, #ffffff 6%);
-  --button-surface-hover: color-mix(in srgb, var(--cyber-primary) 7%, var(--cyber-panel));
-  --button-border: color-mix(in srgb, var(--cyber-border) 88%, #ffffff 12%);
+  --button-primary-foreground: var(--cyber-text);
+  --button-primary-surface: var(--cyber-panel);
+  --button-primary-surface-hover: var(--cyber-panel-soft);
+  --button-surface: var(--cyber-panel);
+  --button-surface-hover: color-mix(in srgb, var(--cyber-primary) 5%, var(--cyber-panel));
+  --button-border: var(--cyber-border);
   --button-border-hover: color-mix(in srgb, var(--cyber-primary) 42%, var(--cyber-border));
   --button-foreground: var(--cyber-text);
   --button-muted: var(--cyber-muted);
   --button-danger: #c94f55;
   --button-danger-hover: #b73f46;
-  --button-danger-foreground: #ffffff;
-  --button-danger-soft: color-mix(in srgb, var(--button-danger) 9%, var(--cyber-panel));
-  --button-shadow: 0 1px 2px rgb(45 37 32 / 8%), 0 4px 12px rgb(45 37 32 / 5%);
-  --button-primary-shadow: 0 5px 14px rgb(196 92 61 / 22%);
+  --button-danger-foreground: var(--cyber-text);
+  --button-danger-soft: var(--cyber-panel);
+  --button-shadow: none;
+  --button-primary-shadow: none;
 }
 
 html.dark .cyber-app {
   --button-primary: #d98a71;
   --button-primary-hover: #e49a82;
-  --button-primary-foreground: #211713;
-  --button-surface: color-mix(in srgb, var(--cyber-panel) 88%, #ffffff 12%);
-  --button-surface-hover: color-mix(in srgb, var(--cyber-primary) 10%, var(--cyber-panel));
-  --button-border: color-mix(in srgb, var(--cyber-border) 82%, #ffffff 18%);
+  --button-primary-foreground: var(--cyber-text);
+  --button-primary-surface: var(--cyber-panel);
+  --button-primary-surface-hover: var(--cyber-panel-soft);
+  --button-surface: var(--cyber-panel);
+  --button-surface-hover: color-mix(in srgb, var(--cyber-primary) 8%, var(--cyber-panel));
+  --button-border: var(--cyber-border);
   --button-border-hover: color-mix(in srgb, var(--cyber-primary) 54%, var(--cyber-border));
   --button-foreground: #f2ede6;
   --button-muted: #bbb3a9;
   --button-danger: #e4777c;
   --button-danger-hover: #ee898d;
-  --button-danger-foreground: #211713;
-  --button-danger-soft: color-mix(in srgb, var(--button-danger) 12%, var(--cyber-panel));
-  --button-shadow: 0 1px 2px rgb(0 0 0 / 22%), 0 5px 14px rgb(0 0 0 / 16%);
-  --button-primary-shadow: 0 6px 16px rgb(0 0 0 / 24%);
+  --button-danger-foreground: var(--cyber-text);
+  --button-danger-soft: var(--cyber-panel);
+  --button-shadow: none;
+  --button-primary-shadow: none;
 }
 
 .ui-button {
@@ -6938,7 +7635,7 @@ html.dark .cyber-app {
   color: var(--button-foreground);
   font-family: var(--font-ui);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1;
   letter-spacing: .01em;
   box-shadow: none;
@@ -6970,10 +7667,10 @@ html.dark .cyber-app {
 }
 
 .ui-button[data-variant="default"] {
-  border-color: color-mix(in srgb, var(--button-primary) 78%, #7a3a28);
+  border-color: color-mix(in srgb, var(--button-primary) 28%, var(--button-border));
   color: var(--button-primary-foreground);
-  background: var(--button-primary);
-  box-shadow: var(--button-primary-shadow);
+  background: var(--button-primary-surface);
+  box-shadow: none;
 }
 
 .ui-button[data-variant="outline"] {
@@ -6990,23 +7687,24 @@ html.dark .cyber-app {
 }
 
 .ui-button[data-variant="destructive"] {
-  border-color: color-mix(in srgb, var(--button-danger) 76%, #6d2529);
+  border-color: color-mix(in srgb, var(--button-danger) 32%, var(--button-border));
   color: var(--button-danger-foreground);
-  background: var(--button-danger);
-  box-shadow: 0 5px 14px color-mix(in srgb, var(--button-danger) 24%, transparent);
+  background: var(--button-danger-soft);
+  box-shadow: none;
 }
 
 .ui-button[data-variant="default"]:hover:not(:disabled) {
-  border-color: var(--button-primary-hover);
-  background: var(--button-primary-hover);
-  box-shadow: 0 7px 18px color-mix(in srgb, var(--button-primary) 26%, transparent);
+  border-color: color-mix(in srgb, var(--button-primary) 44%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--button-primary-surface-hover);
+  box-shadow: none;
 }
 
 .ui-button[data-variant="outline"]:hover:not(:disabled) {
   border-color: var(--button-border-hover);
-  color: var(--cyber-primary-bright);
+  color: var(--button-foreground);
   background: var(--button-surface-hover);
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--cyber-primary) 9%, transparent);
+  box-shadow: none;
 }
 
 .ui-button[data-variant="ghost"]:hover:not(:disabled) {
@@ -7015,8 +7713,9 @@ html.dark .cyber-app {
 }
 
 .ui-button[data-variant="destructive"]:hover:not(:disabled) {
-  border-color: var(--button-danger-hover);
-  background: var(--button-danger-hover);
+  border-color: color-mix(in srgb, var(--button-danger) 48%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--cyber-panel-soft);
 }
 
 .ui-button:active:not(:disabled) {
@@ -7041,21 +7740,28 @@ html.dark .cyber-app {
 
 .config-center-actions > .ui-button.is-warning:not(:disabled) {
   border-color: color-mix(in srgb, var(--button-danger) 35%, var(--button-border));
-  color: var(--button-danger);
+  color: var(--button-foreground);
   background: var(--button-danger-soft);
   box-shadow: none;
 }
 
 .config-center-actions > .ui-button.is-success:not(:disabled) {
-  border-color: var(--button-primary);
+  border-color: color-mix(in srgb, var(--button-primary) 28%, var(--button-border));
   color: var(--button-primary-foreground);
-  background: var(--button-primary);
-  box-shadow: var(--button-primary-shadow);
+  background: var(--button-primary-surface);
+  box-shadow: none;
 }
 
 .config-center-actions > .ui-button.is-success:hover:not(:disabled) {
-  border-color: var(--button-primary-hover);
-  background: var(--button-primary-hover);
+  border-color: color-mix(in srgb, var(--button-primary) 44%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--button-primary-surface-hover);
+}
+
+html.dark .config-center-actions > button[class*="is-"]:not(:disabled),
+.config-center-actions > button[class*="is-"]:not(:disabled) {
+  color: var(--button-foreground);
+  background: var(--cyber-panel);
 }
 
 /* 文件处理主流程按钮与共享按钮使用同一形态，仅保留业务状态色。 */
@@ -7071,6 +7777,7 @@ html.dark .cyber-action {
   background: var(--button-surface);
   box-shadow: var(--button-shadow);
   font-family: var(--font-ui);
+  font-weight: 500;
   transition:
     border-color 140ms ease,
     color 140ms ease,
@@ -7087,7 +7794,7 @@ html.dark .cyber-action {
 
 .cyber-action strong {
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   letter-spacing: .01em;
 }
 
@@ -7103,25 +7810,26 @@ html:not(.dark) .cyber-action:hover:not(:disabled) {
 .cyber-action.is-start,
 html:not(.dark) .cyber-action.is-start,
 html.dark .cyber-action.is-start {
-  border-color: var(--button-primary);
+  border-color: color-mix(in srgb, var(--button-primary) 28%, var(--button-border));
   color: var(--button-primary-foreground);
-  background: var(--button-primary);
-  box-shadow: var(--button-primary-shadow);
+  background: var(--button-primary-surface);
+  box-shadow: none;
 }
 
 .cyber-action.is-start:hover:not(:disabled),
 html:not(.dark) .cyber-action.is-start:hover:not(:disabled),
 html.dark .cyber-action.is-start:hover:not(:disabled) {
-  border-color: var(--button-primary-hover);
-  background: var(--button-primary-hover);
+  border-color: color-mix(in srgb, var(--button-primary) 44%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--button-primary-surface-hover);
 }
 
 .cyber-action.is-pause,
 html:not(.dark) .cyber-action.is-pause,
 html.dark .cyber-action.is-pause {
   border-color: color-mix(in srgb, var(--cyber-status-info) 34%, var(--button-border));
-  color: var(--cyber-status-info);
-  background: color-mix(in srgb, var(--cyber-status-info) 9%, var(--cyber-panel));
+  color: var(--button-foreground);
+  background: var(--cyber-panel);
   box-shadow: none;
 }
 
@@ -7129,8 +7837,8 @@ html.dark .cyber-action.is-pause {
 html:not(.dark) .cyber-action.is-stop,
 html.dark .cyber-action.is-stop {
   border-color: color-mix(in srgb, var(--button-danger) 35%, var(--button-border));
-  color: var(--button-danger);
-  background: var(--button-danger-soft);
+  color: var(--button-foreground);
+  background: var(--cyber-panel);
   box-shadow: none;
 }
 
@@ -7216,9 +7924,9 @@ html.dark .cyber-action:disabled {
 }
 
 .batch-list > button.is-selected {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--primary) 7%, var(--card));
-  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--primary) 76%, var(--card));
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 14%, var(--card));
+  box-shadow: none;
 }
 
 html.dark .batch-list > button:hover {
@@ -7226,14 +7934,60 @@ html.dark .batch-list > button:hover {
 }
 
 html.dark .batch-list > button.is-selected {
-  background: color-mix(in srgb, var(--primary) 10%, var(--card));
-  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--primary) 68%, var(--card));
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  background: color-mix(in srgb, var(--primary) 20%, var(--card));
+  box-shadow: none;
 }
 
-/* 所有页面按钮保持位置稳定，状态变化只通过颜色、边框和色面表达。 */
-.cyber-app button:hover:not(:disabled),
-.cyber-app button:active:not(:disabled) {
-  transform: none;
+/* 批次右侧操作保持简洁，仅通过按钮边框区分主次。 */
+.cyber-batch-progress .cyber-progress-actions {
+  gap: 6px;
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action {
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  border-color: transparent;
+  border-radius: 8px;
+  color: var(--cyber-muted);
+  background: transparent;
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--cyber-text);
+  background: var(--cyber-panel);
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action.is-batch-next,
+html:not(.dark) .cyber-batch-progress .cyber-progress-actions .cyber-action.is-batch-next,
+html.dark .cyber-batch-progress .cyber-progress-actions .cyber-action.is-batch-next {
+  border-color: color-mix(in srgb, var(--button-primary) 38%, var(--cyber-border));
+  color: var(--button-primary-foreground);
+  background: var(--cyber-panel);
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action.is-batch-next:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--button-primary) 54%, var(--cyber-border));
+  color: var(--button-foreground);
+  background: var(--cyber-panel);
+}
+
+/* 内容区按钮保持位置稳定；侧栏导航继续保留自身的位移动画。 */
+.cyber-workspace button {
+  box-shadow: none !important;
+}
+
+.cyber-workspace button:hover:not(:disabled),
+.cyber-workspace button:active:not(:disabled) {
+  filter: none !important;
+  transform: none !important;
 }
 
 /* 默认禁止复制界面文案，仅开放业务表格与配置内容。 */
