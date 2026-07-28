@@ -10,6 +10,7 @@
 |---|---|
 | [处理流程与匹配规则.md](./处理流程与匹配规则.md) | 分析 → 映射 → 试算 → 执行；国家/SKU/数量/单独发货等规则 |
 | [配置说明.md](./配置说明.md) | `extract_rules.json` 中实际生效的字段 |
+| [批次日志与数据统计.md](./批次日志与数据统计.md) | 批次定义、详情日志、持久化位置、隐私边界与统计口径 |
 
 ## 当前能力（以代码为准）
 
@@ -25,6 +26,8 @@
 - **单独发货**：默认关闭。开启后至少选择两个联合字段；只有字段完整、联合值唯一对应一个订单且该订单只有一个有效主要 SKU 时才使用单独发货价格，否则使用通用价格。
 - **空表头与定位**：映射下拉可选择空表头列；未匹配定位会在需要时加载完整预览后跳转。
 - **模板**：可通过 `automation.template_match_priority` 让表头模板优先参与映射。
+- **批次追溯**：每次实际核价运行保存批次汇总、文件结果、异常分类与事件时间线；旧记录缺少详情时明确显示“仅有汇总”。
+- **数据统计**：按统一批次数据源统计处理量、匹配率、异常和耗时，可从批次表直接跳转日志中心。
 
 ## 技术栈
 
@@ -98,7 +101,9 @@ AutoPricingTool/
   processor-rust/src/pricing.rs # 核价核心
   processor-rust/src/pricing_writer.rs # 原工作簿写回
   src/main/                     # Electron 主进程
+  src/main/task-history-store.ts # 批次历史与统计聚合
   src/preload/
+  src/shared/task-history.ts    # 主进程/预加载/渲染器共享类型与异常分类
   src/renderer/                 # UI
   docs/                         # 本文档
 ```
@@ -122,6 +127,7 @@ AutoPricingTool/
 | EU TAX 与金额差 | `order_tax_column_index`、`build_writeback_rows` |
 | 三列写回与合计行复用 | `write_price_result`、`existing_total_row` |
 | 详情预览合计与绿色三列编辑 | `existingWritebackTotalRow`、`commitWritebackEdit`、`recalculatePriceRow` |
+| 批次历史、详情与统计口径 | `TaskHistoryStore`、`trackProcessorEvent`、`getTaskAnalytics` |
 
 修改上述行为时，应在同一功能提交中同步更新
 [`处理流程与匹配规则.md`](./处理流程与匹配规则.md)、相关测试和本索引。
