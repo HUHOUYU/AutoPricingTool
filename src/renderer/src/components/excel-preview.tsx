@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, ChevronDown, ChevronUp, ListRestart, LoaderCircle, Pin, PinOff, Search, Table2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronUp, ListRestart, LoaderCircle, Pin, PinOff, Search, Table2, X } from "lucide-react";
 import type { DesktopAPI, PriceCheckMapping, PricePreviewCellEdit, PricePreviewWritebackRow } from "../../../preload";
 import type { MappingFieldTarget } from "./mapping-editor";
 import type {
@@ -27,9 +27,11 @@ type ExcelPreviewProps = {
   onWorkbookChange?: (workbook: ExcelPreviewWorkbook | null) => void;
   onColumnSelect?: (column: number, headerText: string) => void;
   onRowSelect?: (row: number) => void;
-  onWritebackRowChange?: (row: PricePreviewWritebackRow) => void;
+  onWritebackRowChange?: (
+    row: PricePreviewWritebackRow,
+    field: "pricingPrice" | "priceDifference" | "quantity",
+  ) => void;
   cellEdits?: PricePreviewCellEdit[];
-  onCellEdit?: (edit: PricePreviewCellEdit) => void;
 };
 
 type PreviewStatus = "empty" | "loading" | "ready" | "error";
@@ -102,41 +104,6 @@ function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetN
     if ([mapping.pricingCountryColumn].includes(column)) return " is-mapped-column";
   }
   return "";
-}
-
-function isEditableOrderSourceColumn(
-  mapping: PriceCheckMapping | null | undefined,
-  sheetName: string,
-  column: number,
-): boolean {
-  if (!mapping) return false;
-  return sheetName === mapping.orderSheet
-    && (
-      mapping.orderPriceColumn === column
-      || mapping.skuQtyPairs.some((pair) => (
-        pair.qtyColumn === column
-        || pair.skuColumn === column
-        || pair.mergedQtyColumn === column
-      ))
-    );
-}
-
-function mappedColumnIsNumeric(
-  mapping: PriceCheckMapping,
-  sheetName: string,
-  row: number,
-  column: number,
-): boolean {
-  if (sheetName === mapping.orderSheet) {
-    if (row === mapping.orderHeaderRow) return false;
-    return mapping.orderPriceColumn === column
-      || mapping.skuQtyPairs.some((pair) => pair.qtyColumn === column || pair.mergedQtyColumn === column);
-  }
-  if (sheetName === mapping.pricingSheet) {
-    if (row === mapping.pricingHeaderRow || row === mapping.pricingQuantityHeaderRow) return false;
-    return mapping.quantityTierColumns.some((tier) => tier.column === column);
-  }
-  return false;
 }
 
 function formatPreviewNumber(value: number | null | undefined): string {
@@ -248,7 +215,7 @@ function PreviewState({ icon, title, detail, loading = false }: { icon: React.JS
   );
 }
 
-export function ExcelPreview({ api, filePath, candidates, activeSheetName, onActiveSheetChange, mapping, matchedOrderRows, writebackRows, activeTarget, selectionPrompt, onWorkbookChange, onColumnSelect, onRowSelect, onWritebackRowChange, cellEdits, onCellEdit }: ExcelPreviewProps): React.JSX.Element {
+export function ExcelPreview({ api, filePath, candidates, activeSheetName, onActiveSheetChange, mapping, matchedOrderRows, writebackRows, activeTarget, selectionPrompt, onWorkbookChange, onColumnSelect, onRowSelect, onWritebackRowChange, cellEdits }: ExcelPreviewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const requestIdRef = useRef(0);
@@ -278,7 +245,6 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     columnIndex: number;
     value: string;
   } | null>(null);
-  const [editingSourceCell, setEditingSourceCell] = useState<PricePreviewCellEdit | null>(null);
   const [selectedCell, setSelectedCell] = useState<{
     sheetName: string;
     row: number;
@@ -304,7 +270,6 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     lastQueriedOrderRowRef.current = null;
     setPendingOrderReturnRow(null);
     setEditingWritebackCell(null);
-    setEditingSourceCell(null);
     setSelectedCell(null);
     orderLookupActiveRef.current = false;
   }, [filePath]);
@@ -711,22 +676,33 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     if (parsed !== null && !Number.isFinite(parsed)) return;
     if (editingWritebackCell.columnIndex === 2 && parsed !== null && (!Number.isInteger(parsed) || parsed < 0)) return;
     const next = { ...current };
-    if (editingWritebackCell.columnIndex === 0) next.pricingPrice = parsed;
-    else if (editingWritebackCell.columnIndex === 1) next.priceDifference = parsed;
-    else {
+    const sourceRow = activeSheet?.rows[editingWritebackCell.sourceRow - (activeSheet?.startRow ?? 0) - 1];
+    const sourcePriceColumnIndex = mapping?.orderPriceColumn
+      ? mapping.orderPriceColumn - (activeSheet?.startColumn ?? 0) - 1
+      : -1;
+    const originalPrice = sourceRow && sourcePriceColumnIndex >= 0
+      ? parsePreviewQuantity(cellValue(sourceRow, sourcePriceColumnIndex, editingWritebackCell.sourceRow))
+      : null;
+    let editedField: "pricingPrice" | "priceDifference" | "quantity";
+    if (editingWritebackCell.columnIndex === 0) {
+      editedField = "pricingPrice";
+      next.pricingPrice = parsed;
+      if (parsed !== null && originalPrice !== null) {
+        next.priceDifference = Number((parsed - originalPrice).toFixed(6));
+      }
+    } else if (editingWritebackCell.columnIndex === 1) {
+      editedField = "priceDifference";
+      next.priceDifference = parsed;
+      if (parsed !== null && originalPrice !== null) {
+        next.pricingPrice = Number((originalPrice + parsed).toFixed(6));
+      }
+    } else {
+      editedField = "quantity";
       next.quantity = parsed;
       if (parsed !== null) next.quantityError = null;
     }
-    onWritebackRowChange?.(next);
+    onWritebackRowChange?.(next, editedField);
     setEditingWritebackCell(null);
-  };
-
-  const commitSourceEdit = (): void => {
-    if (!editingSourceCell) return;
-    const value = editingSourceCell.value.trim();
-    if (editingSourceCell.numeric && value !== "" && !Number.isFinite(Number(value.replaceAll(",", "")))) return;
-    onCellEdit?.({ ...editingSourceCell, value });
-    setEditingSourceCell(null);
   };
 
   // 稳定 ref：仅在输入框挂载时聚焦全选，避免每次按键重跑
@@ -849,8 +825,9 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
         {status === "ready" && !activeSheet ? <PreviewState icon={<AlertTriangle />} title="候选 Sheet 不存在" detail="工作簿中未找到该候选表，请重新分析文件" /> : null}
         {status === "ready" && activeSheet && columnCount === 0 ? <PreviewState icon={<Table2 />} title="Sheet 内容为空" detail="该候选表没有可显示的单元格" /> : null}
         {status === "ready" && activeSheet && columnCount > 0 ? (
-          <div className="excel-preview-scroll" ref={scrollRef}>
-            <div className="excel-preview-grid" style={{ width: `${gridWidth}px` }} onMouseLeave={() => setHoveredColumn(null)}>
+          <div className="excel-preview-table-frame">
+            <div className="excel-preview-scroll" ref={scrollRef}>
+              <div className="excel-preview-grid" style={{ width: `${gridWidth}px` }} onMouseLeave={() => setHoveredColumn(null)}>
               <div className="excel-preview-header" style={gridStyle}>
                 <span className="excel-preview-corner">#</span>
                 {orderedColumnIndexes.map((columnIndex) => {
@@ -1012,32 +989,23 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           : "";
                         const editableWritebackCell = derived && !isHeaderRow && !isWritebackTotalRow && writebackBySourceRow.has(absoluteRow);
                         const mappedClass = derived ? "" : mappedColumnClass(mapping, activeSheet.name, absoluteColumn);
-                        const editableSourceCell = !derived
-                          && !isWritebackTotalRow
-                          && !isHeaderRow
-                          && !selectingColumn
-                          && isEditableOrderSourceColumn(mapping, activeSheet.name, absoluteColumn);
                         const isEditing = editingWritebackCell?.sourceRow === absoluteRow
                           && editingWritebackCell.columnIndex === writebackColumnIndex;
-                        const isEditingSourceCell = editableSourceCell
-                          && editingSourceCell?.sheetName === activeSheet.name
-                          && editingSourceCell.row === absoluteRow
-                          && editingSourceCell.column === absoluteColumn;
-                        const isEditingCell = isEditing || isEditingSourceCell;
+                        const isEditingCell = isEditing;
                         const isSelectedCell = !isEditingCell
                           && selectedCell?.sheetName === activeSheet.name
                           && selectedCell.row === absoluteRow
                           && selectedCell.column === absoluteColumn;
                         const headerCellDisplay = isHeaderRow && !derived && !cell.trim() ? "空表头" : cell;
                         return <span
-                          className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedClass : duplicateMappedClass}${editableWritebackCell ? " is-editable-writeback" : ""}${editableSourceCell ? " is-editable-source" : ""}${isEditingCell ? " is-editing-cell" : ""}${isSelectedCell ? " is-selected-cell" : ""}${writebackValueClass}${differenceClass}${quantityMismatchClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${isHeaderRow && !derived && !cell.trim() ? " is-empty-header" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
+                          className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedClass : duplicateMappedClass}${editableWritebackCell ? " is-editable-writeback" : ""}${isEditingCell ? " is-editing-cell" : ""}${isSelectedCell ? " is-selected-cell" : ""}${writebackValueClass}${differenceClass}${quantityMismatchClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${isHeaderRow && !derived && !cell.trim() ? " is-empty-header" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
                           style={{ ...pinnedColumnStyle(columnIndex), ...(!derived && isHeaderRow ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
                           title={isEditingCell
                             ? undefined
                             : writebackQuantityError ?? (isHeaderRow && !derived ? headerCellDisplay : cell)}
                           onMouseEnter={() => selectingColumn && !derived && setHoveredColumn(absoluteColumn)}
                           onPointerDown={(event) => {
-                            if (editableWritebackCell || editableSourceCell) {
+                            if (editableWritebackCell) {
                               // 阻止双击时浏览器先选中单元格文字
                               if (event.detail > 1) event.preventDefault();
                               setSelectedCell({ sheetName: activeSheet.name, row: absoluteRow, column: absoluteColumn });
@@ -1055,15 +1023,6 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                             if (editableWritebackCell) {
                               setSelectedCell({ sheetName: activeSheet.name, row: absoluteRow, column: absoluteColumn });
                               setEditingWritebackCell({ sourceRow: absoluteRow, columnIndex: writebackColumnIndex, value: cell });
-                            } else if (editableSourceCell && mapping) {
-                              setSelectedCell({ sheetName: activeSheet.name, row: absoluteRow, column: absoluteColumn });
-                              setEditingSourceCell({
-                                sheetName: activeSheet.name,
-                                row: absoluteRow,
-                                column: absoluteColumn,
-                                value: cell,
-                                numeric: mappedColumnIsNumeric(mapping, activeSheet.name, absoluteRow, absoluteColumn),
-                              });
                             }
                           }}
                           key={columnIndex}
@@ -1084,28 +1043,12 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                                 setEditingWritebackCell(null);
                               }
                             }}
-                          /> : isEditingSourceCell ? <input
-                            ref={focusEditor}
-                            aria-label={`编辑${activeSheet.name}第 ${absoluteRow} 行第 ${absoluteColumn} 列`}
-                            inputMode={editingSourceCell.numeric ? "decimal" : "text"}
-                            spellCheck={false}
-                            value={editingSourceCell.value}
-                            onChange={(event) => setEditingSourceCell({ ...editingSourceCell, value: event.currentTarget.value })}
-                            onBlur={commitSourceEdit}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                commitSourceEdit();
-                              } else if (event.key === "Escape") {
-                                event.preventDefault();
-                                setEditingSourceCell(null);
-                              }
-                            }}
                           /> : headerCellDisplay}</span>;
                       })}
                     </div>
                   );
                 })}
+              </div>
               </div>
             </div>
           </div>
@@ -1124,34 +1067,6 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
             {mapping && activeSheet.name === mapping.orderSheet ? <span><i className="is-matched-row" />已匹配行号</span> : null}
             {mapping && activeSheet.name === mapping.orderSheet && unmatchedOrderRows.length > 0 ? <span><i className="is-unmatched-row" />未匹配定位行</span> : null}
           </div>
-          <div className="excel-preview-legend-stats" aria-label="预览状态">
-            <strong>{mapping
-              ? activeSheet.name === mapping.orderSheet
-                ? "订单表"
-                : activeSheet.name === mapping.pricingSheet
-                  ? "核价表"
-                  : "预览表"
-              : "预览表"}</strong>
-            <span>{activeSheet.rows.length}/{activeSheet.rowCount || activeSheet.rows.length} 行 · {columnCount} 列</span>
-            {mapping && activeSheet.name === mapping.orderSheet ? (
-              <span>匹配 {(matchedOrderRows ?? []).length} · 未匹配 {unmatchedOrderRows.length}</span>
-            ) : null}
-            {showsWritebackColumns && (writebackRows?.length ?? 0) > 0 ? (
-              <span>写回 {writebackRows?.length ?? 0} 行</span>
-            ) : null}
-            {activeSheet.truncatedRows || activeSheet.truncatedColumns ? (
-              <span className="is-warning">已截断</span>
-            ) : loadAll ? (
-              <span>完整数据</span>
-            ) : null}
-            {activeTarget ? (
-              <span className="is-selecting">{selectionPrompt || "正在选择字段"} · Esc 取消</span>
-            ) : selectedCell && selectedCell.sheetName === activeSheet.name ? (
-              <span>选中 {excelColumnLabel(selectedCell.column - 1)}{selectedCell.row}</span>
-            ) : selectedRow !== null ? (
-              <span>选中第 {selectedRow} 行</span>
-            ) : null}
-          </div>
           <div className="excel-preview-legend-hints" aria-label="操作提示">
             <span>双击写回格可改</span>
             <span>图钉冻结列</span>
@@ -1159,6 +1074,27 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
             <span>Ctrl+F 搜索</span>
             {mapping && activeSheet.name === mapping.orderSheet ? <span>未匹配定位 ↑↓</span> : null}
             <span>点列头/单元格映射字段</span>
+            <div className="excel-preview-scroll-actions" aria-label="详情表格快速滚动">
+              <button
+                type="button"
+                aria-label="滚动详情表格到表头"
+                title="滚动到表头"
+                onClick={() => scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+              >
+                <ArrowUp />
+              </button>
+              <button
+                type="button"
+                aria-label="滚动详情表格到表尾"
+                title="滚动到表尾"
+                onClick={() => {
+                  const scrollContainer = scrollRef.current;
+                  scrollContainer?.scrollTo({ top: scrollContainer.scrollHeight, behavior: "smooth" });
+                }}
+              >
+                <ArrowDown />
+              </button>
+            </div>
           </div>
         </footer>
       ) : null}

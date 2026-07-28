@@ -3764,7 +3764,7 @@ html:not(.dark) .cyber-log-drawer {
 
 .issue-details-dialog {
   display: grid;
-  width: min(620px, 100%);
+  width: min(850px, 100%);
   max-height: min(680px, calc(100vh - 48px));
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
@@ -3837,8 +3837,10 @@ html:not(.dark) .cyber-log-drawer {
 }
 
 .issue-details-dialog-body {
+  display: grid;
   min-height: 0;
-  overflow-y: auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
   padding: 16px 20px;
 }
 
@@ -3859,29 +3861,241 @@ html:not(.dark) .cyber-log-drawer {
   font-size: 11px;
 }
 
-.issue-details-dialog-body ul {
+.issue-details-dialog-table-frame {
   display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
 }
 
-.issue-details-dialog-body li {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 12px;
-  border: 1px solid color-mix(in srgb, var(--cyber-amber) 22%, var(--border));
+.issue-details-dialog-table-scroll {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
   border-radius: 11px;
-  padding: 10px 12px;
-  background: color-mix(in srgb, var(--cyber-amber) 6%, var(--card));
-  font-size: 12px;
-  line-height: 1.55;
 }
 
-.issue-details-dialog-body li b {
+.issue-details-dialog-scroll-actions {
+  display: grid;
+  align-self: end;
+  gap: 5px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--muted-surface);
+}
+
+.issue-details-dialog-scroll-actions button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.issue-details-dialog-scroll-actions button:hover,
+.issue-details-dialog-scroll-actions button:focus-visible {
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 10%, var(--card));
+}
+
+.issue-details-dialog-scroll-actions button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.issue-details-dialog-scroll-actions svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2;
+}
+
+.issue-details-dialog-table-scroll table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.issue-details-dialog-table-scroll col.is-source-row {
+  width: 82px;
+}
+
+.issue-details-dialog-table-scroll col.is-sku {
+  width: 25%;
+}
+
+.issue-details-dialog-table-scroll th,
+.issue-details-dialog-table-scroll td {
+  min-width: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.issue-details-dialog-table-scroll thead th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  color: var(--muted-foreground);
+  background: var(--muted-surface);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.issue-details-dialog-table-scroll thead th .is-previous {
+  color: var(--warning);
+}
+
+.issue-details-dialog-table-scroll thead th .is-main {
+  color: var(--blue);
+}
+
+.issue-details-dialog-table-scroll tbody th {
+  color: var(--warning);
+  font-weight: 700;
   white-space: nowrap;
-  color: var(--cyber-amber);
+}
+
+.issue-details-dialog-table-scroll tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.issue-details-dialog-table-scroll tbody tr:hover > * {
+  background: color-mix(in srgb, var(--blue) 4%, var(--card));
+}
+
+.issue-details-dialog-sku-value {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.issue-details-dialog-sku-value.is-previous {
+  color: var(--warning);
+}
+
+.issue-details-dialog-sku-value.is-main {
+  color: var(--blue);
+}
+
+.issue-details-dialog-sku-value small {
+  flex: none;
+  color: currentColor;
+  font-size: 10px;
+  opacity: 0.72;
+}
+
+.issue-details-dialog-sku-value i {
+  font-style: normal;
+  opacity: 0.5;
+}
+
+.issue-details-dialog-sku-value strong {
+  overflow: hidden;
+  color: currentColor;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-details-dialog-sku-value.is-empty {
+  display: block;
+  color: var(--muted-foreground);
+}
+
+.issue-details-dialog-reason {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--card-foreground);
+}
+
+.issue-details-dialog-reason-markers {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.issue-details-dialog-reason-markers > span {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 22px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 2px 6px;
+  background: color-mix(in srgb, currentColor 7%, var(--card));
+}
+
+.issue-details-dialog-reason-markers > span.is-danger {
+  color: var(--destructive);
+}
+
+.issue-details-dialog-reason-markers > span.is-warning {
+  color: var(--warning);
+}
+
+.issue-details-dialog-reason-markers > span.is-info {
+  color: var(--blue);
+}
+
+.issue-details-dialog-reason-markers small {
+  flex: none;
+  font-size: 9px;
+  opacity: .72;
+}
+
+.issue-details-dialog-reason-markers strong {
+  overflow: hidden;
+  font-family: var(--font-code);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-details-dialog-reason-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.issue-details-dialog-reason-detail mark {
+  border-radius: 3px;
+  padding: 0 2px;
+  color: currentColor;
+  background: transparent;
+  font-family: var(--font-code);
+  font-weight: 700;
+}
+
+.issue-details-dialog-reason-detail mark.is-warning {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.issue-details-dialog-reason-detail mark.is-info {
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 9%, transparent);
 }
 
 .issue-details-dialog > footer {
@@ -4144,6 +4358,7 @@ html.dark .issue-details-dialog {
 .excel-preview-selection-prompt kbd { flex: 0 0 auto; border: 1px solid var(--cyber-border); border-radius: 5px; padding: 2px 5px; color: var(--cyber-muted); background: var(--cyber-panel); font-family: var(--font-code); font-size: 8px; }
 
 .excel-preview-body { min-width: 0; min-height: 0; overflow: hidden; background: var(--cyber-panel); }
+.excel-preview-table-frame { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .excel-preview-state { display: grid; height: 100%; place-items: center; align-content: center; gap: 8px; padding: 24px; color: var(--cyber-muted); text-align: center; }
 .excel-preview-state > span { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 12px; color: var(--cyber-primary); background: color-mix(in srgb, var(--cyber-primary) 9%, var(--cyber-panel-soft)); }
 .excel-preview-state > span.is-loading svg { animation: spin 900ms linear infinite; }
@@ -4152,6 +4367,39 @@ html.dark .issue-details-dialog {
 .excel-preview-state small { max-width: 320px; color: var(--cyber-muted); font-size: 9px; line-height: 1.6; }
 
 .excel-preview-scroll { width: 100%; height: 100%; overflow: auto; overscroll-behavior: contain; }
+.excel-preview-scroll-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+  padding: 2px;
+  border: 1px solid var(--cyber-border-soft);
+  border-radius: 7px;
+  background: var(--cyber-panel-soft);
+}
+.excel-preview-scroll-actions button {
+  display: grid;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  cursor: pointer;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  color: var(--cyber-muted);
+  background: transparent;
+}
+.excel-preview-scroll-actions button:hover,
+.excel-preview-scroll-actions button:focus-visible {
+  color: var(--cyber-primary);
+  background: color-mix(in srgb, var(--cyber-primary) 9%, var(--cyber-panel));
+}
+.excel-preview-scroll-actions button:focus-visible {
+  outline: 1px solid var(--cyber-primary);
+  outline-offset: 1px;
+}
+.excel-preview-scroll-actions svg { width: 12px; height: 12px; stroke-width: 2; }
 .excel-preview-grid { min-height: 100%; background: var(--cyber-panel); }
 .excel-preview-header,
 .excel-preview-row { display: grid; }
@@ -4202,8 +4450,7 @@ html.dark .issue-details-dialog {
 .excel-preview-row > span.is-writeback-column.is-positive-difference,
 .excel-preview-row > span.is-writeback-column.is-mismatched-quantity { color: #000; background: #ffc7ce; }
 .excel-preview-row > span.is-writeback-column.is-negative-difference { color: #000; background: #d8eee0; }
-.excel-preview-row > span.is-editable-writeback,
-.excel-preview-row > span.is-editable-source {
+.excel-preview-row > span.is-editable-writeback {
   cursor: text;
   user-select: none;
   -webkit-user-select: none;
@@ -4273,7 +4520,7 @@ html.dark .issue-details-dialog {
 .excel-preview-panel > footer.excel-preview-legend {
   display: grid;
   min-height: 40px;
-  grid-template-columns: minmax(0, 1.35fr) minmax(180px, 0.95fr) minmax(200px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(280px, auto);
   align-items: center;
   gap: 10px 14px;
   border-top: 1px solid var(--cyber-border-soft);
@@ -4285,20 +4532,12 @@ html.dark .issue-details-dialog {
 }
 
 .excel-preview-legend-colors,
-.excel-preview-legend-stats,
 .excel-preview-legend-hints {
   display: flex;
   min-width: 0;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 12px;
-}
-
-.excel-preview-legend-stats {
-  justify-content: center;
-  padding: 0 8px;
-  border-left: 1px solid var(--cyber-border-soft);
-  border-right: 1px solid var(--cyber-border-soft);
 }
 
 .excel-preview-legend-hints {
@@ -4319,14 +4558,6 @@ html.dark .issue-details-dialog {
 .excel-preview-legend strong {
   color: var(--cyber-text);
   font-weight: 700;
-}
-
-.excel-preview-legend-stats .is-warning {
-  color: color-mix(in srgb, var(--cyber-amber) 88%, var(--cyber-text));
-}
-
-.excel-preview-legend-stats .is-selecting {
-  color: color-mix(in srgb, var(--cyber-primary) 88%, var(--cyber-text));
 }
 
 .excel-preview-legend-hints span {
@@ -4360,7 +4591,6 @@ html.dark .issue-details-dialog {
     gap: 8px;
   }
 
-  .excel-preview-legend-stats,
   .excel-preview-legend-hints {
     justify-content: flex-start;
     border: 0;

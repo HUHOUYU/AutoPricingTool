@@ -71,6 +71,7 @@ import type {
   PriceCheckMapping,
   PricePreviewCellEdit,
   PricePreviewWritebackRow,
+  PriceUnmatchedIssue,
   ProcessorEvent,
   RuntimeConfig,
 } from "../../preload";
@@ -285,18 +286,20 @@ function DecisionReason({
   runnerUpScore,
   scoreKind,
   quantityIssues,
+  unmatchedIssues,
 }: {
   reason: string;
   bestScore?: number | null;
   runnerUpScore?: number | null;
   scoreKind?: "field" | "sheet" | null;
   quantityIssues: PricePreviewWritebackRow[];
+  unmatchedIssues: PriceUnmatchedIssue[];
 }): React.JSX.Element {
   const comparison = /^(.*?)(?:：|:)\s*最优\s*\[(.*?)\]\s*[；;]\s*次优\s*\[(.*?)\]\s*$/.exec(reason);
   if (!comparison) {
     return (
       <li className="decision-reason is-plain">
-        <ValidationMessage message={reason} quantityIssues={quantityIssues} />
+        <ValidationMessage message={reason} quantityIssues={quantityIssues} unmatchedIssues={unmatchedIssues} />
       </li>
     );
   }
@@ -313,34 +316,82 @@ function DecisionReason({
 function ValidationMessage({
   message,
   quantityIssues,
+  unmatchedIssues,
 }: {
   message: string;
   quantityIssues: PricePreviewWritebackRow[];
+  unmatchedIssues: PriceUnmatchedIssue[];
 }): React.JSX.Element {
   const [dialogOpen, setDialogOpen] = useState(false);
   const hasQuantityDetails = message.includes("数量无法计算") && quantityIssues.length > 0;
+  const hasUnmatchedDetails = (
+    message.includes("覆盖率")
+    || message.includes("试算少于")
+  ) && unmatchedIssues.length > 0;
+  const hasDetails = hasQuantityDetails || hasUnmatchedDetails;
+  const detailIssues = hasQuantityDetails
+    ? quantityIssues.map((issue) => ({
+        label: `第 ${issue.sourceRow} 行`,
+        message: quantityIssueMessage(issue.quantityError),
+        skuTags: issue.quantityIssueContext ? [
+          {
+            role: "previous" as const,
+            label: `${excelColumnLetter(issue.quantityIssueContext.previousSkuColumn)} 列`,
+            value: issue.quantityIssueContext.previousSku,
+          },
+          {
+            role: "main" as const,
+            label: `${excelColumnLetter(issue.quantityIssueContext.mainSkuColumn)} 列`,
+            value: issue.quantityIssueContext.mainSku,
+          },
+        ] : undefined,
+      }))
+    : unmatchedIssues.map((issue) => {
+        const reasonSeparator = issue.reason.indexOf("：");
+        const reasonType = reasonSeparator >= 0 ? issue.reason.slice(0, reasonSeparator) : "价格未匹配";
+        const reasonDetail = reasonSeparator >= 0 ? issue.reason.slice(reasonSeparator + 1) : issue.reason;
+        const pricingSheet = /核价 Sheet (.+?) 中/u.exec(reasonDetail)?.[1]?.trim();
+        return {
+          label: `第 ${issue.sourceRow} 行`,
+          message: reasonDetail,
+          emphasis: [
+            { label: "类型", value: reasonType, tone: "danger" as const },
+            { label: "国家", value: issue.country || "缺失", tone: "warning" as const },
+            { label: "数量", value: String(issue.quantity), tone: "info" as const },
+          ],
+          messageHighlights: [
+            ...(pricingSheet ? [{ value: pricingSheet, tone: "info" as const }] : []),
+            ...issue.country.split("/").map((value) => value.trim()).filter(Boolean)
+              .map((value) => ({ value, tone: "warning" as const })),
+            ...(issue.sku ? [{ value: issue.sku, tone: "info" as const }] : []),
+            { value: String(issue.quantity), tone: "info" as const },
+          ],
+          skuTags: issue.sku ? [{
+            role: "main" as const,
+            label: issue.skuColumn > 0 ? `${excelColumnLetter(issue.skuColumn)} 列` : "SKU",
+            value: issue.sku,
+          }] : undefined,
+        };
+      });
   return (
     <div className="issue-status-message-row">
       <span>{message}</span>
-      {hasQuantityDetails ? (
+      {hasDetails ? (
         <button
           type="button"
           aria-haspopup="dialog"
           aria-expanded={dialogOpen}
-          aria-label="查看数量异常详情"
+          aria-label={hasQuantityDetails ? "查看数量异常详情" : "查看未匹配详情"}
           onClick={() => setDialogOpen(true)}
         >
           详情
         </button>
       ) : null}
       <IssueDetailsDialog
-        open={dialogOpen && hasQuantityDetails}
-        title="数量计算问题"
+        open={dialogOpen && hasDetails}
+        title={hasQuantityDetails ? "数量计算问题" : "价格未匹配详情"}
         summary={message}
-        issues={quantityIssues.map((issue) => ({
-          label: `第 ${issue.sourceRow} 行`,
-          message: issue.quantityError ?? "数量无法计算",
-        }))}
+        issues={detailIssues}
         onClose={() => setDialogOpen(false)}
       />
     </div>
@@ -374,6 +425,24 @@ function pickBestResultTab(counts: Record<FileTab, number>): FileTab | null {
 
 function columnLabel(value: number | null | undefined): string {
   return value ? "第 " + value + " 列" : "未识别";
+}
+
+function excelColumnLetter(column: number): string {
+  let value = column;
+  let label = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label || "?";
+}
+
+function quantityIssueMessage(error: string | null | undefined): string {
+  if (!error) return "数量无法计算";
+  if (error.includes("无共同组件")) return "两个 SKU 没有共同组件，无法换算数量";
+  if (error.includes("组件比例冲突")) return "共同组件的倍数比例冲突，无法确定数量";
+  return error;
 }
 
 function statusForFile(
@@ -595,6 +664,7 @@ export function App(): React.JSX.Element {
   const userTabLockedRef = useRef(false);
   const batchTaskWasActiveRef = useRef(false);
   const mappingValidationVersionsRef = useRef<Record<string, number>>({});
+  const priceRowValidationVersionsRef = useRef<Record<string, number>>({});
   const mappingValidationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mappingValidationInFlightRef = useRef(false);
   const activeMappingValidationRef = useRef<{ path: string; mapping: PriceCheckMapping; version: number } | null>(null);
@@ -783,6 +853,7 @@ export function App(): React.JSX.Element {
                 coverage: analysis.automationDecision.coverage,
                 matchedOrderRows: analysis.matchedOrderRows ?? [],
                 writebackRows: analysis.writebackRows ?? [],
+                unmatchedRows: analysis.unmatchedRows ?? [],
                 errors: [],
                 warnings: analysis.automationDecision.reasons,
               },
@@ -829,6 +900,24 @@ export function App(): React.JSX.Element {
         const pending = pendingMappingValidationRef.current;
         pendingMappingValidationRef.current = null;
         if (pending) setTimeout(() => sendMappingValidation(pending.path, pending.mapping, pending.version), 50);
+        return;
+      }
+      if (event.type === "price-row-validation") {
+        const versionKey = `${event.inputPath}\u0000${event.sourceRow}`;
+        if (priceRowValidationVersionsRef.current[versionKey] !== event.requestVersion) return;
+        if (event.row) {
+          const currentRows = writebackEditsRef.current[event.inputPath] ?? [];
+          const nextRows = [
+            ...currentRows.filter((row) => row.sourceRow !== event.sourceRow),
+            event.row,
+          ].sort((left, right) => left.sourceRow - right.sourceRow);
+          const next = { ...writebackEditsRef.current, [event.inputPath]: nextRows };
+          writebackEditsRef.current = next;
+          setWritebackEdits(next);
+        }
+        if (event.error) {
+          toast.error(`第 ${event.sourceRow} 行重新核价失败：${event.error}`);
+        }
         return;
       }
       if (event.type === "price-progress") {
@@ -985,6 +1074,7 @@ export function App(): React.JSX.Element {
     mappingsRef.current = {};
     writebackEditsRef.current = {};
     cellEditsRef.current = {};
+    priceRowValidationVersionsRef.current = {};
     setAnalyses({});
     setMappings({});
     setWritebackEdits({});
@@ -1176,6 +1266,7 @@ export function App(): React.JSX.Element {
     writebackEditsRef.current = {};
     cellEditsRef.current = {};
     mappingValidationVersionsRef.current = {};
+    priceRowValidationVersionsRef.current = {};
     pendingMappingValidationRef.current = null;
     mappingValidationInFlightRef.current = false;
     activeMappingValidationRef.current = null;
@@ -1388,6 +1479,7 @@ export function App(): React.JSX.Element {
     writebackEditsRef.current = {};
     cellEditsRef.current = {};
     mappingValidationVersionsRef.current = {};
+    priceRowValidationVersionsRef.current = {};
     pendingMappingValidationRef.current = null;
     mappingValidationInFlightRef.current = false;
     activeMappingValidationRef.current = null;
@@ -1640,15 +1732,15 @@ export function App(): React.JSX.Element {
     () => {
       const selectColumn: ColumnDef<string> = { id: "select", header: "", size: 38, minSize: 38, maxSize: 38, enableSorting: false, enableHiding: false, enablePinning: false, enableResizing: false };
       const indexColumn: ColumnDef<string> = { id: "index", header: "序号", size: 64, enableSorting: false, enableHiding: false, enablePinning: false, enableResizing: false };
-      const fileColumn: ColumnDef<string> = { id: "fileName", header: "原始文件名", size: 320, minSize: 180, accessorFn: fileNameFromPath };
+      const fileColumn: ColumnDef<string> = { id: "fileName", header: "原始文件名", size: 240, minSize: 180, maxSize: 360, accessorFn: fileNameFromPath };
       const actionColumn: ColumnDef<string> = { id: "actions", header: "操作", size: activeTab === "pending" ? 104 : 80, minSize: 64, maxSize: 180, enableSorting: false, enableHiding: false, enablePinning: false, enableResizing: false };
       const orderColumn: ColumnDef<string> = { id: "orderSheet", header: "订单 Sheet", size: 170, accessorFn: (path) => (mappings[path] ?? analyses[path]?.suggestedMapping)?.orderSheet ?? "" };
       const pricingColumn: ColumnDef<string> = { id: "pricingSheet", header: "核价 Sheet", size: 190, accessorFn: (path) => (mappings[path] ?? analyses[path]?.suggestedMapping)?.pricingSheet ?? "" };
       const coverageColumn: ColumnDef<string> = { id: "coverage", header: "匹配率", size: 230, minSize: 140, accessorFn: (path) => results[path]?.coverage ?? analyses[path]?.coverage ?? -1 };
       if (activeTab === "pending") return [selectColumn, indexColumn, fileColumn,
-        { id: "importMode", header: "导入方式", accessorFn: (path) => importModes[path] ?? "file" },
-        { id: "status", header: "处理阶段", accessorFn: (path) => fileStatusByPath[path] },
-        { id: "createdAt", header: "导入时间", accessorFn: (path) => importedAt[path] ?? "" }, actionColumn];
+        { id: "importMode", header: "导入方式", size: 220, accessorFn: (path) => importModes[path] ?? "file" },
+        { id: "status", header: "处理阶段", size: 240, accessorFn: (path) => fileStatusByPath[path] },
+        { id: "createdAt", header: "导入时间", size: 300, accessorFn: (path) => importedAt[path] ?? "" }, actionColumn];
       if (activeTab === "confirm") return [selectColumn, indexColumn, fileColumn, orderColumn, pricingColumn, coverageColumn,
         { id: "evidence", header: "试算行数", size: 140, accessorFn: (path) => analyses[path]?.automationDecision.evaluatedRows ?? 0 },
         { id: "issue", header: "待确认原因", size: 340, minSize: 180, accessorFn: (path) => analyses[path]?.automationDecision.reasons.join("；") ?? "" }, actionColumn];
@@ -1783,7 +1875,10 @@ export function App(): React.JSX.Element {
     const editsByRow = new Map((writebackEdits[detailPath] ?? []).map((row) => [row.sourceRow, row]));
     return baseRows.map((row) => editsByRow.get(row.sourceRow) ?? row);
   }, [detailPath, detailValidation, writebackEdits]);
-  const editDetailWritebackRow = useCallback((row: PricePreviewWritebackRow): void => {
+  const editDetailWritebackRow = useCallback((
+    row: PricePreviewWritebackRow,
+    field: "pricingPrice" | "priceDifference" | "quantity",
+  ): void => {
     if (!detailPath) return;
     const current = writebackEditsRef.current[detailPath] ?? [];
     const nextRows = [...current.filter((item) => item.sourceRow !== row.sourceRow), row]
@@ -1791,27 +1886,33 @@ export function App(): React.JSX.Element {
     const next = { ...writebackEditsRef.current, [detailPath]: nextRows };
     writebackEditsRef.current = next;
     setWritebackEdits(next);
-  }, [detailPath]);
-  const editDetailCell = useCallback((edit: PricePreviewCellEdit): void => {
-    if (!detailPath || !detailMapping) return;
-    const current = cellEditsRef.current[detailPath] ?? [];
-    const nextEdits = [
-      ...current.filter((item) => (
-        item.sheetName !== edit.sheetName
-        || item.row !== edit.row
-        || item.column !== edit.column
-      )),
-      edit,
-    ].sort((left, right) => (
-      left.sheetName.localeCompare(right.sheetName)
-      || left.row - right.row
-      || left.column - right.column
-    ));
-    const next = { ...cellEditsRef.current, [detailPath]: nextEdits };
-    cellEditsRef.current = next;
-    setCellEdits(next);
-    queueMappingValidation(detailPath, detailMapping);
-  }, [detailMapping, detailPath]);
+    const versionKey = `${detailPath}\u0000${row.sourceRow}`;
+    if (field !== "quantity") {
+      // 后续人工金额编辑优先，作废该行尚未返回的数量核价结果。
+      priceRowValidationVersionsRef.current[versionKey] =
+        (priceRowValidationVersionsRef.current[versionKey] ?? 0) + 1;
+      return;
+    }
+    if (!detailMapping) return;
+    const api = getDesktopAPI();
+    if (!api) {
+      toast.error("Electron 接口未加载，无法重新核价");
+      return;
+    }
+    const requestVersion = (priceRowValidationVersionsRef.current[versionKey] ?? 0) + 1;
+    priceRowValidationVersionsRef.current[versionKey] = requestVersion;
+    void api.recalculatePriceRow({
+      inputPath: detailPath,
+      mapping: detailMapping,
+      requestVersion,
+      rowEdit: { sourceRow: row.sourceRow, quantity: row.quantity },
+      cellEdits: cellEditsRef.current[detailPath] ?? [],
+      configPath: configPath || undefined,
+    }).catch((error: unknown) => {
+      if (priceRowValidationVersionsRef.current[versionKey] !== requestVersion) return;
+      toast.error(`第 ${row.sourceRow} 行重新核价请求失败：${String(error)}`);
+    });
+  }, [configPath, detailMapping, detailPath]);
   const detailPreviewCandidates = useMemo<ExcelPreviewCandidate[]>(() => {
     if (!detailAnalysis) return [];
     const rolesBySheet = new Map<string, Set<ExcelPreviewCandidate["roles"][number]>>();
@@ -2246,7 +2347,6 @@ export function App(): React.JSX.Element {
                   writebackRows={detailWritebackRows}
                   onWritebackRowChange={editDetailWritebackRow}
                   cellEdits={detailPath ? cellEdits[detailPath] ?? [] : []}
-                  onCellEdit={editDetailCell}
                   activeTarget={activeMappingTarget}
                   selectionPrompt={activeMappingTarget ? `正在选择“${mappingTargetLabel(activeMappingTarget)}”` : undefined}
                   onActiveSheetChange={setDetailPreviewSheetName}
@@ -2275,12 +2375,18 @@ export function App(): React.JSX.Element {
                         ? validationErrors
                         : [...validationErrors, ...(liveValidation.warnings ?? [])]
                       : [];
+                    const uniqueValidationMessages = Array.from(new Set(validationMessages.map((message) => message.trim()).filter(Boolean)));
+                    const validationMessageSet = new Set(uniqueValidationMessages);
+                    const visibleDecisionReasons = (detailAnalysis?.automationDecision.reasons ?? [])
+                      .filter((reason, index, reasons) => (
+                        !validationMessageSet.has(reason.trim())
+                        && reasons.findIndex((candidate) => candidate.trim() === reason.trim()) === index
+                      ));
                     const trialMatched = liveValidation?.matchedRows ?? detailAnalysis?.automationDecision.matchedRows;
                     const trialEvaluated = liveValidation?.evaluatedRows ?? detailAnalysis?.automationDecision.evaluatedRows;
                     const trialCoverage = liveValidation?.coverage ?? detailAnalysis?.automationDecision.coverage;
                     const quantityIssues = detailWritebackRows.filter((row) => row.quantityError);
-                    const decisionHasQuantityWarning = detailAnalysis?.automationDecision.reasons
-                      .some((reason) => reason.includes("数量无法计算")) ?? false;
+                    const unmatchedIssues = liveValidation?.unmatchedRows ?? detailAnalysis?.unmatchedRows ?? [];
                     const trialTone = !liveValidation
                       ? "is-idle"
                       : validationErrors.length
@@ -2330,26 +2436,28 @@ export function App(): React.JSX.Element {
                           </div>
                         ) : null}
                         {detailResult?.message ? <p className="issue-status-message">{detailResult.message}</p> : null}
-                        {validationMessages.length > 0 ? (
+                        {uniqueValidationMessages.length > 0 ? (
                           <div className={`issue-status-messages ${trialTone}`}>
-                            {validationMessages.map((message) => (
+                            {uniqueValidationMessages.map((message) => (
                               <ValidationMessage
                                 message={message}
-                                quantityIssues={decisionHasQuantityWarning ? [] : quantityIssues}
+                                quantityIssues={quantityIssues}
+                                unmatchedIssues={unmatchedIssues}
                                 key={message}
                               />
                             ))}
                           </div>
                         ) : null}
-                        {detailAnalysis && detailAnalysis.automationDecision.reasons.length > 0 ? (
+                        {detailAnalysis && visibleDecisionReasons.length > 0 ? (
                           <ul className="decision-reasons is-compact">
-                            {detailAnalysis.automationDecision.reasons.map((reason) => (
+                            {visibleDecisionReasons.map((reason) => (
                               <DecisionReason
                                 reason={reason}
                                 bestScore={detailAnalysis.automationDecision.candidateScore}
                                 runnerUpScore={detailAnalysis.automationDecision.runnerUpScore}
                                 scoreKind={detailAnalysis.automationDecision.scoreKind}
                                 quantityIssues={quantityIssues}
+                                unmatchedIssues={unmatchedIssues}
                                 key={reason}
                               />
                             ))}
