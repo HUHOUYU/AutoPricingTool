@@ -56,12 +56,7 @@ export function DashboardPage({ api, dark, currentFileCount, outputDir, onNewPro
   ];
 
   return (
-    <div className="dashboard-page">
-      <header className="dashboard-hero">
-        <h1>工作台</h1>
-        <Button onClick={onNewProcessing}><FilePlus2 />新建处理</Button>
-      </header>
-
+    <div className="dashboard-page" role="region" aria-label="工作台">
       <section className="dashboard-metrics" aria-label="今日业务指标">
         {metrics.map(({ label, value, suffix, icon: Icon, tone }) => <article className={`is-${tone}`} key={label}><div><span className="dashboard-metric-icon"><Icon /></span><span>{label}</span></div><strong>{value}</strong><small>{suffix}</small></article>)}
       </section>
@@ -82,7 +77,13 @@ export function DashboardPage({ api, dark, currentFileCount, outputDir, onNewPro
 
       <section className="dashboard-grid dashboard-lower">
         <article className="dashboard-card dashboard-recent">
-          <header><h2>最近任务</h2><Button variant="ghost" onClick={onOpenFiles}>{currentFileCount ? `${currentFileCount} 个文件待处理` : "查看文件处理"}<ArrowRight /></Button></header>
+          <header>
+            <h2>最近任务</h2>
+            <div className="dashboard-recent-actions">
+              <Button onClick={onNewProcessing}><FilePlus2 />新建处理</Button>
+              <Button variant="ghost" onClick={onOpenFiles}>{currentFileCount ? `${currentFileCount} 个文件待处理` : "查看文件处理"}<ArrowRight /></Button>
+            </div>
+          </header>
           <div className="dashboard-task-list">
             {summary.recent.length === 0 ? <div className="dashboard-empty"><Inbox /><strong>还没有任务记录</strong><span>完成一次核价后会显示在这里</span></div> : summary.recent.map((task) => <div key={task.id}><span className={`is-${task.status}`}>{statusLabels[task.status]}</span><div><strong>{task.totalFiles} 个文件</strong><small>{new Date(task.startedAt).toLocaleString("zh-CN")}</small></div><em>{task.totalRows ? `${Math.round(task.matchedRows / task.totalRows * 100)}%` : "—"}</em></div>)}
           </div>

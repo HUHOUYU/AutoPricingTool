@@ -10,6 +10,7 @@ type IssueSkuTag = {
 };
 
 export type IssueDetail = {
+  sourceRow?: number;
   label: string;
   message: string;
   skuTags?: IssueSkuTag[];
@@ -29,6 +30,7 @@ type IssueDetailsDialogProps = {
   title: string;
   summary: string;
   issues: IssueDetail[];
+  selectedSourceRow?: number | null;
   onClose: () => void;
 };
 
@@ -95,12 +97,14 @@ export function IssueDetailsDialog({
   title,
   summary,
   issues,
+  selectedSourceRow,
   onClose,
 }: IssueDetailsDialogProps): React.JSX.Element | null {
   const titleId = useId();
   const summaryId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
   const tableScrollRef = useRef<HTMLDivElement>(null);
+  const selectedRowRef = useRef<HTMLTableRowElement>(null);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -115,6 +119,14 @@ export function IssueDetailsDialog({
       previousFocus?.focus();
     };
   }, [onClose, open]);
+
+  useEffect(() => {
+    if (!open || selectedSourceRow == null) return;
+    const frame = requestAnimationFrame(() => {
+      selectedRowRef.current?.scrollIntoView?.({ block: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, selectedSourceRow]);
 
   if (!open) return null;
 
@@ -175,8 +187,15 @@ export function IssueDetailsDialog({
                   {issues.map((issue, index) => {
                     const previousSku = issue.skuTags?.find((tag) => tag.role === "previous");
                     const mainSku = issue.skuTags?.find((tag) => tag.role === "main");
+                    const selected = issue.sourceRow === selectedSourceRow;
                     return (
-                      <tr key={`${issue.label}-${issue.message}-${index}`}>
+                      <tr
+                        ref={selected ? selectedRowRef : undefined}
+                        className={selected ? "is-selected-issue" : undefined}
+                        aria-current={selected ? "true" : undefined}
+                        data-source-row={issue.sourceRow}
+                        key={`${issue.label}-${issue.message}-${index}`}
+                      >
                         <th scope="row">{issue.label}</th>
                         <td><SkuIssueValue role="previous" tag={previousSku} /></td>
                         <td><SkuIssueValue role="main" tag={mainSku} /></td>

@@ -20,6 +20,7 @@ type ExcelPreviewProps = {
   activeSheetName: string;
   onActiveSheetChange: (sheetName: string) => void;
   mapping?: PriceCheckMapping | null;
+  singleShipmentMatchingEnabled?: boolean;
   matchedOrderRows?: number[];
   writebackRows?: PricePreviewWritebackRow[];
   activeTarget?: MappingFieldTarget | null;
@@ -31,6 +32,7 @@ type ExcelPreviewProps = {
     row: PricePreviewWritebackRow,
     field: "pricingPrice" | "priceDifference" | "quantity",
   ) => void;
+  onUnmatchedRowConfirm?: (sourceRow: number) => void;
   cellEdits?: PricePreviewCellEdit[];
 };
 
@@ -87,7 +89,12 @@ function loadErrorMessage(error: unknown): string {
   return "无法读取 Excel 文件，请打开原始文件查看";
 }
 
-function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetName: string, column: number): string {
+function mappedColumnClass(
+  mapping: PriceCheckMapping | null | undefined,
+  sheetName: string,
+  column: number,
+  singleShipmentMatchingEnabled: boolean,
+): string {
   if (!mapping) return "";
   if (sheetName === mapping.orderSheet) {
     if (mapping.skuQtyPairs.some((pair) => (
@@ -95,7 +102,17 @@ function mappedColumnClass(mapping: PriceCheckMapping | null | undefined, sheetN
       || pair.mergedQtyColumn === column
     ))) return " is-sku-qty-column";
     if (mapping.orderPriceColumn === column) return " is-price-column";
-    if ([mapping.businessOrderNumberColumn, mapping.countryCodeColumn, mapping.countryEnglishColumn, mapping.countryChineseColumn, mapping.singleShipmentColumn].includes(column)) return " is-mapped-column";
+    const singleShipmentColumns = singleShipmentMatchingEnabled
+      ? mapping.singleShipmentFields?.flatMap((field) => field.columns)
+        ?? (mapping.singleShipmentColumn ? [mapping.singleShipmentColumn] : [])
+      : [];
+    if ([
+      mapping.businessOrderNumberColumn,
+      mapping.countryCodeColumn,
+      mapping.countryEnglishColumn,
+      mapping.countryChineseColumn,
+      ...singleShipmentColumns,
+    ].includes(column)) return " is-mapped-column";
   }
   if (sheetName === mapping.pricingSheet) {
     if (mapping.pricingSkuColumn === column) return " is-sku-column";
@@ -213,9 +230,10 @@ function PreviewState({ icon, title, detail, loading = false }: { icon: React.JS
   );
 }
 
-export function ExcelPreview({ api, filePath, candidates, activeSheetName, onActiveSheetChange, mapping, matchedOrderRows, writebackRows, activeTarget, selectionPrompt, onWorkbookChange, onColumnSelect, onRowSelect, onWritebackRowChange, cellEdits }: ExcelPreviewProps): React.JSX.Element {
+export function ExcelPreview({ api, filePath, candidates, activeSheetName, onActiveSheetChange, mapping, singleShipmentMatchingEnabled = false, matchedOrderRows, writebackRows, activeTarget, selectionPrompt, onWorkbookChange, onColumnSelect, onRowSelect, onWritebackRowChange, onUnmatchedRowConfirm, cellEdits }: ExcelPreviewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const unmatchedSwitchRef = useRef<HTMLButtonElement>(null);
   const requestIdRef = useRef(0);
   const lastQueriedOrderRowRef = useRef<number | null>(null);
   const orderLookupActiveRef = useRef(false);
@@ -391,6 +409,12 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
     });
     setActiveUnmatchedRow(null);
   }, [activeSheetName, loadAll, mapping?.orderSheet, unmatchedOrderRows.length]);
+  const confirmUnmatchedRow = useCallback((): void => {
+    const sourceRow = activeUnmatchedRow ?? unmatchedOrderRows[0] ?? null;
+    if (sourceRow === null) return;
+    setActiveUnmatchedRow(sourceRow);
+    onUnmatchedRowConfirm?.(sourceRow);
+  }, [activeUnmatchedRow, onUnmatchedRowConfirm, unmatchedOrderRows]);
   const shouldVirtualizeRows = previewRowCount > 100;
   const rowVirtualizer = useVirtualizer({
     count: shouldVirtualizeRows ? previewRowCount : 0,
@@ -427,19 +451,32 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
       return;
     }
     const handleUnmatchedNavigation = (event: KeyboardEvent): void => {
-      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown" && event.key !== "Enter") return;
       const target = event.target;
       if (target instanceof HTMLElement
-        && (target.matches("input, textarea, select, [contenteditable='true']")
-          || target.closest("input, textarea, select, [contenteditable='true']"))) return;
+        && (target.matches("button, input, textarea, select, [contenteditable='true']")
+          || target.closest("button, input, textarea, select, [contenteditable='true']"))) return;
+      if (document.querySelector(".issue-details-dialog[role='dialog'][aria-modal='true']")) return;
       event.preventDefault();
+      if (event.key === "Enter") {
+        confirmUnmatchedRow();
+        return;
+      }
       setActiveUnmatchedRow((current) => {
         return adjacentUnmatchedRow(unmatchedOrderRows, current, event.key === "ArrowUp" ? -1 : 1);
       });
     };
     document.addEventListener("keydown", handleUnmatchedNavigation);
     return () => document.removeEventListener("keydown", handleUnmatchedNavigation);
-  }, [activeSheetName, mapping?.orderSheet, unmatchedNavigationEnabled, unmatchedOrderRows]);
+  }, [activeSheetName, confirmUnmatchedRow, mapping?.orderSheet, unmatchedNavigationEnabled, unmatchedOrderRows]);
+
+  useEffect(() => {
+    if (!unmatchedNavigationEnabled
+      || activeSheetName !== mapping?.orderSheet
+      || unmatchedOrderRows.length === 0) return;
+    const frame = requestAnimationFrame(() => unmatchedSwitchRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [activeSheetName, mapping?.orderSheet, unmatchedNavigationEnabled, unmatchedOrderRows.length]);
 
   useEffect(() => {
     if (!activeSheet || activeSheetName !== mapping?.orderSheet || activeUnmatchedRow === null) return;
@@ -494,6 +531,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
           || target.closest("input, textarea, select, [contenteditable='true']"))) return;
       event.preventDefault();
       toggleUnmatchedNavigation();
+      requestAnimationFrame(() => unmatchedSwitchRef.current?.focus());
     };
     document.addEventListener("keydown", handleUnmatchedShortcut);
     return () => document.removeEventListener("keydown", handleUnmatchedShortcut);
@@ -754,16 +792,24 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
           </button>
         ))}
         <button
+          ref={unmatchedSwitchRef}
           type="button"
           role="switch"
           aria-checked={unmatchedNavigationEnabled}
           aria-label="未匹配定位"
-          aria-keyshortcuts="Control+E"
-          title="Ctrl+E 开启或关闭未匹配定位"
+          aria-keyshortcuts="Control+E ArrowUp ArrowDown Enter"
+          title="Ctrl+E 开关；开启后用 ↑↓ 选择，Enter 查看详情"
           className={`excel-preview-unmatched-switch${unmatchedNavigationEnabled ? " is-enabled" : ""}`}
           disabled={activeSheetName !== mapping?.orderSheet || unmatchedOrderRows.length === 0}
           onClick={toggleUnmatchedNavigation}
           onKeyDown={(event) => {
+            if (!unmatchedNavigationEnabled) return;
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.stopPropagation();
+              confirmUnmatchedRow();
+              return;
+            }
             if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
             event.preventDefault();
             event.stopPropagation();
@@ -853,7 +899,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                   const displayColumnLabel = excelColumnLabel(displayedAbsoluteColumn(columnIndex) - 1);
                   return (
                   <span
-                    className={`${derived ? "is-writeback-column" : mappedColumnClass(mapping, activeSheet.name, absoluteColumn)}${activeColumn === absoluteColumn ? " is-active-column" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}`}
+                    className={`${derived ? "is-writeback-column" : mappedColumnClass(mapping, activeSheet.name, absoluteColumn, singleShipmentMatchingEnabled)}${activeColumn === absoluteColumn ? " is-active-column" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}`}
                     style={{ ...pinnedColumnStyle(columnIndex), ...(!derived ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
                     data-column-label={displayColumnLabel}
                     onMouseEnter={() => selectingColumn && !derived && setHoveredColumn(absoluteColumn)}
@@ -908,7 +954,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                   const headerDisplay = cell.trim() ? cell : "空表头";
                   const absoluteColumn = activeSheet.startColumn + columnIndex + 1;
                   const derived = isWritebackColumn(columnIndex);
-                  const mappedClass = derived ? "" : mappedColumnClass(mapping, activeSheet.name, absoluteColumn);
+                  const mappedClass = derived ? "" : mappedColumnClass(mapping, activeSheet.name, absoluteColumn, singleShipmentMatchingEnabled);
                   return <span
                     className={`${derived ? "is-writeback-column" : mappedClass}${activeColumn === absoluteColumn ? " is-active-column" : ""} is-header-cell${cell.trim() ? "" : " is-empty-header"}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === frozenHeaderIndex && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
                     style={{ ...pinnedColumnStyle(columnIndex), ...(!derived ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
@@ -975,7 +1021,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           && absoluteColumn === mapping?.businessOrderNumberColumn
                           && isAdjacentDuplicate(activeSheet.rows, virtualRow.index, orderColumnIndex, firstDataRowIndex, (value) => value.trim());
                         const duplicateMappedClass = isDuplicateOrderCell
-                          ? mappedColumnClass(mapping, activeSheet.name, absoluteColumn)
+                          ? mappedColumnClass(mapping, activeSheet.name, absoluteColumn, singleShipmentMatchingEnabled)
                           : "";
                         const priceDifference = derived && writebackColumnIndex === 1
                           ? writebackBySourceRow.get(absoluteRow)?.priceDifference
@@ -1005,7 +1051,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           ? " has-writeback-value"
                           : "";
                         const editableWritebackCell = derived && !isHeaderRow && !isWritebackTotalRow && writebackBySourceRow.has(absoluteRow);
-                        const mappedClass = derived ? "" : mappedColumnClass(mapping, activeSheet.name, absoluteColumn);
+                        const mappedClass = derived ? "" : mappedColumnClass(mapping, activeSheet.name, absoluteColumn, singleShipmentMatchingEnabled);
                         const isEditing = editingWritebackCell?.sourceRow === absoluteRow
                           && editingWritebackCell.columnIndex === writebackColumnIndex;
                         const isEditingCell = isEditing;
@@ -1089,7 +1135,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
             <span>图钉冻结列</span>
             <span>拖动表头调列宽</span>
             <span>Ctrl+F 搜索</span>
-            {mapping && activeSheet.name === mapping.orderSheet ? <span>未匹配定位 ↑↓</span> : null}
+            {mapping && activeSheet.name === mapping.orderSheet ? <span>未匹配定位 ↑↓ Enter 详情</span> : null}
             <span>点列头/单元格映射字段</span>
             <div className="excel-preview-scroll-actions" aria-label="详情表格快速滚动">
               <button

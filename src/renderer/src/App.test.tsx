@@ -113,6 +113,16 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
     saveConfigDocumentAs: vi.fn(async (content) => ({ path: "C:\\saved.json", content, modifiedAt: 2, isDefault: false })),
     restoreDefaultConfig: vi.fn(async () => ({ path: "C:\\config.json", content: "{}\n", modifiedAt: 3, isDefault: false })),
     getTaskHistorySummary: vi.fn(async () => ({ today: { files: 0, tasks: 0, matchRate: 0, exceptions: 0 }, trend: [], recent: [] })),
+    listTaskHistory: vi.fn(async (query) => ({ items: [], total: 0, page: query.page ?? 1, pageSize: query.pageSize ?? 30 })),
+    getTaskHistoryDetail: vi.fn(async () => null),
+    getTaskAnalytics: vi.fn(async () => ({
+      totals: { batches: 0, files: 0, rows: 0, matchedRows: 0, matchRate: null, exceptions: 0, averageDurationMs: null },
+      trend: [],
+      statuses: [],
+      issues: [],
+      records: [],
+    })),
+    exportTaskHistory: vi.fn(async () => null),
     listHeaderTemplates: vi.fn(async () => []),
     createHeaderTemplate: vi.fn(async () => null),
     updateHeaderTemplateMappings: vi.fn(async ({ id, mappings }) => ({ id, createdAt: "2026-07-21T08:00:00.000Z", createdBy: "tester", fileName: "template.xlsx", filePath: "C:\\templates\\template.xlsx", mappings })),
@@ -527,7 +537,7 @@ describe("AutoPricingTool cyber workstation", () => {
     });
   });
 
-  it("navigates placeholder pages and opens logs in a drawer", async () => {
+  it("navigates implemented pages and keeps only rule management as a placeholder", async () => {
     const api = createDesktopAPI();
     installAPI(api);
     render(<App />);
@@ -535,31 +545,36 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(screen.getByRole("button", { name: "文件处理" }));
     expect(screen.getByRole("heading", { name: "文件处理" })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[0]);
-    expect(screen.getByRole("heading", { name: "配置中心" })).toBeInTheDocument();
+    const configPage = screen.getByRole("region", { name: "配置中心" });
+    expect(within(configPage).queryByRole("heading", { name: "配置中心" })).not.toBeInTheDocument();
+    expect(within(configPage).getByRole("button", { name: "保存" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "模板管理" }));
-    expect(screen.getByRole("heading", { name: "模板管理" })).toBeInTheDocument();
+    const templatePage = screen.getByRole("region", { name: "模板管理" });
+    expect(within(templatePage).queryByRole("heading", { name: "模板管理" })).not.toBeInTheDocument();
+    expect(within(templatePage).getByRole("button", { name: "新建模板" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "创建时间" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "创建人" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "模板文件" })).toBeInTheDocument();
     await waitFor(() => expect(api.listHeaderTemplates).toHaveBeenCalledTimes(1));
 
-    for (const label of ["规则管理", "数据统计"]) {
-      fireEvent.click(screen.getByRole("button", { name: label }));
-      expect(screen.getByRole("heading", { name: "正在装修中" })).toBeInTheDocument();
-      expect(screen.getByText(label, { selector: ".coming-soon-eyebrow" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "返回工作台" })).toBeInTheDocument();
-    }
+    fireEvent.click(screen.getByRole("button", { name: "规则管理" }));
+    expect(screen.getByRole("heading", { name: "正在装修中" })).toBeInTheDocument();
+    expect(screen.getByText("规则管理", { selector: ".coming-soon-eyebrow" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "返回工作台" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "返回工作台" }));
     expect(screen.getByRole("button", { name: "工作台" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("heading", { name: "工作台" })).toBeInTheDocument();
+    const dashboard = screen.getByRole("region", { name: "工作台" });
+    expect(within(dashboard).queryByRole("heading", { name: "工作台" })).not.toBeInTheDocument();
+    expect(within(dashboard).getByRole("button", { name: "新建处理" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "日志中心" }));
-    expect(screen.getByRole("dialog", { name: "运行日志" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "工作台" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "关闭日志抽屉" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "运行日志" })).not.toBeInTheDocument());
+    expect(await screen.findByRole("region", { name: "日志中心" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "运行日志" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "数据统计" }));
+    expect(await screen.findByRole("region", { name: "数据统计" })).toBeInTheDocument();
   });
 
   it("paginates a 5000 file workload", async () => {
@@ -589,7 +604,7 @@ describe("AutoPricingTool cyber workstation", () => {
     render(<App />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[1]);
-    expect(await screen.findByRole("heading", { name: "配置中心" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "配置中心" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "选择" }));
     await waitFor(() => expect(api.selectConfig).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole("textbox", { name: "当前配置文件" })).toHaveValue("C:\\config.json");
@@ -640,7 +655,7 @@ describe("AutoPricingTool cyber workstation", () => {
     render(<App />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[1]);
-    expect(await screen.findByRole("heading", { name: "配置中心" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "配置中心" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "选择输入目录" }));
     await waitFor(() => {
       expect(api.selectDirectory).toHaveBeenCalledWith("input", false);
@@ -902,8 +917,23 @@ describe("AutoPricingTool cyber workstation", () => {
     analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
     analysis.writebackRows = [
       { sourceRow: 2, pricingPrice: 9.5, priceDifference: 0, quantity: 1 },
+      {
+        sourceRow: 17,
+        pricingPrice: null,
+        priceDifference: null,
+        quantity: null,
+        quantityError: "SKU关系无法计算",
+      },
       { sourceRow: 18, pricingPrice: 9, priceDifference: -0.5, quantity: 2 },
     ];
+    analysis.unmatchedRows = [{
+      sourceRow: 18,
+      skuColumn: 8,
+      sku: "GOOD-1*2",
+      country: "US",
+      quantity: 2,
+      reason: "数量档位不存在：核价表没有数量 2 对应的档位",
+    }];
     analysis.suggestedMapping!.quantityTierColumns.push({ quantity: 2, column: 4, header: "2" });
     analysis.pricingSheetCandidates[0].tierColumns = analysis.suggestedMapping!.quantityTierColumns;
     analysis.pricingSheetCandidates.push({ ...analysis.pricingSheetCandidates[0], sheetName: "报价二", score: 80 });
@@ -960,9 +990,10 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByRole("button", { name: "加载全部数据" })).toHaveTextContent("加载全部");
     const unmatchedSwitch = screen.getByRole("switch", { name: "未匹配定位" });
     expect(unmatchedSwitch).toHaveAttribute("aria-checked", "false");
-    expect(unmatchedSwitch).toHaveAttribute("aria-keyshortcuts", "Control+E");
+    expect(unmatchedSwitch).toHaveAttribute("aria-keyshortcuts", "Control+E ArrowUp ArrowDown Enter");
     fireEvent.keyDown(document, { key: "e", ctrlKey: true });
     expect(unmatchedSwitch).toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(unmatchedSwitch).toHaveFocus());
     // 开启未匹配定位时触发一次 loadAll（订单+核价完整数据）
     await waitFor(() => expect(FakeExcelPreviewWorker.instances).toHaveLength(2));
     expect(FakeExcelPreviewWorker.instances[1].request).toEqual(expect.objectContaining({
@@ -974,10 +1005,40 @@ describe("AutoPricingTool cyber workstation", () => {
     }));
     expect(FakeExcelPreviewWorker.instances[1].request?.candidates.map((candidate) => candidate.name)).not.toContain("报价二");
     expect(await screen.findByText("已加载全部")).toBeInTheDocument();
-    unmatchedSwitch.focus();
+    const pricingTab = screen.getByText("核价", { selector: ".excel-preview-tabs button strong" }).closest("button")!;
+    fireEvent.click(pricingTab);
+    pricingTab.focus();
+    expect(pricingTab).toHaveFocus();
+    const orderTab = screen.getByText("订单", { selector: ".excel-preview-tabs button strong" }).closest("button")!;
+    fireEvent.click(orderTab);
+    orderTab.focus();
+    await waitFor(() => expect(unmatchedSwitch).toHaveFocus());
+    fireEvent.keyDown(unmatchedSwitch, { key: "ArrowDown" });
+    await waitFor(() => expect(dialog.querySelector(".excel-preview-row-number.is-unmatched-target")).toHaveTextContent("17"));
+    fireEvent.keyDown(unmatchedSwitch, { key: "Enter" });
+    const quantityIssueDialog = await screen.findByRole("dialog", { name: "数量计算问题" });
+    const selectedQuantityIssueRow = quantityIssueDialog.querySelector('tr[data-source-row="17"]');
+    expect(selectedQuantityIssueRow).toHaveClass("is-selected-issue");
+    expect(within(quantityIssueDialog).getByText("第 17 行")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "数量计算问题" })).not.toBeInTheDocument());
     fireEvent.keyDown(unmatchedSwitch, { key: "ArrowDown" });
     await waitFor(() => expect(dialog.querySelector(".excel-preview-row-number.is-unmatched-target")).toHaveTextContent("18"));
+    fireEvent.keyDown(unmatchedSwitch, { key: "Enter" });
+    const unmatchedIssueDialog = await screen.findByRole("dialog", { name: "价格未匹配详情" });
+    const selectedIssueRow = unmatchedIssueDialog.querySelector('tr[data-source-row="18"]');
+    expect(selectedIssueRow).toHaveClass("is-selected-issue");
+    expect(selectedIssueRow).toHaveAttribute("aria-current", "true");
+    expect(within(unmatchedIssueDialog).getByText("第 18 行")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "价格未匹配详情" })).not.toBeInTheDocument());
+    expect(unmatchedSwitch).toHaveFocus();
+    expect(dialog.querySelector(".excel-preview-row-number.is-unmatched-target")).toHaveTextContent("18");
     fireEvent.click(unmatchedSwitch);
+    expect(unmatchedSwitch).toHaveAttribute("aria-checked", "false");
+    await waitFor(() => expect(dialog.querySelector(".excel-preview-row-number.is-unmatched-target")).not.toBeInTheDocument());
+    fireEvent.keyDown(unmatchedSwitch, { key: "ArrowDown" });
+    expect(dialog.querySelector(".excel-preview-row-number.is-unmatched-target")).not.toBeInTheDocument();
     expect(screen.getAllByText("核价[财务]").length).toBeGreaterThan(0);
     const initialPreviewDataRow = Array.from(dialog.querySelectorAll(".excel-preview-rows .excel-preview-row"))
       .find((row) => row.querySelector(".excel-preview-row-number")?.textContent === "2");
@@ -1096,9 +1157,10 @@ describe("AutoPricingTool cyber workstation", () => {
     const returnedOrderSearch = screen.getByRole("searchbox", { name: "搜索表格数据" });
     expect(returnedOrderSearch).toHaveValue("");
     fireEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
-    const pricingSheetSelect = screen.getAllByLabelText("核价 Sheet").find((element) => element.tagName === "SELECT");
-    expect(pricingSheetSelect).toBeDefined();
-    fireEvent.change(pricingSheetSelect!, { target: { value: "报价二" } });
+    const pricingSheetSelect = screen.getByRole("combobox", { name: "核价 Sheet" });
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+    fireEvent.click(pricingSheetSelect);
+    fireEvent.click(await screen.findByRole("option", { name: "报价二 · 80.0 分" }));
     expect(screen.getByText("报价二", { selector: ".excel-preview-tabs button strong" }).closest("button")).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("报价二-数据")).toBeInTheDocument();
 
@@ -1241,8 +1303,8 @@ describe("AutoPricingTool cyber workstation", () => {
   it("highlights mapped SKU columns and revalidates manual field changes", async () => {
     vi.stubGlobal("Worker", FakeExcelPreviewWorker);
     FakeExcelPreviewWorker.orderRows = [
-      ["订单号", "平台订单号", "备用SKU", "国家", "英文国家", "中文国家", "Qty", "SKU", "合并数量", "价格", "Name", "Address"],
-      ["订单-数据", "P-1", "OLD-1", "US", "United States", "美国", "1", "GOOD-1", "1", "9.5", "Alice", "Street 1"],
+      ["订单号", "平台订单号", "备用SKU", "国家", "英文国家", "中文国家", "Qty", "SKU", "合并数量", "价格", "Name", "Phone", "Code"],
+      ["订单-数据", "P-1", "OLD-1", "US", "United States", "美国", "1", "GOOD-1", "1", "9.5", "Alice", "123456", "10001"],
     ];
     const api = createDesktopAPI();
     vi.mocked(api.readExcelPreviewFile).mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), size: 3, modifiedAt: 1 });
@@ -1300,11 +1362,18 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByLabelText("数量 1")).toBeInTheDocument();
     fireEvent.click(screen.getByText("单独发货判断", { selector: "summary span" }));
     expect(screen.getByText("配置已开启")).toBeInTheDocument();
-    expect(screen.getByText("L · Phone")).toBeInTheDocument();
-    expect(screen.getByText("M · Code")).toBeInTheDocument();
+    expect(screen.getByText("N · Name", { selector: ".single-shipment-status b" })).toBeInTheDocument();
+    expect(screen.getByText("O · Phone", { selector: ".single-shipment-status b" })).toBeInTheDocument();
+    expect(screen.getByText("P · Code", { selector: ".single-shipment-status b" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("收件人姓名")).toHaveValue("11"));
     expect(screen.getByLabelText("电话")).toHaveValue("12");
     expect(screen.getByLabelText("邮编")).toHaveValue("13");
+    expect(screen.getByRole("button", { name: "选择收件人姓名，当前N · Name" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择电话，当前O · Phone" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择邮编，当前P · Code" })).toBeInTheDocument();
+    ["Name", "Phone", "Code"].forEach((header) => {
+      expect(screen.getByText(header, { selector: ".excel-preview-frozen-header .is-mapped-column" })).toBeInTheDocument();
+    });
     const confirm = screen.getByRole("button", { name: "确认并处理此文件" });
     expect(confirm).toBeDisabled();
     await waitFor(() => expect(api.validatePriceMapping).toHaveBeenCalled());
@@ -1489,6 +1558,49 @@ describe("AutoPricingTool cyber workstation", () => {
     await waitFor(() => expect(vi.mocked(api.validatePriceMapping).mock.calls.some(([payload]) => (
       payload.mapping.singleShipmentFields?.find((field) => field.field === "phone")?.columns[0] === 2
     ))).toBe(true));
+  });
+
+  it("hides single-shipment fields and their mapped-column colors when matching is disabled", async () => {
+    vi.stubGlobal("Worker", FakeExcelPreviewWorker);
+    FakeExcelPreviewWorker.orderRows = [
+      ["订单号", "平台订单号", "备用SKU", "国家", "英文国家", "中文国家", "Qty", "SKU", "合并数量", "价格", "Name", "Phone", "Code"],
+      ["订单-数据", "P-1", "OLD-1", "US", "United States", "美国", "1", "GOOD-1", "1", "9.5", "Alice", "123456", "10001"],
+    ];
+    const api = createDesktopAPI();
+    vi.mocked(api.readExcelPreviewFile).mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), size: 3, modifiedAt: 1 });
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    dropFiles([new File(["xlsx"], "order.xlsx")]);
+    expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
+    const analysis = createAnalysis("C:\\orders\\order.xlsx");
+    analysis.singleShipmentMatching = {
+      enabled: false,
+      ready: false,
+      fields: analysis.singleShipmentMatching?.fields ?? [],
+      reason: "配置未开启，使用通用价格",
+    };
+    analysis.requiresConfirmation = true;
+    analysis.automationDecision = {
+      ...analysis.automationDecision,
+      status: "confirm",
+      reasons: ["需要确认映射"],
+    };
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: analysis });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "待确认1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "详情" }));
+    await screen.findByText("订单-数据");
+
+    expect(screen.queryByText("单独发货判断", { selector: "summary span" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("收件人姓名")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("电话")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("邮编")).not.toBeInTheDocument();
+    ["Name", "Phone", "Code"].forEach((header) => {
+      expect(screen.getByText(header, { selector: ".excel-preview-frozen-header span" })).not.toHaveClass("is-mapped-column");
+    });
   });
 
   it("uses one shade for each SKU and quantity pair and different shades between pairs", async () => {
@@ -1753,7 +1865,7 @@ describe("AutoPricingTool cyber workstation", () => {
     });
     installAPI(api);
     render(<App />);
-    expect(screen.getByRole("heading", { name: "工作台" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "工作台" })).toBeInTheDocument();
     expect(screen.queryByText("查看核价进展、配置健康状态与最近任务")).not.toBeInTheDocument();
     for (const heading of ["处理趋势", "配置健康状态", "最近任务", "配置与输出"]) {
       expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
@@ -1792,6 +1904,20 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByText("暂无处理数据")).toBeInTheDocument();
     expect(container.querySelector(".dashboard-trend-empty")).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "最近七天处理趋势" })).not.toBeInTheDocument();
+  });
+
+  it("opens log center and analytics as independent navigation pages", async () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "日志中心" }));
+    expect(await screen.findByRole("region", { name: "日志中心" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "运行日志" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "数据统计" }));
+    expect(await screen.findByRole("region", { name: "数据统计" })).toBeInTheDocument();
+    expect(screen.queryByText("正在装修中")).not.toBeInTheDocument();
   });
 
   it("maps required template headers by clicking preview cells", async () => {

@@ -378,13 +378,12 @@ export function TemplateManagementPage({ api }: { api: DesktopAPI | null }): Rea
   };
 
   return (
-    <section className="template-page" aria-labelledby="template-page-title">
-      <header className="template-page-header">
-        <h1 id="template-page-title">模板管理</h1>
-        <Button type="button" onClick={() => void createTemplate()} disabled={!api || creating}>{creating ? <LoaderCircle className="is-spinning" /> : <FilePlus2 />}新建模板</Button>
-      </header>
-
+    <section className="template-page" aria-label="模板管理">
       <section className="template-table-card">
+        <header className="template-table-toolbar">
+          <strong>模板列表</strong>
+          <Button type="button" onClick={() => void createTemplate()} disabled={!api || creating}>{creating ? <LoaderCircle className="is-spinning" /> : <FilePlus2 />}新建模板</Button>
+        </header>
         <table className="template-table">
           <thead><tr><th>创建时间</th><th>创建人</th><th>模板文件</th><th>映射状态</th><th>操作</th></tr></thead>
           <tbody>{templates.map((record) => {

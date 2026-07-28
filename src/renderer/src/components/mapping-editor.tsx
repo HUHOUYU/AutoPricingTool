@@ -7,6 +7,7 @@ import type {
 } from "../../../preload";
 import type { ExcelPreviewSheet, ExcelPreviewWorkbook } from "../lib/excel-preview";
 import { Button } from "./ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 export type MappingFieldTarget =
   | "orderHeaderRow"
@@ -49,6 +50,7 @@ type ColumnOption = { value: number; label: string };
 
 /** 无表头文案时在字段映射下拉/选中态中显示 */
 const EMPTY_HEADER_LABEL = "空表头";
+const WRITEBACK_COLUMN_COUNT = 3;
 const SINGLE_SHIPMENT_FIELD_LABELS: Record<SingleShipmentMatchField, string> = {
   recipient_name: "收件人姓名",
   phone: "电话",
@@ -73,11 +75,21 @@ function formatColumnOptionLabel(column: number, header: string | null | undefin
   return `${excelColumnLabel(column)} · ${text || EMPTY_HEADER_LABEL}`;
 }
 
+function previewOrderColumn(column: number, orderPriceColumn: number | null | undefined): number {
+  return orderPriceColumn && column > orderPriceColumn
+    ? column + WRITEBACK_COLUMN_COUNT
+    : column;
+}
+
 function sheetFor(workbook: ExcelPreviewWorkbook | null, name: string): ExcelPreviewSheet | null {
   return workbook?.sheets.find((sheet) => sheet.name === name) ?? null;
 }
 
-function columnOptions(sheet: ExcelPreviewSheet | null, headerRow: number): ColumnOption[] {
+function columnOptions(
+  sheet: ExcelPreviewSheet | null,
+  headerRow: number,
+  displayColumn: (column: number) => number = (column) => column,
+): ColumnOption[] {
   if (!sheet) return [];
   // 使用完整列数（含截断前）与当前展示列数的较大值，避免空表头列被裁掉
   const columnSpan = Math.max(sheet.displayedColumnCount, sheet.columnCount);
@@ -86,7 +98,7 @@ function columnOptions(sheet: ExcelPreviewSheet | null, headerRow: number): Colu
     const value = sheet.startColumn + index + 1;
     // 预览截断时超出 displayed 的列没有单元格，仍保留为可选「空表头」
     const header = index < sheet.displayedColumnCount ? (row[index] ?? "") : "";
-    return { value, label: formatColumnOptionLabel(value, header) };
+    return { value, label: formatColumnOptionLabel(displayColumn(value), header) };
   });
 }
 
@@ -104,6 +116,7 @@ function FieldSelect({
   optional = false,
   onActiveTargetChange,
   onChange,
+  displayColumn = (column) => column,
 }: {
   label: string;
   value: number | null | undefined;
@@ -113,14 +126,15 @@ function FieldSelect({
   optional?: boolean;
   onActiveTargetChange: (target: MappingFieldTarget) => void;
   onChange: (column: number | null) => void;
+  displayColumn?: (column: number) => number;
 }): React.JSX.Element {
   const selected = options.find((option) => option.value === value);
   // 已选列不在 options 中时（预览未加载/截断）仍显示列标 + 空表头，避免空白
   const selectedLabel = selected?.label
-    ?? (value && value > 0 ? formatColumnOptionLabel(value, "") : null)
+    ?? (value && value > 0 ? formatColumnOptionLabel(displayColumn(value), "") : null)
     ?? (optional ? "不使用" : "未选择");
   const selectOptions = value && value > 0 && !selected
-    ? [...options, { value, label: formatColumnOptionLabel(value, "") }]
+    ? [...options, { value, label: formatColumnOptionLabel(displayColumn(value), "") }]
     : options;
   return (
     <div className={`mapping-field${activeTarget === target ? " is-active" : ""}`} onClick={() => onActiveTargetChange(target)}>
@@ -162,7 +176,9 @@ export function MappingEditor({
 }: MappingEditorProps): React.JSX.Element {
   const orderSheet = sheetFor(workbook, mapping.orderSheet);
   const pricingSheet = sheetFor(workbook, mapping.pricingSheet);
-  const orderOptions = columnOptions(orderSheet, mapping.orderHeaderRow);
+  const displayOrderColumn = (column: number): number =>
+    previewOrderColumn(column, mapping.orderPriceColumn);
+  const orderOptions = columnOptions(orderSheet, mapping.orderHeaderRow, displayOrderColumn);
   const pricingOptions = columnOptions(pricingSheet, mapping.pricingHeaderRow);
   const tierOptions = columnOptions(pricingSheet, mapping.pricingQuantityHeaderRow ?? mapping.pricingHeaderRow);
   const update = (patch: Partial<PriceCheckMapping>): void => onMappingChange({ ...mapping, ...patch });
@@ -182,8 +198,8 @@ export function MappingEditor({
       </div>
 
       <div className="mapping-sheet-switches">
-        <label>订单 Sheet<select aria-label="订单 Sheet" value={mapping.orderSheet} onChange={(event) => onSheetChange(event.currentTarget.value, mapping.pricingSheet, event.currentTarget.value)}>{analysis.orderSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.score.toFixed(1)} 分</option>)}</select></label>
-        <label>核价 Sheet<select aria-label="核价 Sheet" value={mapping.pricingSheet} onChange={(event) => onSheetChange(mapping.orderSheet, event.currentTarget.value, event.currentTarget.value)}>{analysis.pricingSheetCandidates.map((candidate) => <option value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.score.toFixed(1)} 分</option>)}</select></label>
+        <label>订单 Sheet<Select value={mapping.orderSheet} onValueChange={(value) => onSheetChange(value, mapping.pricingSheet, value)}><SelectTrigger className="mapping-sheet-select" aria-label="订单 Sheet"><SelectValue /></SelectTrigger><SelectContent>{analysis.orderSheetCandidates.map((candidate) => <SelectItem value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.score.toFixed(1)} 分</SelectItem>)}</SelectContent></Select></label>
+        <label>核价 Sheet<Select value={mapping.pricingSheet} onValueChange={(value) => onSheetChange(mapping.orderSheet, value, value)}><SelectTrigger className="mapping-sheet-select" aria-label="核价 Sheet"><SelectValue /></SelectTrigger><SelectContent>{analysis.pricingSheetCandidates.map((candidate) => <SelectItem value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.score.toFixed(1)} 分</SelectItem>)}</SelectContent></Select></label>
       </div>
 
       <details onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.orderSheet); }}>
@@ -205,6 +221,7 @@ export function MappingEditor({
         </div>
       </details>
 
+      {singleShipmentMatching?.enabled ? (
       <details className="single-shipment-mapping" onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.orderSheet); }}>
         <summary>
           <span>单独发货判断</span>
@@ -229,7 +246,7 @@ export function MappingEditor({
                   <b>
                     {field.columns.length > 0
                       ? field.columns.map((column, index) =>
-                        formatColumnOptionLabel(column, field.headers[index])).join(" + ")
+                        formatColumnOptionLabel(displayOrderColumn(column), field.headers[index])).join(" + ")
                       : "未识别"}
                   </b>
                 </li>
@@ -247,6 +264,7 @@ export function MappingEditor({
                 target={`singleShipmentFields.${index}.column`}
                 activeTarget={activeTarget}
                 optional
+                displayColumn={displayOrderColumn}
                 onActiveTargetChange={onActiveTargetChange}
                 onChange={(column) => onColumnChange(
                   `singleShipmentFields.${index}.column`,
@@ -259,6 +277,7 @@ export function MappingEditor({
           </div>
         ) : null}
       </details>
+      ) : null}
 
       <details onToggle={(event) => { if ((event.currentTarget as HTMLDetailsElement).open) onPreviewSheetChange(mapping.pricingSheet); }}>
         <summary>核价字段</summary>

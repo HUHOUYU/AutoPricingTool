@@ -229,21 +229,17 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
   const sourceLineNumbers = useMemo(() => Array.from({ length: sourceLineCount }, (_, index) => index + 1).join("\n"), [sourceLineCount]);
 
   return (
-    <div className="config-center-page">
-      <header className="config-center-header">
-        <h1>配置中心</h1>
+    <div className="config-center-page" role="region" aria-label="配置中心">
+      <div className="config-center-status">
+        <div className={validation.valid ? "is-valid" : "is-invalid"}>{validation.valid ? <CheckCircle2 /> : <AlertTriangle />}<span>{validation.valid ? "配置结构正常" : `${validation.issues.length} 项需要修复`}</span></div>
         <div className="config-center-actions">
+          <Button variant="ghost" onClick={() => void validate()}>立即校验</Button>
           <Button className="is-info" variant="outline" onClick={() => void selectDocument()} disabled={loading}><FolderOpen />选择</Button>
           <Button className="is-info" variant="outline" onClick={() => void loadDocument(document?.path)} disabled={loading}><RefreshCw />重新加载</Button>
           <Button className="is-primary" variant="outline" onClick={() => void saveAs()} disabled={loading}><SaveAll />另存为</Button>
           <Button className="is-warning" variant="outline" onClick={() => setRestoreDialogOpen(true)} disabled={loading || restoring}><RotateCcw />恢复默认</Button>
           <Button className="is-success" onClick={() => void save()} disabled={loading || !dirty}><Save />保存</Button>
         </div>
-      </header>
-
-      <div className="config-center-status">
-        <div className={validation.valid ? "is-valid" : "is-invalid"}>{validation.valid ? <CheckCircle2 /> : <AlertTriangle />}<span>{validation.valid ? "配置结构正常" : `${validation.issues.length} 项需要修复`}</span></div>
-        <Button variant="ghost" onClick={() => void validate()}>立即校验</Button>
       </div>
 
       <div className="config-center-grid">
