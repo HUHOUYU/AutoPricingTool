@@ -11,6 +11,8 @@ import { resolveLocalProcessorExecutable } from "./processor-path";
 import { TaskHistoryStore, TASK_HISTORY_SCHEMA_VERSION } from "./task-history-store";
 import type {
   TaskAnalyticsQuery,
+  TaskBatchMetadataUpdate,
+  TaskExecutionType,
   TaskFileResult,
   TaskHistoryEvent,
   TaskHistoryExportRequest,
@@ -156,6 +158,9 @@ let activeTask: TaskHistoryRecord | null = null;
 let activeTaskEventSequence = 0;
 let activeTaskLastPersistedFiles = 0;
 const activeTaskFiles = new Map<string, TaskFileResult>();
+const activeRunFiles = new Set<string>();
+let activeTaskRemainingFiles = 0;
+let activeTaskExecutionType: TaskExecutionType = "automatic";
 let windowPreferences: WindowPreferences = { rememberSize: false };
 let windowPreferencesWriteQueue: Promise<void> = Promise.resolve();
 
@@ -796,6 +801,7 @@ function validateTaskHistoryQuery(value: unknown): TaskHistoryQuery {
   const statuses = Array.isArray(input.statuses)
     ? input.statuses.filter((status): status is TaskHistoryStatus =>
         status === "running"
+        || status === "awaiting_confirmation"
         || status === "completed"
         || status === "failed"
         || status === "stopped"
@@ -808,6 +814,29 @@ function validateTaskHistoryQuery(value: unknown): TaskHistoryQuery {
     ...(typeof input.search === "string" ? { search: input.search.slice(0, 512) } : {}),
     ...(Number.isSafeInteger(input.page) ? { page: Number(input.page) } : {}),
     ...(Number.isSafeInteger(input.pageSize) ? { pageSize: Number(input.pageSize) } : {}),
+  };
+}
+
+const TASK_BATCH_NAME_MAX_LENGTH = 120;
+const TASK_BATCH_NOTE_MAX_LENGTH = 1_000;
+
+function sanitizedBatchText(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.trim().replace(/[\r\n]+/g, " ").slice(0, maxLength) : "";
+}
+
+function defaultBatchName(fileNames: string[] | undefined, batchId: string): string {
+  const names = fileNames ?? [];
+  if (names.length === 0) return `批次 ${batchId.slice(-8)}`;
+  if (names.length === 1) return names[0]!;
+  return `${names[0]} 等 ${names.length} 个文件`;
+}
+
+function validateTaskBatchMetadataUpdate(value: unknown): TaskBatchMetadataUpdate {
+  const input = requireRecord(value, "批次元数据");
+  return {
+    batchId: validateBatchId(input.batchId),
+    ...(input.name !== undefined ? { name: sanitizedBatchText(input.name, TASK_BATCH_NAME_MAX_LENGTH) } : {}),
+    ...(input.note !== undefined ? { note: sanitizedBatchText(input.note, TASK_BATCH_NOTE_MAX_LENGTH) } : {}),
   };
 }
 
@@ -1012,10 +1041,27 @@ function saveActiveTaskFile(file: TaskFileResult): void {
   void taskHistoryStore.appendFileResult(activeTask.id, file);
 }
 
+function aggregateTaskFiles(files: TaskFileResult[]): Pick<TaskHistoryRecord, "completedFiles" | "failedFiles" | "totalRows" | "matchedRows" | "exceptionRows"> {
+  return {
+    completedFiles: files.filter((file) => file.status === "completed").length,
+    failedFiles: files.filter((file) => file.status === "failed").length,
+    totalRows: files.reduce((sum, file) => sum + file.totalRows, 0),
+    matchedRows: files.reduce((sum, file) => sum + file.matchedRows, 0),
+    exceptionRows: files.reduce((sum, file) => sum + file.exceptionRows, 0),
+  };
+}
+
+function aggregateActiveTaskFiles(): Pick<TaskHistoryRecord, "completedFiles" | "failedFiles" | "totalRows" | "matchedRows" | "exceptionRows"> {
+  return aggregateTaskFiles([...activeTaskFiles.values()]);
+}
+
 function completeActiveTask(status: TaskHistoryStatus, message: string): void {
   if (!activeTask) return;
   const completedAt = new Date().toISOString();
-  for (const file of activeTaskFiles.values()) {
+  const { completedAt: _previousCompletedAt, ...activeTaskWithoutCompletion } = activeTask;
+  for (const path of activeRunFiles) {
+    const file = activeTaskFiles.get(path);
+    if (!file) continue;
     if (file.status !== "queued" && file.status !== "running") continue;
     saveActiveTaskFile({
       ...file,
@@ -1030,13 +1076,17 @@ function completeActiveTask(status: TaskHistoryStatus, message: string): void {
     message,
   );
   const completed: TaskHistoryRecord = {
-    ...activeTask,
+    ...activeTaskWithoutCompletion,
+    ...aggregateActiveTaskFiles(),
     status,
-    completedAt,
+    ...(status === "awaiting_confirmation" ? {} : { completedAt }),
     durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(activeTask.startedAt)),
   };
   activeTask = null;
   activeTaskFiles.clear();
+  activeRunFiles.clear();
+  activeTaskRemainingFiles = 0;
+  activeTaskExecutionType = "automatic";
   activeTaskEventSequence = 0;
   activeTaskLastPersistedFiles = 0;
   void persistTaskRecord(completed);
@@ -1125,17 +1175,13 @@ function trackProcessorEvent(event: unknown): void {
         path,
       );
     }
-    activeTask = {
-      ...activeTask,
-      completedFiles: activeTask.completedFiles + (payload.status === "completed" ? 1 : 0),
-      failedFiles: activeTask.failedFiles + (payload.status === "failed" ? 1 : 0),
-      totalRows: activeTask.totalRows + totalRows,
-      matchedRows: activeTask.matchedRows + matchedRows,
-      exceptionRows: activeTask.exceptionRows + exceptionRows,
-    };
-    const processedFiles = activeTask.completedFiles + activeTask.failedFiles;
+    activeTask = { ...activeTask, ...aggregateActiveTaskFiles() };
+    const processedFiles = [...activeRunFiles].filter((path) => {
+      const status = activeTaskFiles.get(path)?.status;
+      return status === "completed" || status === "failed";
+    }).length;
     if (
-      processedFiles === activeTask.totalFiles
+      processedFiles === activeRunFiles.size
       || processedFiles - activeTaskLastPersistedFiles >= TASK_PROGRESS_PERSIST_FILE_INTERVAL
     ) {
       activeTaskLastPersistedFiles = processedFiles;
@@ -1143,11 +1189,19 @@ function trackProcessorEvent(event: unknown): void {
     }
   }
   if (payload.type === "price-done" && payload.mode === "run") {
-    const status = payload.stopped ? "stopped" : activeTask.failedFiles > 0 ? "failed" : "completed";
+    const status = payload.stopped
+      ? "stopped"
+      : activeTaskRemainingFiles > 0
+        ? "awaiting_confirmation"
+        : activeTask.failedFiles > 0
+          ? "failed"
+          : "completed";
     completeActiveTask(
       status,
       status === "completed"
         ? "批次处理完成"
+        : status === "awaiting_confirmation"
+          ? `本次${activeTaskExecutionType === "automatic" ? "自动处理" : activeTaskExecutionType === "manual" ? "人工确认处理" : "重新处理"}完成，仍有 ${activeTaskRemainingFiles} 个文件待处理`
         : status === "stopped"
           ? "批次已停止"
           : `批次完成，但有 ${activeTask.failedFiles} 个文件失败`,
@@ -1346,10 +1400,60 @@ app.whenReady().then(async () => {
     requireTrustedIpc(event);
     return taskHistoryStore.getTaskHistoryDetail(validateBatchId(batchId));
   });
+  ipcMain.handle("history:update-metadata", async (event, payload: unknown) => {
+    requireTrustedIpc(event);
+    const update = validateTaskBatchMetadataUpdate(payload);
+    const detail = await taskHistoryStore.getTaskHistoryDetail(update.batchId);
+    if (!detail) throw new Error("批次不存在");
+    const record: TaskHistoryRecord = {
+      ...detail.record,
+      ...(update.name !== undefined
+        ? { name: update.name || defaultBatchName(detail.record.fileNames, detail.record.id) }
+        : {}),
+      ...(update.note !== undefined ? { note: update.note } : {}),
+    };
+    await persistTaskRecord(record);
+    if (activeTask?.id === record.id) activeTask = record;
+    return { ...detail, record };
+  });
+  ipcMain.handle("history:finish-batch", async (event, batchId: unknown) => {
+    requireTrustedIpc(event);
+    const id = validateBatchId(batchId);
+    if (activeTask?.id === id) throw new Error("批次仍在处理中");
+    const detail = await taskHistoryStore.getTaskHistoryDetail(id);
+    if (!detail) throw new Error("批次不存在");
+    const completedAt = new Date().toISOString();
+    const files = detail.files.map((file) =>
+      file.status === "queued" || file.status === "running"
+        ? { ...file, status: "stopped" as const, completedAt }
+        : file);
+    for (const file of files) {
+      if (file.status === "stopped" && detail.files.find((item) => item.path === file.path)?.status !== "stopped") {
+        await taskHistoryStore.appendFileResult(id, file);
+      }
+    }
+    const record: TaskHistoryRecord = {
+      ...detail.record,
+      ...aggregateTaskFiles(files),
+      status: "stopped",
+      completedAt,
+      durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(detail.record.startedAt)),
+    };
+    await taskHistoryStore.appendEvent(id, {
+      id: `${id}-${(detail.events.at(-1)?.sequence ?? 0) + 1}`,
+      sequence: (detail.events.at(-1)?.sequence ?? 0) + 1,
+      time: completedAt,
+      level: "warning",
+      phase: "batch",
+      message: "用户结束当前批次，未处理文件已标记为未完成",
+    });
+    await persistTaskRecord(record);
+    return record;
+  });
   ipcMain.handle("history:get-analytics", (event, query: unknown) => {
     requireTrustedIpc(event);
     const validated = validateTaskHistoryQuery(query);
-    const analyticsQuery: TaskAnalyticsQuery = { from: validated.from, to: validated.to };
+    const analyticsQuery: TaskAnalyticsQuery = { from: validated.from, to: validated.to, search: validated.search };
     return taskHistoryStore.getTaskAnalytics(analyticsQuery);
   });
   ipcMain.handle("history:export", (event, request: unknown) => {
@@ -1476,37 +1580,103 @@ app.whenReady().then(async () => {
     requireTrustedIpc(event);
     const validated = await validatePricePayload(payload);
     const files = validated.files as string[];
-    const startedAt = new Date().toISOString();
+    const requestedBatchId = validated.batchId === undefined ? null : validateBatchId(validated.batchId);
+    const existingDetail = requestedBatchId ? await taskHistoryStore.getTaskHistoryDetail(requestedBatchId) : null;
+    if (requestedBatchId && !existingDetail) throw new Error("指定批次不存在");
+    const batchId = requestedBatchId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const startedAt = existingDetail?.record.startedAt ?? new Date().toISOString();
     const diagnostics = normalizeTaskDiagnostics(validated.diagnostics);
+    const executionType: TaskExecutionType = validated.executionType === "manual" || validated.executionType === "retry"
+      ? validated.executionType
+      : "automatic";
+    const requestedBatchFiles = Array.isArray(validated.batchFiles) ? validated.batchFiles : files;
+    const batchFiles = [...new Set(requestedBatchFiles.map((path) => {
+      if (typeof path !== "string" || !isAbsolute(path) || !isSupportedExcelPath(path)) {
+        throw new TypeError("业务批次包含无效文件路径");
+      }
+      return resolve(path);
+    }))];
+    const existingFiles = existingDetail?.files ?? [];
+    const allBatchFiles = [...new Set([
+      ...existingFiles.map((file) => file.path),
+      ...batchFiles,
+      ...files,
+    ])];
+    const previousRecord = existingDetail?.record;
+    const {
+      completedAt: _previousCompletedAt,
+      durationMs: _previousDurationMs,
+      ...previousRecordWithoutCompletion
+    } = previousRecord ?? {};
     activeTask = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      ...previousRecordWithoutCompletion,
+      id: batchId,
+      name: sanitizedBatchText(validated.batchName, TASK_BATCH_NAME_MAX_LENGTH)
+        || previousRecord?.name
+        || defaultBatchName(allBatchFiles.map((path) => basename(path)), batchId),
+      note: validated.batchNote === undefined
+        ? previousRecord?.note
+        : sanitizedBatchText(validated.batchNote, TASK_BATCH_NOTE_MAX_LENGTH),
       schemaVersion: TASK_HISTORY_SCHEMA_VERSION,
       startedAt,
       status: "running",
-      totalFiles: files.length,
-      completedFiles: 0,
-      failedFiles: 0,
-      totalRows: 0,
-      matchedRows: 0,
-      exceptionRows: 0,
-      fileNames: files.map((path) => basename(path)),
+      totalFiles: allBatchFiles.length,
+      completedFiles: previousRecord?.completedFiles ?? 0,
+      failedFiles: previousRecord?.failedFiles ?? 0,
+      totalRows: previousRecord?.totalRows ?? 0,
+      matchedRows: previousRecord?.matchedRows ?? 0,
+      exceptionRows: previousRecord?.exceptionRows ?? 0,
+      fileNames: allBatchFiles.map((path) => basename(path)),
       detailAvailable: true,
       ...(typeof validated.outputDir === "string" ? { outputDir: validated.outputDir } : {}),
     };
-    activeTaskEventSequence = 0;
+    activeTaskEventSequence = existingDetail?.events.at(-1)?.sequence ?? 0;
     activeTaskLastPersistedFiles = 0;
     activeTaskFiles.clear();
-    await persistTaskRecord(activeTask);
-    appendActiveTaskEvent("info", "batch", `批次开始，共 ${files.length} 个文件`);
-    for (const path of files) {
-      const file: TaskFileResult = {
+    activeRunFiles.clear();
+    for (const file of existingFiles) activeTaskFiles.set(file.path, file);
+    for (const path of allBatchFiles) {
+      if (activeTaskFiles.has(path)) continue;
+      const queuedFile: TaskFileResult = {
         path,
         fileName: basename(path),
         status: "queued",
         totalRows: 0,
         matchedRows: 0,
-        exceptionRows: diagnostics.get(path)?.reduce((sum, issue) => sum + issue.count, 0) ?? 0,
+        exceptionRows: 0,
         issueSummaries: diagnostics.get(path) ?? [],
+      };
+      activeTaskFiles.set(path, queuedFile);
+      saveActiveTaskFile(queuedFile);
+    }
+    for (const path of files) activeRunFiles.add(path);
+    activeTaskRemainingFiles = Number.isSafeInteger(validated.remainingFiles)
+      ? Math.max(0, Number(validated.remainingFiles))
+      : Math.max(0, allBatchFiles.length - files.length);
+    activeTaskExecutionType = executionType;
+    activeTask = { ...activeTask, ...aggregateActiveTaskFiles() };
+    await persistTaskRecord(activeTask);
+    appendActiveTaskEvent(
+      "info",
+      "batch",
+      `${existingDetail ? "继续批次" : "批次开始"}：${executionType === "automatic" ? "自动处理" : executionType === "manual" ? "人工确认处理" : "重新处理"} ${files.length} 个文件`,
+    );
+    for (const path of files) {
+      const current = activeTaskFiles.get(path);
+      const file: TaskFileResult = {
+        ...(current ?? {
+          path,
+          fileName: basename(path),
+          totalRows: 0,
+          matchedRows: 0,
+          exceptionRows: 0,
+          issueSummaries: [],
+        }),
+        status: "queued",
+        executionType,
+        completedAt: undefined,
+        durationMs: undefined,
+        issueSummaries: diagnostics.get(path) ?? current?.issueSummaries ?? [],
       };
       saveActiveTaskFile(file);
     }
@@ -1517,6 +1687,7 @@ app.whenReady().then(async () => {
       completeActiveTask("failed", `批次提交失败：${String(error)}`);
       throw error;
     }
+    return { batchId };
   });
   ipcMain.handle("processor:price-check-validate", async (event, payload: unknown) => {
     requireTrustedIpc(event);

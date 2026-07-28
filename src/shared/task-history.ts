@@ -1,8 +1,10 @@
-export type TaskHistoryStatus = "running" | "completed" | "failed" | "stopped" | "interrupted";
+export type TaskHistoryStatus = "running" | "awaiting_confirmation" | "completed" | "failed" | "stopped" | "interrupted";
 
 export type TaskFileStatus = "queued" | "running" | "completed" | "failed" | "stopped";
 
 export type TaskEventLevel = "info" | "success" | "warning" | "error";
+
+export type TaskExecutionType = "automatic" | "manual" | "retry";
 
 export type TaskIssueCode =
   | "quantity_calculation"
@@ -41,6 +43,7 @@ export type TaskFileResult = {
   exceptionRows: number;
   coverage?: number;
   message?: string;
+  executionType?: TaskExecutionType;
   issueSummaries: TaskIssueSummary[];
 };
 
@@ -56,6 +59,8 @@ export type TaskHistoryEvent = {
 
 export type TaskHistoryRecord = {
   id: string;
+  name?: string;
+  note?: string;
   schemaVersion?: number;
   startedAt: string;
   completedAt?: string;
@@ -105,6 +110,7 @@ export type TaskHistoryDetail = {
 export type TaskAnalyticsQuery = {
   from?: string;
   to?: string;
+  search?: string;
 };
 
 export type TaskAnalyticsSummary = {
@@ -138,6 +144,12 @@ export type TaskHistoryExportRequest =
 export type TaskRunDiagnostics = {
   inputPath: string;
   issueSummaries: TaskIssueSummary[];
+};
+
+export type TaskBatchMetadataUpdate = {
+  batchId: string;
+  name?: string;
+  note?: string;
 };
 
 export const TASK_ISSUE_LABELS: Record<TaskIssueCode, string> = {

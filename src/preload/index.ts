@@ -2,10 +2,12 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   TaskAnalyticsQuery,
   TaskAnalyticsSummary,
+  TaskBatchMetadataUpdate,
   TaskHistoryDetail,
   TaskHistoryExportRequest,
   TaskHistoryPage,
   TaskHistoryQuery,
+  TaskHistoryRecord,
   TaskHistorySummary,
   TaskRunDiagnostics,
 } from "../shared/task-history";
@@ -13,6 +15,8 @@ import type {
 export type {
   TaskAnalyticsQuery,
   TaskAnalyticsSummary,
+  TaskBatchMetadataUpdate,
+  TaskExecutionType,
   TaskEventLevel,
   TaskFileResult,
   TaskHistoryDetail,
@@ -268,6 +272,12 @@ export type PriceCheckRunPayload = {
   outputDir: string;
   configPath?: string;
   diagnostics?: TaskRunDiagnostics[];
+  batchId?: string;
+  batchName?: string;
+  batchNote?: string;
+  batchFiles?: string[];
+  executionType?: import("../shared/task-history").TaskExecutionType;
+  remainingFiles?: number;
   mappings: Array<{
     inputPath: string;
     mapping: PriceCheckMapping;
@@ -316,8 +326,12 @@ const desktopAPI = {
     ipcRenderer.invoke("processor:price-check-validate", payload),
   recalculatePriceRow: (payload: { inputPath: string; mapping: PriceCheckMapping; requestVersion: number; rowEdit: { sourceRow: number; quantity: number | null }; cellEdits?: PricePreviewCellEdit[]; configPath?: string }): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-validate", payload),
-  runPriceCheck: (payload: PriceCheckRunPayload): Promise<void> =>
+  runPriceCheck: (payload: PriceCheckRunPayload): Promise<{ batchId: string }> =>
     ipcRenderer.invoke("processor:price-check-run", payload),
+  updateTaskBatchMetadata: (payload: TaskBatchMetadataUpdate): Promise<TaskHistoryDetail> =>
+    ipcRenderer.invoke("history:update-metadata", payload),
+  finishTaskBatch: (batchId: string): Promise<TaskHistoryRecord> =>
+    ipcRenderer.invoke("history:finish-batch", batchId),
   pauseProcessing: (): Promise<void> => ipcRenderer.invoke("processor:pause"),
   resumeProcessing: (): Promise<void> => ipcRenderer.invoke("processor:resume"),
   stopProcessing: (): Promise<void> => ipcRenderer.invoke("processor:stop"),

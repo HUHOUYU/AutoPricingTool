@@ -19,7 +19,7 @@ export const TASK_HISTORY_RETENTION_DAYS = 365;
 export const TASK_HISTORY_MAX_BATCHES = 1_000;
 export const TASK_HISTORY_DEFAULT_PAGE_SIZE = 30;
 export const TASK_HISTORY_MAX_PAGE_SIZE = 100;
-export const TASK_HISTORY_SCHEMA_VERSION = 2;
+export const TASK_HISTORY_SCHEMA_VERSION = 3;
 
 type TaskDetailEntry =
   | { kind: "event"; event: TaskHistoryEvent }
@@ -33,7 +33,17 @@ function localDateKey(value: Date): string {
 }
 
 function finishedStatus(status: TaskHistoryStatus): boolean {
-  return status !== "running";
+  return status !== "running" && status !== "awaiting_confirmation";
+}
+
+function matchesSearch(record: TaskHistoryRecord, search: string): boolean {
+  if (!search) return true;
+  return record.id.toLocaleLowerCase().includes(search)
+    || record.name?.toLocaleLowerCase().includes(search)
+    || record.note?.toLocaleLowerCase().includes(search)
+    || record.outputDir?.toLocaleLowerCase().includes(search)
+    || record.fileNames?.some((name) => name.toLocaleLowerCase().includes(search))
+    || false;
 }
 
 function withinRange(record: TaskHistoryRecord, from?: string, to?: string): boolean {
@@ -188,10 +198,7 @@ export class TaskHistoryStore {
       if (!withinRange(record, query.from, query.to)) return false;
       if (statuses.size > 0 && !statuses.has(record.status)) return false;
       if (!search) return true;
-      return record.id.toLocaleLowerCase().includes(search)
-        || record.outputDir?.toLocaleLowerCase().includes(search)
-        || record.fileNames?.some((name) => name.toLocaleLowerCase().includes(search))
-        || false;
+      return matchesSearch(record, search);
     });
     const start = (page - 1) * pageSize;
     return { items: filtered.slice(start, start + pageSize), total: filtered.length, page, pageSize };
@@ -230,7 +237,9 @@ export class TaskHistoryStore {
   }
 
   async getTaskAnalytics(query: TaskAnalyticsQuery = {}): Promise<TaskAnalyticsSummary> {
-    const records = (await this.readTaskHistory()).filter((record) => withinRange(record, query.from, query.to));
+    const search = query.search?.trim().toLocaleLowerCase() ?? "";
+    const records = (await this.readTaskHistory()).filter((record) =>
+      withinRange(record, query.from, query.to) && matchesSearch(record, search));
     const totalRows = records.reduce((sum, record) => sum + record.totalRows, 0);
     const matchedRows = records.reduce((sum, record) => sum + record.matchedRows, 0);
     const durations = records
@@ -256,7 +265,7 @@ export class TaskHistoryStore {
       current.matchRate = current.totalRows > 0 ? current.matchedRows / current.totalRows : null;
       dates.set(date, current);
     }
-    const statusOrder: TaskHistoryStatus[] = ["running", "completed", "failed", "stopped", "interrupted"];
+    const statusOrder: TaskHistoryStatus[] = ["running", "awaiting_confirmation", "completed", "failed", "stopped", "interrupted"];
     const detailRows = await Promise.all(records.filter((record) => record.detailAvailable).map((record) => this.buildTaskHistoryDetail(record)));
     const issues = new Map<string, { code: TaskIssueSummary["code"]; label: string; count: number }>();
     for (const detail of detailRows) {
@@ -301,9 +310,11 @@ export class TaskHistoryStore {
       const next = await this.listTaskHistory({ ...query, page, pageSize: TASK_HISTORY_MAX_PAGE_SIZE });
       history.push(...next.items);
     }
-    const headers = ["批次ID", "开始时间", "完成时间", "状态", "文件数", "完成文件", "失败文件", "总行数", "匹配行数", "异常行数", "匹配率", "耗时毫秒", "输出目录"];
+    const headers = ["批次ID", "批次名称", "备注", "开始时间", "完成时间", "状态", "文件数", "完成文件", "失败文件", "总行数", "匹配行数", "异常行数", "匹配率", "耗时毫秒", "输出目录"];
     const rows = history.map((record) => [
       record.id,
+      record.name ?? "",
+      record.note ?? "",
       record.startedAt,
       record.completedAt ?? "",
       record.status,

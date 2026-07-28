@@ -155,4 +155,29 @@ describe("task history store", () => {
     expect(csv).not.toContain("batch-1,");
     expect((await readFile(store.detailPath("missing"), "utf8").catch(() => ""))).toBe("");
   });
+
+  it("filters history and analytics by batch name, note, or file name", async () => {
+    const { store } = await createStore();
+    await store.persistTaskRecord(record({
+      name: "法国补发批次",
+      note: "七月售后复核",
+    }));
+    await store.persistTaskRecord(record({
+      id: "batch-2",
+      name: "英国正常订单",
+      note: "日常核价",
+      fileNames: ["uk-orders.xlsx"],
+    }));
+
+    expect((await store.listTaskHistory({ search: "售后" })).items.map((item) => item.id)).toEqual(["batch-1"]);
+    expect((await store.listTaskHistory({ search: "uk-orders" })).items.map((item) => item.id)).toEqual(["batch-2"]);
+
+    const analytics = await store.getTaskAnalytics({
+      from: "2026-07-28",
+      to: "2026-07-28",
+      search: "法国补发",
+    });
+    expect(analytics.totals.batches).toBe(1);
+    expect(analytics.records.map((item) => item.id)).toEqual(["batch-1"]);
+  });
 });
