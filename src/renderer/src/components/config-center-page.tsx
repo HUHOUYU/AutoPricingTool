@@ -10,6 +10,7 @@ type SingleShipmentMatchField = "recipient_name" | "phone" | "postal_code" | "ad
 
 type ConfigCenterPageProps = {
   api: DesktopAPI | null;
+  onDocumentSaved?: (document: ConfigDocument) => void | Promise<void>;
 };
 
 const SINGLE_SHIPMENT_MATCH_FIELD_OPTIONS: Array<{ value: SingleShipmentMatchField; label: string }> = [
@@ -29,7 +30,7 @@ function cloneConfig(value: JsonObject): JsonObject {
   return JSON.parse(JSON.stringify(value)) as JsonObject;
 }
 
-export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Element {
+export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps): React.JSX.Element {
   const [document, setDocument] = useState<ConfigDocument | null>(null);
   const [source, setSource] = useState("");
   const [parsed, setParsed] = useState<JsonObject>({});
@@ -138,7 +139,9 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
     const result = await validate();
     if (!result?.valid) return;
     try {
-      applyDocument(await api.saveConfigDocument({ path: document.path, content: source, expectedModifiedAt: document.modifiedAt }));
+      const saved = await api.saveConfigDocument({ path: document.path, content: source, expectedModifiedAt: document.modifiedAt });
+      applyDocument(saved);
+      await onDocumentSaved?.(saved);
       toast.success("配置已保存，并创建 .bak 备份");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "配置保存失败");
@@ -153,6 +156,7 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
       const saved = await api.saveConfigDocumentAs(source);
       if (saved) {
         applyDocument(saved);
+        await onDocumentSaved?.(saved);
         toast.success("配置已另存为新文件");
       }
     } catch (error) {
@@ -180,7 +184,9 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
     if (!api || restoring) return;
     setRestoring(true);
     try {
-      applyDocument(await api.restoreDefaultConfig());
+      const restored = await api.restoreDefaultConfig();
+      applyDocument(restored);
+      await onDocumentSaved?.(restored);
       toast.success("已恢复默认配置");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "恢复默认配置失败");
@@ -297,9 +303,6 @@ export function ConfigCenterPage({ api }: ConfigCenterPageProps): React.JSX.Elem
             </fieldset>
             <fieldset>
               <legend>核价策略</legend>
-              <label>数量策略<select value={String(pricing.quantity_policy ?? "exact")} onChange={(event) => updateField("pricing", "quantity_policy", event.currentTarget.value)}><option value="exact">精确匹配</option><option value="nearest">邻近档位</option></select></label>
-              <label className="config-check"><input type="checkbox" checked={Boolean(pricing.multiply_quantity_by_price)} onChange={(event) => updateField("pricing", "multiply_quantity_by_price", event.currentTarget.checked)} />数量乘以单价</label>
-              <label className="config-check"><input type="checkbox" checked={Boolean(pricing.zero_price_is_valid)} onChange={(event) => updateField("pricing", "zero_price_is_valid", event.currentTarget.checked)} />零价格视为有效</label>
               <div className="config-switch-row">
                 <span><strong>启用单独发货价格匹配</strong><small>默认使用通用价格；只有联合字段完整、仅对应一个订单且订单只有一个有效主要 SKU 时才使用单独发货价</small></span>
                 <button

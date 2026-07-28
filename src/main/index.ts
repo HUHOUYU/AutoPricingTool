@@ -90,6 +90,26 @@ const SINGLE_SHIPMENT_MATCH_FIELDS = new Set([
   "email",
 ]);
 const DEFAULT_SINGLE_SHIPMENT_MATCH_FIELDS = ["recipient_name", "phone", "postal_code"];
+const PRICING_ORDER_FIELD_KEYS = new Set([
+  "order_number",
+  "country_code",
+  "country_english",
+  "country_chinese",
+  "sku",
+  "product_name",
+  "quantity",
+  "price",
+  ...SINGLE_SHIPMENT_MATCH_FIELDS,
+]);
+const PRICING_TABLE_FIELD_KEYS = new Set(["sku", "country", "fixed_price"]);
+const UNSUPPORTED_PRICING_FIELDS = [
+  "sku_qty_pair_selection",
+  "quantity_policy",
+  "multiply_quantity_by_price",
+  "zero_price_is_valid",
+  "unavailable_price_tokens",
+  "output_sheets",
+] as const;
 
 const rootDir = resolve(__dirname, "../..");
 const resourceRootDir = app.isPackaged ? process.resourcesPath : rootDir;
@@ -399,11 +419,31 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
     };
   }
 
-  const objectSections = ["sheet_rules", "sheet_selection", "performance", "automation", "pricing", "runtime", "fields", "output"];
+  const objectSections = ["sheet_rules", "sheet_selection", "performance", "automation", "pricing", "pricing_fields", "runtime", "fields", "output"];
   for (const key of objectSections) {
     const value = config[key];
     if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
       issues.push({ path: key, message: "必须是对象" });
+    }
+  }
+
+  const pricingFields = config.pricing_fields as Record<string, unknown> | undefined;
+  if (pricingFields) {
+    for (const section of ["order", "pricing"] as const) {
+      const fields = pricingFields[section];
+      if (fields !== undefined && (!fields || typeof fields !== "object" || Array.isArray(fields))) {
+        issues.push({ path: `pricing_fields.${section}`, message: "必须是对象" });
+        continue;
+      }
+      const allowedKeys = section === "order" ? PRICING_ORDER_FIELD_KEYS : PRICING_TABLE_FIELD_KEYS;
+      for (const key of Object.keys((fields ?? {}) as Record<string, unknown>)) {
+        if (!allowedKeys.has(key)) {
+          issues.push({
+            path: `pricing_fields.${section}.${key}`,
+            message: "当前处理器不读取该字段",
+          });
+        }
+      }
     }
   }
 
@@ -448,6 +488,14 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
 
   const pricing = config.pricing as Record<string, unknown> | undefined;
   if (pricing) {
+    for (const key of UNSUPPORTED_PRICING_FIELDS) {
+      if (Object.hasOwn(pricing, key)) {
+        issues.push({
+          path: `pricing.${key}`,
+          message: "当前处理器不读取该字段，请删除后使用现行固定规则",
+        });
+      }
+    }
     if (pricing.country_identity !== undefined) {
       const countryIdentity = pricing.country_identity;
       const allowedCountryIdentities = new Set(["iso2", "english", "chinese"]);
@@ -1351,19 +1399,19 @@ app.whenReady().then(async () => {
     }
     return result.filePaths[0];
   });
-  ipcMain.handle("dialog:select-excel-file", async (event) => {
+  ipcMain.handle("dialog:select-excel-files", async (event) => {
     requireTrustedIpc(event);
     const config = await readRuntimeConfig();
     const result = await dialog.showOpenDialog({
       defaultPath: config.recent_input_dir,
       filters: [{ name: "Excel 文件", extensions: ["xlsx", "xls", "xlsm", "xlsb"] }],
-      properties: ["openFile"],
+      properties: ["openFile", "multiSelections"],
     });
-    if (result.canceled || !result.filePaths[0]) {
+    if (result.canceled || result.filePaths.length === 0) {
       return null;
     }
     await writeRuntimeConfig({ recent_input_dir: dirname(result.filePaths[0]) });
-    return result.filePaths[0];
+    return result.filePaths;
   });
 
   ipcMain.handle("dialog:select-config", async (event) => {

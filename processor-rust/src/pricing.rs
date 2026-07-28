@@ -167,6 +167,7 @@ pub(crate) struct OrderSheetCandidate {
     pub(crate) country_chinese_column: Option<usize>,
     pub(crate) sku_qty_pairs: Vec<SkuQtyPair>,
     pub(crate) single_shipment_column: Option<usize>,
+    pub(crate) single_shipment_fields: Vec<SingleShipmentMatchFieldStatus>,
     pub(crate) price_column: Option<usize>,
     pub(crate) valid_order_rows: usize,
     pub(crate) country_coverage: f64,
@@ -207,6 +208,8 @@ pub(crate) struct PriceCheckMapping {
     pub(crate) country_chinese_column: Option<usize>,
     pub(crate) sku_qty_pairs: Vec<SkuQtyPair>,
     pub(crate) single_shipment_column: Option<usize>,
+    #[serde(default)]
+    pub(crate) single_shipment_fields: Vec<SingleShipmentMatchFieldStatus>,
     pub(crate) order_price_column: Option<usize>,
     pub(crate) pricing_sheet: String,
     pub(crate) pricing_header_row: usize,
@@ -214,6 +217,23 @@ pub(crate) struct PriceCheckMapping {
     pub(crate) pricing_sku_column: usize,
     pub(crate) pricing_country_column: usize,
     pub(crate) quantity_tier_columns: Vec<PriceTierColumn>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SingleShipmentMatchingStatus {
+    pub(crate) enabled: bool,
+    pub(crate) ready: bool,
+    pub(crate) fields: Vec<SingleShipmentMatchFieldStatus>,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SingleShipmentMatchFieldStatus {
+    pub(crate) field: SingleShipmentMatchField,
+    pub(crate) columns: Vec<usize>,
+    pub(crate) headers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -244,6 +264,7 @@ pub(crate) struct PriceAnalysisFile {
     pub(crate) matched_order_rows: Vec<usize>,
     pub(crate) writeback_rows: Vec<PricePreviewWritebackRow>,
     pub(crate) unmatched_rows: Vec<UnmatchedPriceIssue>,
+    pub(crate) single_shipment_matching: SingleShipmentMatchingStatus,
     pub(crate) requires_confirmation: bool,
     pub(crate) automation_decision: AutomationDecision,
     pub(crate) issues: Vec<String>,
@@ -400,6 +421,7 @@ struct MappingValidationResult {
     matched_order_rows: Vec<usize>,
     writeback_rows: Vec<PricePreviewWritebackRow>,
     unmatched_rows: Vec<UnmatchedPriceIssue>,
+    single_shipment_matching: SingleShipmentMatchingStatus,
     warnings: Vec<String>,
 }
 
@@ -700,6 +722,7 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
             "matchedOrderRows": validation.matched_order_rows,
             "writebackRows": validation.writeback_rows,
             "unmatchedRows": validation.unmatched_rows,
+            "singleShipmentMatching": validation.single_shipment_matching,
             "errors": [],
             "warnings": validation.warnings,
         })),
@@ -713,6 +736,7 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
             "matchedOrderRows": [],
             "writebackRows": [],
             "unmatchedRows": [],
+            "singleShipmentMatching": null,
             "errors": errors,
             "warnings": [],
         })),
@@ -882,6 +906,7 @@ fn validate_price_mapping(
     let (Some(order_sheet), Some(pricing_sheet)) = (order_sheet, pricing_sheet) else {
         return Err(errors);
     };
+    let single_shipment_matching = single_shipment_matching_status(order_sheet, mapping, config);
     if !mapping_is_complete(mapping) {
         errors.push("订单号、国家、数量/SKU/合并数量或核价档位等必需字段不完整".to_string());
     }
@@ -911,7 +936,6 @@ fn validate_price_mapping(
         .unwrap_or_default();
     let mut order_mapped_columns = [
         mapping.business_order_number_column,
-        mapping.single_shipment_column,
         mapping.order_price_column,
     ]
     .into_iter()
@@ -923,6 +947,16 @@ fn validate_price_mapping(
             .flat_map(|pair| [pair.qty_column, pair.sku_column, pair.merged_qty_column]),
     )
     .collect::<Vec<_>>();
+    if mapping.single_shipment_fields.is_empty() {
+        order_mapped_columns.extend(mapping.single_shipment_column);
+    } else {
+        order_mapped_columns.extend(
+            mapping
+                .single_shipment_fields
+                .iter()
+                .flat_map(|field| field.columns.iter().copied()),
+        );
+    }
     for (identity, column) in [
         (CountryIdentity::Iso2, mapping.country_code_column),
         (CountryIdentity::English, mapping.country_english_column),
@@ -1056,6 +1090,7 @@ fn validate_price_mapping(
         matched_order_rows,
         writeback_rows,
         unmatched_rows,
+        single_shipment_matching,
         warnings,
     })
 }
@@ -1460,6 +1495,16 @@ fn analyze_path_with_templates(
             coverage * 100.0
         ));
     }
+    let single_shipment_matching = suggested_mapping
+        .as_ref()
+        .and_then(|mapping| {
+            workbook
+                .sheets
+                .iter()
+                .find(|sheet| sheet.name == mapping.order_sheet)
+                .map(|sheet| single_shipment_matching_status(sheet, mapping, config))
+        })
+        .unwrap_or_else(|| single_shipment_matching_unavailable(config, "尚未确定订单字段映射"));
     let (writeback_rows, unmatched_rows) = suggested_mapping
         .as_ref()
         .and_then(|mapping| {
@@ -1499,6 +1544,7 @@ fn analyze_path_with_templates(
         matched_order_rows,
         writeback_rows,
         unmatched_rows,
+        single_shipment_matching,
         requires_confirmation,
         automation_decision,
         issues,
@@ -1689,6 +1735,7 @@ fn mapping_from_candidates(
         country_chinese_column: order.country_chinese_column,
         sku_qty_pairs: order.sku_qty_pairs.clone(),
         single_shipment_column: order.single_shipment_column,
+        single_shipment_fields: order.single_shipment_fields.clone(),
         order_price_column: order.price_column,
         pricing_sheet: pricing.sheet_name.clone(),
         pricing_header_row: pricing.header_row,
@@ -2081,8 +2128,12 @@ fn infer_order_candidate_with_config(
         let country_en = country_en.filter(|column| Some(*column) != country_code);
         let country_cn = country_cn
             .filter(|column| Some(*column) != country_code && Some(*column) != country_en);
-        let single_shipment =
-            configured_best_column(sheet, header_idx, None, SINGLE_SHIPMENT_FIELD_ALIASES);
+        let single_shipment_fields =
+            resolve_single_shipment_fields(sheet, header_idx, config, &[], None);
+        let single_shipment = single_shipment_fields
+            .iter()
+            .find(|matched| matched.field == SingleShipmentMatchField::RecipientName)
+            .and_then(|matched| matched.columns.first().copied());
         let price = configured_best_column(
             sheet,
             header_idx,
@@ -2146,7 +2197,8 @@ fn infer_order_candidate_with_config(
             country_english_column: country_en.map(|column| column + 1),
             country_chinese_column: country_cn.map(|column| column + 1),
             sku_qty_pairs: pairs,
-            single_shipment_column: single_shipment.map(|column| column + 1),
+            single_shipment_column: single_shipment,
+            single_shipment_fields,
             price_column: price.map(|column| column + 1),
             valid_order_rows: valid_rows,
             country_coverage: ratio(country_rows, valid_rows),
@@ -3081,7 +3133,9 @@ fn calculate_related_quantity(
         let multiplier = previous
             .components
             .iter()
-            .filter_map(|(sku, quantity)| sku.contains(&main.normalized).then_some(*quantity))
+            .filter_map(|(sku, quantity)| {
+                sku_matches_base_sku(sku, &main.normalized).then_some(*quantity)
+            })
             .try_fold(0usize, |total, quantity| total.checked_add(quantity));
         if let Some(multiplier) = multiplier.filter(|value| *value > 0) {
             return source_quantity
@@ -3116,6 +3170,34 @@ fn calculate_related_quantity(
         .checked_mul(ratio_numerator)
         .ok_or_else(|| "数量计算溢出".to_string())?;
     Ok(scaled.div_ceil(ratio_denominator))
+}
+
+fn sku_matches_base_sku(candidate: &str, base: &str) -> bool {
+    if candidate.contains(base) {
+        return true;
+    }
+
+    let candidate_segments = candidate.split('-').collect::<Vec<_>>();
+    let base_segments = base.split('-').collect::<Vec<_>>();
+    if base_segments.len() < 2
+        || candidate_segments.len() <= base_segments.len()
+        || candidate_segments.first() != base_segments.first()
+        || candidate_segments.last() != base_segments.last()
+    {
+        return false;
+    }
+
+    let mut next_candidate_index = 0usize;
+    base_segments.iter().all(|base_segment| {
+        let Some(relative_index) = candidate_segments[next_candidate_index..]
+            .iter()
+            .position(|candidate_segment| candidate_segment == base_segment)
+        else {
+            return false;
+        };
+        next_candidate_index += relative_index + 1;
+        true
+    })
 }
 
 fn country_token(value: &str) -> String {
@@ -3301,44 +3383,189 @@ fn single_shipment_match_columns(
     mapping: &PriceCheckMapping,
     config: &Config,
 ) -> Option<Vec<SingleShipmentMatchColumns>> {
-    if !config.pricing.single_shipment_matching_enabled {
-        return None;
+    let status = single_shipment_matching_status(sheet, mapping, config);
+    status.ready.then(|| {
+        status
+            .fields
+            .into_iter()
+            .map(|matched| SingleShipmentMatchColumns {
+                field: matched.field,
+                columns: matched
+                    .columns
+                    .into_iter()
+                    .map(|column| column.saturating_sub(1))
+                    .collect(),
+            })
+            .collect()
+    })
+}
+
+fn single_shipment_field_label(field: SingleShipmentMatchField) -> &'static str {
+    match field {
+        SingleShipmentMatchField::RecipientName => "收件人姓名",
+        SingleShipmentMatchField::Phone => "电话",
+        SingleShipmentMatchField::PostalCode => "邮编",
+        SingleShipmentMatchField::Address => "完整地址",
+        SingleShipmentMatchField::Email => "邮箱",
     }
-    let header_idx = mapping.order_header_row.checked_sub(1)?;
-    let mut matches = Vec::new();
-    for field in &config.pricing.single_shipment_match_fields {
-        let mut columns = match field {
-            SingleShipmentMatchField::RecipientName => mapping
-                .single_shipment_column
-                .map(|column| vec![column.saturating_sub(1)])
-                .unwrap_or_else(|| {
-                    exact_header_columns(sheet, header_idx, SINGLE_SHIPMENT_FIELD_ALIASES)
-                }),
-            SingleShipmentMatchField::Phone => {
-                exact_header_columns(sheet, header_idx, SINGLE_SHIPMENT_PHONE_ALIASES)
-            }
-            SingleShipmentMatchField::PostalCode => {
-                exact_header_columns(sheet, header_idx, SINGLE_SHIPMENT_POSTAL_CODE_ALIASES)
-            }
-            SingleShipmentMatchField::Address => {
-                exact_header_columns(sheet, header_idx, SINGLE_SHIPMENT_ADDRESS_ALIASES)
-            }
-            SingleShipmentMatchField::Email => {
-                exact_header_columns(sheet, header_idx, SINGLE_SHIPMENT_EMAIL_ALIASES)
-            }
-        };
-        if columns.is_empty() {
-            return None;
-        }
-        if *field != SingleShipmentMatchField::Address {
-            columns.truncate(1);
-        }
-        matches.push(SingleShipmentMatchColumns {
-            field: *field,
-            columns,
-        });
+}
+
+fn single_shipment_field_rule_key(field: SingleShipmentMatchField) -> &'static str {
+    match field {
+        SingleShipmentMatchField::RecipientName => "recipient_name",
+        SingleShipmentMatchField::Phone => "phone",
+        SingleShipmentMatchField::PostalCode => "postal_code",
+        SingleShipmentMatchField::Address => "address",
+        SingleShipmentMatchField::Email => "email",
     }
-    (matches.len() >= 2).then_some(matches)
+}
+
+fn single_shipment_field_aliases(field: SingleShipmentMatchField) -> &'static [&'static str] {
+    match field {
+        SingleShipmentMatchField::RecipientName => SINGLE_SHIPMENT_FIELD_ALIASES,
+        SingleShipmentMatchField::Phone => SINGLE_SHIPMENT_PHONE_ALIASES,
+        SingleShipmentMatchField::PostalCode => SINGLE_SHIPMENT_POSTAL_CODE_ALIASES,
+        SingleShipmentMatchField::Address => SINGLE_SHIPMENT_ADDRESS_ALIASES,
+        SingleShipmentMatchField::Email => SINGLE_SHIPMENT_EMAIL_ALIASES,
+    }
+}
+
+fn resolve_single_shipment_fields(
+    sheet: &SheetData,
+    header_idx: usize,
+    config: &Config,
+    explicit_fields: &[SingleShipmentMatchFieldStatus],
+    legacy_recipient_name_column: Option<usize>,
+) -> Vec<SingleShipmentMatchFieldStatus> {
+    config
+        .pricing
+        .single_shipment_match_fields
+        .iter()
+        .map(|field| {
+            let explicit = explicit_fields
+                .iter()
+                .find(|matched| matched.field == *field);
+            let mut zero_based_columns = if let Some(explicit) = explicit {
+                explicit
+                    .columns
+                    .iter()
+                    .filter_map(|column| column.checked_sub(1))
+                    .collect()
+            } else if *field == SingleShipmentMatchField::RecipientName {
+                legacy_recipient_name_column
+                    .and_then(|column| column.checked_sub(1))
+                    .map(|column| vec![column])
+                    .unwrap_or_else(|| {
+                        configured_matching_columns(
+                            sheet,
+                            header_idx,
+                            order_field_rule(config, single_shipment_field_rule_key(*field)),
+                            single_shipment_field_aliases(*field),
+                        )
+                    })
+            } else {
+                configured_matching_columns(
+                    sheet,
+                    header_idx,
+                    order_field_rule(config, single_shipment_field_rule_key(*field)),
+                    single_shipment_field_aliases(*field),
+                )
+            };
+            if *field != SingleShipmentMatchField::Address {
+                zero_based_columns.truncate(1);
+            }
+            let columns = zero_based_columns
+                .iter()
+                .map(|column| column + 1)
+                .collect::<Vec<_>>();
+            let headers = columns
+                .iter()
+                .map(|column| {
+                    sheet_cell_text(sheet, header_idx + 1, *column)
+                        .trim()
+                        .to_string()
+                })
+                .collect();
+            SingleShipmentMatchFieldStatus {
+                field: *field,
+                columns,
+                headers,
+            }
+        })
+        .collect()
+}
+
+fn single_shipment_matching_unavailable(
+    config: &Config,
+    unavailable_reason: &str,
+) -> SingleShipmentMatchingStatus {
+    let enabled = config.pricing.single_shipment_matching_enabled;
+    SingleShipmentMatchingStatus {
+        enabled,
+        ready: false,
+        fields: config
+            .pricing
+            .single_shipment_match_fields
+            .iter()
+            .map(|field| SingleShipmentMatchFieldStatus {
+                field: *field,
+                columns: Vec::new(),
+                headers: Vec::new(),
+            })
+            .collect(),
+        reason: if enabled {
+            unavailable_reason.to_string()
+        } else {
+            "配置中心未启用，当前使用通用价格".to_string()
+        },
+    }
+}
+
+fn single_shipment_matching_status(
+    sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    config: &Config,
+) -> SingleShipmentMatchingStatus {
+    let Some(header_idx) = mapping.order_header_row.checked_sub(1) else {
+        return single_shipment_matching_unavailable(config, "订单表头行无效");
+    };
+    if header_idx >= sheet.rows.len() {
+        return single_shipment_matching_unavailable(config, "订单表头行超出有效范围");
+    }
+
+    let fields = resolve_single_shipment_fields(
+        sheet,
+        header_idx,
+        config,
+        &mapping.single_shipment_fields,
+        mapping.single_shipment_column,
+    );
+    let missing_fields = fields
+        .iter()
+        .filter(|matched| matched.columns.is_empty())
+        .map(|matched| single_shipment_field_label(matched.field))
+        .collect::<Vec<_>>();
+
+    let enabled = config.pricing.single_shipment_matching_enabled;
+    let ready = enabled && fields.len() >= 2 && missing_fields.is_empty();
+    let reason = if !enabled {
+        "配置中心未启用，当前使用通用价格".to_string()
+    } else if fields.len() < 2 {
+        "联合判断至少需要两个字段，当前使用通用价格".to_string()
+    } else if !missing_fields.is_empty() {
+        format!(
+            "缺少联合字段表头：{}，当前使用通用价格",
+            missing_fields.join("、")
+        )
+    } else {
+        "联合字段完整；仅证据充分的单主 SKU 订单使用单独发货价格".to_string()
+    };
+    SingleShipmentMatchingStatus {
+        enabled,
+        ready,
+        fields,
+        reason,
+    }
 }
 
 fn normalize_single_shipment_match_value(field: SingleShipmentMatchField, value: &str) -> String {
@@ -4584,6 +4811,43 @@ mod tests {
         let candidate =
             infer_order_candidate_with_config(&sheet, &config).expect("order candidate");
         assert_eq!(candidate.business_order_number_column, Some(1));
+    }
+
+    #[test]
+    fn single_shipment_fields_use_configured_alias_rules() {
+        let mut config = Config::default();
+        config.pricing.single_shipment_match_fields = vec![
+            SingleShipmentMatchField::Phone,
+            SingleShipmentMatchField::PostalCode,
+        ];
+        config.pricing_fields.order.insert(
+            "phone".to_string(),
+            FieldRule {
+                header_aliases: vec!["Tel Custom".to_string()],
+                ..FieldRule::default()
+            },
+        );
+        config.pricing_fields.order.insert(
+            "postal_code".to_string(),
+            FieldRule {
+                header_aliases: vec!["Post Custom".to_string()],
+                ..FieldRule::default()
+            },
+        );
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![vec![
+                CellValue::string("Tel Custom"),
+                CellValue::string("Post Custom"),
+            ]],
+        };
+
+        let fields = resolve_single_shipment_fields(&sheet, 0, &config, &[], None);
+
+        assert_eq!(fields[0].columns, [1]);
+        assert_eq!(fields[0].headers, ["Tel Custom"]);
+        assert_eq!(fields[1].columns, [2]);
+        assert_eq!(fields[1].headers, ["Post Custom"]);
     }
 
     #[test]
@@ -6204,6 +6468,15 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
     }
 
     #[test]
+    fn related_quantity_matches_anchored_sku_segments() {
+        assert_eq!(calculate_related_quantity("MR-H", "MR-WARM-H", 1), Ok(1));
+        assert_eq!(calculate_related_quantity("MR-H", "MR-IVORY-H", 2), Ok(2));
+        assert!(calculate_related_quantity("MR-X-H", "MR-WARM-H", 1).is_err());
+        assert!(calculate_related_quantity("MR-H", "XMR-WARM-H", 1).is_err());
+        assert!(calculate_related_quantity("MR-H", "MR-WARM-HX", 1).is_err());
+    }
+
+    #[test]
     fn quantity_lookup_cannot_cross_a_sku_in_either_direction() {
         let sheet = SheetData {
             name: "订单".to_string(),
@@ -7091,12 +7364,23 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             ..PriceCheckMapping::default()
         };
         let (default_lines, _, _) = read_order_lines(&sheet, &mapping, &Config::default());
+        let disabled_status = single_shipment_matching_status(&sheet, &mapping, &Config::default());
+        assert!(!disabled_status.enabled);
+        assert!(!disabled_status.ready);
+        assert!(disabled_status.reason.contains("配置中心未启用"));
         let mut config = Config::default();
         config.pricing.single_shipment_matching_enabled = true;
         config.pricing.single_shipment_match_fields = vec![
             SingleShipmentMatchField::RecipientName,
             SingleShipmentMatchField::Phone,
         ];
+        let enabled_status = single_shipment_matching_status(&sheet, &mapping, &config);
+        assert!(enabled_status.enabled);
+        assert!(enabled_status.ready);
+        assert_eq!(enabled_status.fields[0].columns, vec![2]);
+        assert_eq!(enabled_status.fields[0].headers, vec!["Name"]);
+        assert_eq!(enabled_status.fields[1].columns, vec![3]);
+        assert_eq!(enabled_status.fields[1].headers, vec!["Phone"]);
         let (lines, exceptions, _) = read_order_lines(&sheet, &mapping, &config);
 
         assert!(exceptions.is_empty());

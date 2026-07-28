@@ -84,6 +84,7 @@ export type PriceCheckMapping = {
     mergedQtyHeader: string;
   }>;
   singleShipmentColumn?: number | null;
+  singleShipmentFields?: SingleShipmentMatchingStatus["fields"];
   orderPriceColumn?: number | null;
   pricingSheet: string;
   pricingHeaderRow: number;
@@ -97,6 +98,24 @@ export type PriceCheckMapping = {
   }>;
 };
 
+export type SingleShipmentMatchField =
+  | "recipient_name"
+  | "phone"
+  | "postal_code"
+  | "address"
+  | "email";
+
+export type SingleShipmentMatchingStatus = {
+  enabled: boolean;
+  ready: boolean;
+  fields: Array<{
+    field: SingleShipmentMatchField;
+    columns: number[];
+    headers: string[];
+  }>;
+  reason: string;
+};
+
 export type PriceAnalysisCandidate = {
   sheetName: string;
   headerRow: number;
@@ -107,6 +126,7 @@ export type PriceAnalysisCandidate = {
   countryChineseColumn?: number | null;
   skuQtyPairs?: PriceCheckMapping["skuQtyPairs"];
   singleShipmentColumn?: number | null;
+  singleShipmentFields?: SingleShipmentMatchingStatus["fields"];
   priceColumn?: number | null;
   validOrderRows?: number;
   validPriceRows?: number;
@@ -129,6 +149,7 @@ export type PriceAnalysisFile = {
   matchedOrderRows?: number[];
   writebackRows?: PricePreviewWritebackRow[];
   unmatchedRows?: PriceUnmatchedIssue[];
+  singleShipmentMatching?: SingleShipmentMatchingStatus;
   requiresConfirmation: boolean;
   automationDecision: {
     status: "eligible" | "confirm" | "error";
@@ -154,6 +175,7 @@ export type PriceMappingValidation = {
   matchedOrderRows?: number[];
   writebackRows?: PricePreviewWritebackRow[];
   unmatchedRows?: PriceUnmatchedIssue[];
+  singleShipmentMatching?: SingleShipmentMatchingStatus | null;
   errors: string[];
   warnings: string[];
 };
@@ -268,7 +290,7 @@ const desktopAPI = {
   exportRuntimeLog: (): Promise<string | null> => ipcRenderer.invoke("app:export-runtime-log"),
   openPath: (filePath: string): Promise<string> => ipcRenderer.invoke("app:open-path", filePath),
   selectDirectory: (purpose?: "input" | "output", persist = true): Promise<string | null> => ipcRenderer.invoke("dialog:select-directory", purpose, persist),
-  selectExcelFile: (): Promise<string | null> => ipcRenderer.invoke("dialog:select-excel-file"),
+  selectExcelFiles: (): Promise<string[] | null> => ipcRenderer.invoke("dialog:select-excel-files"),
   selectConfig: (): Promise<string | null> => ipcRenderer.invoke("dialog:select-config"),
   listExcelFiles: (directory: string): Promise<DirectoryScanResult> => ipcRenderer.invoke("app:list-excel-files", directory),
   readExcelPreviewFile: (filePath: string): Promise<ExcelPreviewFileData> => ipcRenderer.invoke("app:read-excel-preview-file", filePath),

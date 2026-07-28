@@ -13,6 +13,22 @@ const PROCESSING_WORKBOOK_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const PROCESSING_XML_ENTRY_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const PROCESSING_SHARED_STRINGS_MAX_BYTES: u64 = 128 * 1024 * 1024;
 const PROCESSING_MAX_ROWS: usize = 200_000;
+const PRICING_ORDER_FIELD_KEYS: &[&str] = &[
+    "order_number",
+    "country_code",
+    "country_english",
+    "country_chinese",
+    "sku",
+    "product_name",
+    "quantity",
+    "price",
+    "recipient_name",
+    "phone",
+    "postal_code",
+    "address",
+    "email",
+];
+const PRICING_TABLE_FIELD_KEYS: &[&str] = &["sku", "country", "fixed_price"];
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct Config {
@@ -57,7 +73,7 @@ pub(crate) struct PricingRules {
     pub(crate) single_shipment_match_fields: Vec<SingleShipmentMatchField>,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Deserialize, serde::Serialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SingleShipmentMatchField {
     RecipientName,
@@ -524,6 +540,16 @@ fn prepare_config(config: &mut Config) -> Result<()> {
             "pricing.single_shipment_match_fields 开启单独发货匹配时至少需要两个不同字段"
         );
     }
+    for key in config.pricing_fields.order.keys() {
+        if !PRICING_ORDER_FIELD_KEYS.contains(&key.as_str()) {
+            anyhow::bail!("pricing_fields.order.{key} 当前处理器不读取该字段");
+        }
+    }
+    for key in config.pricing_fields.pricing.keys() {
+        if !PRICING_TABLE_FIELD_KEYS.contains(&key.as_str()) {
+            anyhow::bail!("pricing_fields.pricing.{key} 当前处理器不读取该字段");
+        }
+    }
     config.filename_rules.compiled_date_patterns =
         compile_indexed_patterns(&config.filename_rules.date_patterns)?;
     config.filename_rules.compiled_manual_confirm_patterns = compile_patterns(
@@ -725,6 +751,28 @@ mod tests {
         let error = prepare_config(&mut config).expect_err("duplicate fields must not be enough");
 
         assert!(error.to_string().contains("至少需要两个不同字段"));
+    }
+
+    #[test]
+    fn rejects_pricing_field_rules_that_the_processor_does_not_consume() {
+        let mut config: Config = serde_json::from_str(
+            r#"{
+                "pricing_fields": {
+                    "order": {
+                        "shipping_method": {"header_aliases": ["Shipping method"]}
+                    }
+                }
+            }"#,
+        )
+        .expect("field rule document must parse");
+
+        let error = prepare_config(&mut config).expect_err("unused field must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("pricing_fields.order.shipping_method")
+        );
     }
 
     #[test]
