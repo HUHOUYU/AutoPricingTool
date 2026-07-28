@@ -422,6 +422,29 @@ pub(crate) struct PricePreviewWritebackRow {
     price_difference: Option<f64>,
     quantity: Option<usize>,
     quantity_error: Option<String>,
+    quantity_issue_context: Option<SkuQuantityIssueContext>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SkuQuantityIssueContext {
+    previous_sku_column: usize,
+    previous_sku: String,
+    main_sku_column: usize,
+    main_sku: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct PriceRowEdit {
+    source_row: usize,
+    quantity: Option<usize>,
+}
+
+#[derive(Debug)]
+struct PriceRowRecalculation {
+    row: PricePreviewWritebackRow,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -635,6 +658,36 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
         .map_err(|error| anyhow!("单元格编辑格式错误: {error}"))?
         .unwrap_or_default();
     let config = load_config(&config_path(command))?;
+    if let Some(row_edit) = command.get("rowEdit") {
+        let row_edit: PriceRowEdit = serde_json::from_value(row_edit.clone())
+            .map_err(|error| anyhow!("单行核价参数格式错误: {error}"))?;
+        let result = recalculate_price_row(
+            Path::new(input_path),
+            &mapping,
+            &cell_edits,
+            &config,
+            &row_edit,
+        );
+        match result {
+            Ok(recalculation) => emit(json!({
+                "type": "price-row-validation",
+                "inputPath": input_path,
+                "requestVersion": request_version,
+                "sourceRow": row_edit.source_row,
+                "row": recalculation.row,
+                "error": recalculation.error,
+            })),
+            Err(error) => emit(json!({
+                "type": "price-row-validation",
+                "inputPath": input_path,
+                "requestVersion": request_version,
+                "sourceRow": row_edit.source_row,
+                "row": null,
+                "error": format!("{error:#}"),
+            })),
+        }
+        return Ok(());
+    }
     let result = validate_price_mapping(Path::new(input_path), &mapping, &cell_edits, &config);
     match result {
         Ok(validation) => emit(json!({
@@ -665,6 +718,127 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
         })),
     }
     Ok(())
+}
+
+fn recalculate_price_row(
+    path: &Path,
+    mapping: &PriceCheckMapping,
+    cell_edits: &[PriceCellEdit],
+    config: &Config,
+    row_edit: &PriceRowEdit,
+) -> Result<PriceRowRecalculation> {
+    if row_edit.source_row == 0 {
+        return Err(anyhow!("源数据行必须大于 0"));
+    }
+    if mapping.order_sheet == mapping.pricing_sheet {
+        return Err(anyhow!("订单 Sheet 与核价 Sheet 不能相同"));
+    }
+    if !mapping_is_complete(mapping) {
+        return Err(anyhow!(
+            "订单号、国家、数量/SKU/合并数量或核价档位等必需字段不完整"
+        ));
+    }
+    let mut workbook = read_workbook_for_processing(path, config)?;
+    apply_cell_edits(&mut workbook, cell_edits)?;
+    let order_sheet = workbook
+        .sheets
+        .iter()
+        .find(|sheet| sheet.name == mapping.order_sheet)
+        .ok_or_else(|| anyhow!("找不到订单 Sheet: {}", mapping.order_sheet))?;
+    let pricing_sheet = workbook
+        .sheets
+        .iter()
+        .find(|sheet| sheet.name == mapping.pricing_sheet)
+        .ok_or_else(|| anyhow!("找不到核价 Sheet: {}", mapping.pricing_sheet))?;
+    let row = order_sheet
+        .rows
+        .get(row_edit.source_row.saturating_sub(1))
+        .ok_or_else(|| anyhow!("第 {} 行超出订单 Sheet 范围", row_edit.source_row))?;
+    let mut resolved_quantities = resolve_order_quantities(order_sheet, mapping, config);
+    let target_index = resolved_quantities
+        .iter()
+        .position(|resolved| resolved.source_row == row_edit.source_row)
+        .ok_or_else(|| {
+            anyhow!(
+                "第 {} 行没有有效订单号或不属于订单数据行",
+                row_edit.source_row
+            )
+        })?;
+    {
+        let target = &mut resolved_quantities[target_index];
+        target.quantity = row_edit.quantity;
+        target.quantity_error = None;
+        target.quantity_issue_context = None;
+        target.absorbed = false;
+    }
+    let target = &resolved_quantities[target_index];
+    let base_row = PricePreviewWritebackRow {
+        source_row: row_edit.source_row,
+        pricing_price: None,
+        price_difference: None,
+        quantity: row_edit.quantity,
+        quantity_error: None,
+        quantity_issue_context: None,
+    };
+    let Some(quantity) = row_edit.quantity else {
+        return Ok(PriceRowRecalculation {
+            row: PricePreviewWritebackRow {
+                quantity_error: Some("数量为空，无法重新核价".to_string()),
+                ..base_row
+            },
+            error: Some("数量为空，无法重新核价".to_string()),
+        });
+    };
+    if target.matched_sku.is_empty() {
+        return Ok(PriceRowRecalculation {
+            row: base_row,
+            error: Some("主要 SKU 为空，无法重新核价".to_string()),
+        });
+    }
+
+    let country = normalize_order_country_fields(
+        &cell_text(row, mapping.country_code_column),
+        &cell_text(row, mapping.country_english_column),
+        &cell_text(row, mapping.country_chinese_column),
+        &config.pricing,
+    );
+    if country.conflict {
+        return Ok(PriceRowRecalculation {
+            row: base_row,
+            error: Some(country.reason),
+        });
+    }
+    let single_shipment =
+        single_shipment_orders(order_sheet, mapping, config, &resolved_quantities)
+            .contains(&target.business_order_number);
+    let lookup = build_price_index(pricing_sheet, mapping, &config.pricing)
+        .lookup_routes_with_single_shipment_preference(
+            &country.routes,
+            &target.matched_sku,
+            quantity as i64,
+            single_shipment,
+        );
+    let Some(base_price) = lookup.price.filter(|_| lookup.status == "matched") else {
+        return Ok(PriceRowRecalculation {
+            row: base_row,
+            error: Some(lookup.reason),
+        });
+    };
+    let pricing_price =
+        base_price + order_tax_amount(row, order_tax_column_index(order_sheet, mapping));
+    let original_price = mapping
+        .order_price_column
+        .and_then(|column| row.get(column.saturating_sub(1)))
+        .and_then(parse_price);
+    Ok(PriceRowRecalculation {
+        row: PricePreviewWritebackRow {
+            pricing_price: Some(pricing_price),
+            price_difference: original_price
+                .map(|original| normalize_price_difference(pricing_price - original)),
+            ..base_row
+        },
+        error: None,
+    })
 }
 
 fn validate_price_mapping(
@@ -950,6 +1124,15 @@ fn calculate_preview_writeback_rows(
     lines: &[OrderLine],
     resolved_quantities: &[ResolvedOrderQuantity],
 ) -> Vec<PricePreviewWritebackRow> {
+    let quantity_issue_contexts = resolved_quantities
+        .iter()
+        .filter_map(|resolved| {
+            resolved
+                .quantity_issue_context
+                .clone()
+                .map(|context| (resolved.source_row, context))
+        })
+        .collect::<HashMap<_, _>>();
     let mut matched_candidates = HashMap::new();
     for item in aggregate_lines(lines) {
         let lookup = index.lookup_routes_with_single_shipment_preference(
@@ -977,6 +1160,7 @@ fn calculate_preview_writeback_rows(
         price_difference: row.price_difference,
         quantity: row.quantity,
         quantity_error: row.quantity_error,
+        quantity_issue_context: quantity_issue_contexts.get(&row.source_row).cloned(),
     })
     .collect()
 }
@@ -3274,6 +3458,7 @@ struct ResolvedOrderQuantity {
     matched_sku: String,
     quantity: Option<usize>,
     quantity_error: Option<String>,
+    quantity_issue_context: Option<SkuQuantityIssueContext>,
     absorbed: bool,
     sku_pair_priority: usize,
 }
@@ -3392,6 +3577,19 @@ fn resolve_order_quantities(
             continue;
         }
         let matched_sku = normalize_sku(&raw_sku);
+        let quantity_issue_context =
+            source_columns
+                .as_ref()
+                .ok()
+                .map(|columns| SkuQuantityIssueContext {
+                    previous_sku_column: columns.previous_sku + 1,
+                    previous_sku: row
+                        .get(columns.previous_sku)
+                        .map(CellValue::text)
+                        .unwrap_or_default(),
+                    main_sku_column: columns.main_sku + 1,
+                    main_sku: raw_sku.clone(),
+                });
         let quantity_result = if raw_sku.is_empty() {
             Err("主要 SKU 为空".to_string())
         } else {
@@ -3419,13 +3617,19 @@ fn resolve_order_quantities(
                     calculate_related_quantity(&raw_sku, &previous_sku, quantity as usize)
                 })
         };
+        let quantity_error = quantity_result.as_ref().err().cloned();
         resolved.push(ResolvedOrderQuantity {
             source_row,
             business_order_number,
             raw_sku,
             matched_sku,
             quantity: quantity_result.as_ref().ok().copied(),
-            quantity_error: quantity_result.err(),
+            quantity_issue_context: quantity_error
+                .as_ref()
+                .is_some_and(|error| error.contains("SKU关系无法计算"))
+                .then_some(quantity_issue_context)
+                .flatten(),
+            quantity_error,
             absorbed: false,
             sku_pair_priority,
         });
@@ -5936,6 +6140,14 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                     CellValue::string("A*4+B"),
                     CellValue::string("1"),
                 ],
+                vec![
+                    CellValue::string("ERROR-1"),
+                    CellValue::string("TC3348-L-4"),
+                    CellValue::string("1"),
+                    CellValue::string(""),
+                    CellValue::string("TC2500348"),
+                    CellValue::string(""),
+                ],
             ],
         };
         let mapping = PriceCheckMapping {
@@ -5963,7 +6175,16 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         assert_eq!(columns.quantity, 2);
         assert_eq!(
             resolved.iter().map(|row| row.quantity).collect::<Vec<_>>(),
-            vec![Some(3), Some(1)]
+            vec![Some(3), Some(1), None]
+        );
+        assert_eq!(
+            resolved[2].quantity_issue_context,
+            Some(SkuQuantityIssueContext {
+                previous_sku_column: 2,
+                previous_sku: "TC3348-L-4".to_string(),
+                main_sku_column: 5,
+                main_sku: "TC2500348".to_string(),
+            })
         );
         assert_eq!(
             calculate_related_quantity("TC2501602", "TC2501602*3", 1),
@@ -6713,6 +6934,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 price_difference: Some(2.5),
                 quantity: Some(4),
                 quantity_error: None,
+                quantity_issue_context: None,
             }],
         );
 
@@ -7319,6 +7541,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 price_difference: Some(1.5),
                 quantity: Some(1),
                 quantity_error: None,
+                quantity_issue_context: None,
             }]
         );
         // 顺序错误：SKU 在原始数量左侧
@@ -7347,6 +7570,118 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             ),
             (1, 1, 1.0)
         );
+        std::fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn quantity_edit_recalculates_only_the_requested_row_with_tax() -> Result<()> {
+        let path = std::env::temp_dir().join(format!(
+            "auto-pricing-row-edit-{}-{}.xlsx",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let mut workbook = rust_xlsxwriter::Workbook::new();
+        {
+            let order = workbook.add_worksheet();
+            order.set_name("订单")?;
+            for (column, value) in [
+                "订单号",
+                "国家二字码",
+                "前一 SKU",
+                "Qty",
+                "主要 SKU",
+                "合并数量",
+                "Total Price",
+                "EU TAX",
+            ]
+            .iter()
+            .enumerate()
+            {
+                order.write_string(0, column as u16, *value)?;
+            }
+            for (column, value) in ["A-1", "US", "GOOD-1", "1", "GOOD-1", "1", "9", "1"]
+                .iter()
+                .enumerate()
+            {
+                order.write_string(1, column as u16, *value)?;
+            }
+        }
+        {
+            let pricing = workbook.add_worksheet();
+            pricing.set_name("核价")?;
+            for (column, value) in ["SKU", "Country", "1", "2"].iter().enumerate() {
+                pricing.write_string(0, column as u16, *value)?;
+            }
+            for (column, value) in ["GOOD-1", "US", "8", "12"].iter().enumerate() {
+                pricing.write_string(1, column as u16, *value)?;
+            }
+        }
+        workbook.save(&path)?;
+        let mapping = PriceCheckMapping {
+            order_sheet: "订单".to_string(),
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            country_code_column: Some(2),
+            order_price_column: Some(7),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 3,
+                    qty_column: 4,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 5,
+                    qty_column: 4,
+                    merged_qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            pricing_sheet: "核价".to_string(),
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![
+                PriceTierColumn {
+                    quantity: 1,
+                    column: 3,
+                    header: "1".to_string(),
+                },
+                PriceTierColumn {
+                    quantity: 2,
+                    column: 4,
+                    header: "2".to_string(),
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+
+        let result = recalculate_price_row(
+            &path,
+            &mapping,
+            &[],
+            &Config::default(),
+            &PriceRowEdit {
+                source_row: 2,
+                quantity: Some(2),
+            },
+        )?;
+
+        assert_eq!(
+            result.row,
+            PricePreviewWritebackRow {
+                source_row: 2,
+                pricing_price: Some(13.0),
+                price_difference: Some(4.0),
+                quantity: Some(2),
+                quantity_error: None,
+                quantity_issue_context: None,
+            }
+        );
+        assert_eq!(result.error, None);
         std::fs::remove_file(path)?;
         Ok(())
     }

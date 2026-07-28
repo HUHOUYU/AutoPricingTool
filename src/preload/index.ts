@@ -128,6 +128,7 @@ export type PriceAnalysisFile = {
   coverage: number;
   matchedOrderRows?: number[];
   writebackRows?: PricePreviewWritebackRow[];
+  unmatchedRows?: PriceUnmatchedIssue[];
   requiresConfirmation: boolean;
   automationDecision: {
     status: "eligible" | "confirm" | "error";
@@ -152,8 +153,18 @@ export type PriceMappingValidation = {
   coverage: number;
   matchedOrderRows?: number[];
   writebackRows?: PricePreviewWritebackRow[];
+  unmatchedRows?: PriceUnmatchedIssue[];
   errors: string[];
   warnings: string[];
+};
+
+export type PriceUnmatchedIssue = {
+  sourceRow: number;
+  skuColumn: number;
+  sku: string;
+  country: string;
+  quantity: number;
+  reason: string;
 };
 
 export type PricePreviewWritebackRow = {
@@ -162,6 +173,12 @@ export type PricePreviewWritebackRow = {
   priceDifference?: number | null;
   quantity: number | null;
   quantityError?: string | null;
+  quantityIssueContext?: {
+    previousSkuColumn: number;
+    previousSku: string;
+    mainSkuColumn: number;
+    mainSku: string;
+  } | null;
 };
 
 export type PricePreviewCellEdit = {
@@ -177,6 +194,14 @@ export type ProcessorEvent =
   | { type: "price-analysis"; file: PriceAnalysisFile }
   | { type: "price-mapping-required"; file: PriceAnalysisFile }
   | ({ type: "price-validation" } & PriceMappingValidation)
+  | {
+      type: "price-row-validation";
+      inputPath: string;
+      requestVersion: number;
+      sourceRow: number;
+      row: PricePreviewWritebackRow | null;
+      error?: string | null;
+    }
   | { type: "price-progress"; phase: "analyze" | "run" | "rows"; current: number; total: number; path: string }
   | {
       type: "price-file-result";
@@ -251,6 +276,8 @@ const desktopAPI = {
   analyzePriceFiles: (payload: { files: string[]; configPath?: string }): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-analyze", payload),
   validatePriceMapping: (payload: { inputPath: string; mapping: PriceCheckMapping; requestVersion: number; cellEdits?: PricePreviewCellEdit[]; configPath?: string }): Promise<void> =>
+    ipcRenderer.invoke("processor:price-check-validate", payload),
+  recalculatePriceRow: (payload: { inputPath: string; mapping: PriceCheckMapping; requestVersion: number; rowEdit: { sourceRow: number; quantity: number | null }; cellEdits?: PricePreviewCellEdit[]; configPath?: string }): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-validate", payload),
   runPriceCheck: (payload: PriceCheckRunPayload): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-run", payload),

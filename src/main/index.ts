@@ -265,6 +265,20 @@ async function validatePricePayload(value: unknown): Promise<Record<string, unkn
   };
 }
 
+function validatePriceRowEditPayload(value: unknown): { sourceRow: number; quantity: number | null } {
+  const input = requireRecord(value, "单行核价参数");
+  if (!Number.isSafeInteger(input.sourceRow) || Number(input.sourceRow) < 1) {
+    throw new TypeError("单行核价 sourceRow 必须是大于 0 的整数");
+  }
+  if (input.quantity !== null && (!Number.isSafeInteger(input.quantity) || Number(input.quantity) < 0)) {
+    throw new TypeError("单行核价 quantity 必须是非负整数或 null");
+  }
+  return {
+    sourceRow: Number(input.sourceRow),
+    quantity: input.quantity === null ? null : Number(input.quantity),
+  };
+}
+
 function normalizeRuntimeLogRows(value: unknown): RuntimeLogRow[] {
   if (!Array.isArray(value)) {
     throw new TypeError("日志参数必须是数组");
@@ -1304,6 +1318,7 @@ app.whenReady().then(async () => {
     sendProcessorCommand({
       ...input,
       inputPath: (validated.files as string[])[0],
+      ...(input.rowEdit === undefined ? {} : { rowEdit: validatePriceRowEditPayload(input.rowEdit) }),
       action: "price-check-validate",
     });
   });
