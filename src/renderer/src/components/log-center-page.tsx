@@ -221,6 +221,16 @@ export function LogCenterPage({
     }
   };
 
+  const openFileResult = async (file: TaskFileResult): Promise<void> => {
+    if (!api) return;
+    const targetPath = file.status === "completed" ? file.outputPath : file.archivedPath;
+    if (!targetPath) return;
+    const openError = await api.openPath(targetPath);
+    if (openError) {
+      setError(`打开 ${file.fileName} 失败：${openError}`);
+    }
+  };
+
   return (
     <div className={`history-page log-center-page${mobileDetailOpen ? " is-detail-open" : ""}`} role="region" aria-label="日志中心">
       <section className="history-filter-bar" aria-label="批次筛选">
@@ -315,7 +325,11 @@ export function LogCenterPage({
                     <div className="batch-table-wrap batch-file-table-wrap" role="region" aria-label="文件结果表格" tabIndex={0}>
                       <table>
                         <thead><tr><th><button type="button" onClick={() => chooseFileSort("fileName")}>文件名</button></th><th><button type="button" onClick={() => chooseFileSort("status")}>状态</button></th><th><button type="button" onClick={() => chooseFileSort("totalRows")}>匹配</button></th><th><button type="button" onClick={() => chooseFileSort("exceptionRows")}>异常</button></th><th><button type="button" onClick={() => chooseFileSort("durationMs")}>耗时</button></th><th>结果</th></tr></thead>
-                        <tbody>{sortedFiles.map((file) => <tr className={file.path === selectedFilePath ? "is-selected" : undefined} key={file.path} onClick={() => setSelectedFilePath((current) => current === file.path ? null : file.path)}><td title={file.path}>{file.fileName}</td><td><span className={`file-result-status is-${file.status}`}>{file.status === "queued" ? "等待" : file.status === "running" ? "处理中" : file.status === "completed" ? "完成" : file.status === "failed" ? "失败" : "停止"}</span></td><td className="history-number is-success">{file.totalRows ? `${file.matchedRows}/${file.totalRows}` : "—"}</td><td className="history-number is-error">{file.exceptionRows}</td><td className="history-number is-confirm">{formatDuration(file.durationMs)}</td><td>{file.outputPath ? <button type="button" className="file-result-open" aria-label={`打开 ${file.fileName} 结果`} title="打开结果文件" onClick={(event) => { event.stopPropagation(); void api?.openPath(file.outputPath ?? ""); }}><ExternalLink /></button> : "—"}</td></tr>)}</tbody>
+                        <tbody>{sortedFiles.map((file) => {
+                          const canOpen = file.status === "completed" ? Boolean(file.outputPath) : Boolean(file.archivedPath);
+                          const openLabel = file.status === "completed" ? `打开 ${file.fileName} 结果` : `打开 ${file.fileName} 未处理归档`;
+                          return <tr className={file.path === selectedFilePath ? "is-selected" : undefined} key={file.path} onClick={() => setSelectedFilePath((current) => current === file.path ? null : file.path)}><td title={file.path}>{file.fileName}</td><td><span className={`file-result-status is-${file.status}`}>{file.status === "queued" ? "等待" : file.status === "running" ? "处理中" : file.status === "completed" ? "完成" : file.status === "failed" ? "失败" : "停止"}</span></td><td className="history-number is-success">{file.totalRows ? `${file.matchedRows}/${file.totalRows}` : "—"}</td><td className="history-number is-error">{file.exceptionRows}</td><td className="history-number is-confirm">{formatDuration(file.durationMs)}</td><td>{canOpen ? <button type="button" className="file-result-open" aria-label={openLabel} title={file.status === "completed" ? "打开结果文件" : "打开未处理归档"} onClick={(event) => { event.stopPropagation(); void openFileResult(file); }}><ExternalLink /></button> : "—"}</td></tr>;
+                        })}</tbody>
                       </table>
                     </div>
                   </section>

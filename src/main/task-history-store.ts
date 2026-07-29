@@ -19,7 +19,7 @@ export const TASK_HISTORY_RETENTION_DAYS = 365;
 export const TASK_HISTORY_MAX_BATCHES = 1_000;
 export const TASK_HISTORY_DEFAULT_PAGE_SIZE = 30;
 export const TASK_HISTORY_MAX_PAGE_SIZE = 100;
-export const TASK_HISTORY_SCHEMA_VERSION = 3;
+export const TASK_HISTORY_SCHEMA_VERSION = 5;
 
 type TaskDetailEntry =
   | { kind: "event"; event: TaskHistoryEvent }

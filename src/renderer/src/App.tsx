@@ -1582,41 +1582,39 @@ export function App(): React.JSX.Element {
   const chooseNextBatch = async (): Promise<void> => {
     const api = getDesktopAPI();
     if (!api || isAnalyzing || isRunning) return;
-    const finishCurrentBatch = async (): Promise<void> => {
-      const unresolvedFiles = files.filter((path) => results[path]?.status !== "completed").length;
-      if (!batchIdRef.current || unresolvedFiles === 0) return;
-      await api.finishTaskBatch(batchIdRef.current);
-      setHistoryRevision((current) => current + 1);
-    };
-    if (importSourceMode === "file") {
-      const selected = await api.selectExcelFiles();
-      if (!selected?.length) return;
-      const supportedPaths = selected.filter(isExcelPath);
-      if (supportedPaths.length !== selected.length) {
-        toast.warning("仅支持 Excel 文件（xlsx、xlsm、xlsb、xls）");
-      }
-      if (supportedPaths.length > 0) {
-        await finishCurrentBatch();
-        registerPaths(supportedPaths, "file", { replaceBatch: true });
-      }
+    const unresolvedFiles = files.filter((path) => results[path]?.status !== "completed");
+    if (unresolvedFiles.length === 0) {
+      await resetTask();
+      toast.success("当前批次已完成，可以导入下一批文件");
       return;
     }
-    const selectedDirectory = await api.selectDirectory("input");
-    if (!selectedDirectory) return;
+    const effectiveOutputRoot = await ensureOutputDirectory();
+    if (!effectiveOutputRoot) return;
     try {
-      const scan = await api.listExcelFiles(selectedDirectory);
-      if (scan.files.length === 0) {
-        toast.warning("所选文件夹中没有发现 Excel 文件");
-        return;
-      }
-      setInputDir(selectedDirectory);
-      await finishCurrentBatch();
-      registerPaths(scan.files, "folder", { replaceBatch: true });
-      const skipped = scan.skippedTemporary + scan.skippedUnsupported + scan.skippedOutput;
-      if (skipped > 0) toast.info(`下一批已跳过 ${skipped} 个无效文件`);
+      const finished = await api.finishTaskBatch({
+        ...(batchIdRef.current ? { batchId: batchIdRef.current } : {}),
+        name: batchName,
+        note: batchNote,
+        files,
+        outputRoot: effectiveOutputRoot,
+        diagnostics: files.map((path) => ({
+          inputPath: path,
+          issueSummaries: taskIssueSummaries(
+            analysesRef.current[path]?.unmatchedRows ?? [],
+            writebackEditsRef.current[path] ?? [],
+          ),
+        })),
+      });
+      setHistoryRevision((current) => current + 1);
+      appendLog(
+        `当前批次已结束，${finished.archivedCount} 个未完成文件已归档到：${finished.unprocessedDir ?? "未处理目录"}`,
+        "success",
+      );
+      await resetTask();
+      toast.success(`已归档 ${finished.archivedCount} 个未完成文件，可以导入下一批`);
     } catch (error) {
-      appendLog("扫描下一批文件夹失败：" + String(error), "error");
-      toast.error("扫描下一批文件夹失败");
+      appendLog("结束当前批次失败：" + String(error), "error");
+      toast.error(`结束当前批次失败：${String(error)}`);
     }
   };
 
@@ -3075,8 +3073,8 @@ export function App(): React.JSX.Element {
         <ConfirmDialog
           open={nextBatchConfirmOpen}
           title="结束当前批次？"
-          description={`当前仍有 ${tabCounts.confirm} 个待确认、${tabCounts.error} 个异常、${tabCounts.pending} 个未完成文件。结束后已执行的核价记录仍保留在日志中心；尚未执行的文件和当前编辑状态将关闭。`}
-          confirmLabel="结束并选择下一批"
+          description={`当前仍有 ${tabCounts.confirm} 个待确认、${tabCounts.error} 个异常、${tabCounts.pending} 个未完成文件。结束后，所有没有有效核价结果的文件将复制到当前批次结果目录的“未处理”文件夹，原始文件保持不变。`}
+          confirmLabel="结束并归档"
           onCancel={() => setNextBatchConfirmOpen(false)}
           onConfirm={() => {
             setNextBatchConfirmOpen(false);

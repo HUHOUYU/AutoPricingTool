@@ -71,7 +71,8 @@ function apiFor(value: TaskHistoryDetail = detail): DesktopAPI {
 
 describe("LogCenterPage", () => {
   it("shows batch metrics, file results, issue summaries and timeline", async () => {
-    render(<LogCenterPage api={apiFor()} revision={0} requestedBatchId={null} onRequestedBatchHandled={() => undefined} />);
+    const api = apiFor();
+    render(<LogCenterPage api={api} revision={0} requestedBatchId={null} onRequestedBatchHandled={() => undefined} />);
 
     const filters = screen.getByRole("region", { name: "批次筛选" });
     expect(within(filters).getByRole("button", { name: "导出列表" })).toBeInTheDocument();
@@ -94,7 +95,10 @@ describe("LogCenterPage", () => {
     expect(screen.getByText("数量 2")).toHaveClass("is-quantity");
     expect(screen.getByText("国家路由不存在").querySelector("strong")).toHaveTextContent("原因");
     expect(screen.getByText("批次开始")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "打开 orders.xlsx 结果" })).toHaveClass("file-result-open");
+    const openResult = screen.getByRole("button", { name: "打开 orders.xlsx 结果" });
+    expect(openResult).toHaveClass("file-result-open");
+    fireEvent.click(openResult);
+    expect(api.openPath).toHaveBeenCalledWith("C:\\output\\orders.xlsx");
   });
 
   it("marks old records as summary-only instead of inventing details", async () => {
@@ -109,6 +113,30 @@ describe("LogCenterPage", () => {
 
     expect(await screen.findByText("仅有汇总")).toBeInTheDocument();
     expect(await screen.findByText("该批次由旧版本创建，历史版本未记录文件明细。")).toBeInTheDocument();
+  });
+
+  it("opens an archived unresolved file without falling back to the source", async () => {
+    const unresolvedDetail: TaskHistoryDetail = {
+      ...detail,
+      record: {
+        ...record,
+        status: "stopped",
+        completedFiles: 0,
+      },
+      files: [{
+        ...detail.files[0]!,
+        status: "stopped",
+        outputPath: undefined,
+        archivedPath: "C:\\output\\批次\\未处理\\orders.xlsx",
+      }],
+    };
+    const api = apiFor(unresolvedDetail);
+    render(<LogCenterPage api={api} revision={0} requestedBatchId={null} onRequestedBatchHandled={() => undefined} />);
+
+    const openArchive = await screen.findByRole("button", { name: "打开 orders.xlsx 未处理归档" });
+    fireEvent.click(openArchive);
+    expect(api.openPath).toHaveBeenCalledWith("C:\\output\\批次\\未处理\\orders.xlsx");
+    expect(api.openPath).not.toHaveBeenCalledWith("C:\\input\\orders.xlsx");
   });
 
   it("filters the detail panels when a file row is selected", async () => {

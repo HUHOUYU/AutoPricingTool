@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   TaskAnalyticsQuery,
   TaskAnalyticsSummary,
+  TaskBatchFinishRequest,
+  TaskBatchFinishResult,
   TaskBatchMetadataUpdate,
   TaskHistoryDetail,
   TaskHistoryExportRequest,
@@ -15,6 +17,8 @@ import type {
 export type {
   TaskAnalyticsQuery,
   TaskAnalyticsSummary,
+  TaskBatchFinishRequest,
+  TaskBatchFinishResult,
   TaskBatchMetadataUpdate,
   TaskExecutionType,
   TaskEventLevel,
@@ -330,8 +334,8 @@ const desktopAPI = {
     ipcRenderer.invoke("processor:price-check-run", payload),
   updateTaskBatchMetadata: (payload: TaskBatchMetadataUpdate): Promise<TaskHistoryDetail> =>
     ipcRenderer.invoke("history:update-metadata", payload),
-  finishTaskBatch: (batchId: string): Promise<TaskHistoryRecord> =>
-    ipcRenderer.invoke("history:finish-batch", batchId),
+  finishTaskBatch: (request: TaskBatchFinishRequest): Promise<TaskBatchFinishResult> =>
+    ipcRenderer.invoke("history:finish-batch", request),
   pauseProcessing: (): Promise<void> => ipcRenderer.invoke("processor:pause"),
   resumeProcessing: (): Promise<void> => ipcRenderer.invoke("processor:resume"),
   stopProcessing: (): Promise<void> => ipcRenderer.invoke("processor:stop"),

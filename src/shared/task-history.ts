@@ -38,6 +38,7 @@ export type TaskFileResult = {
   completedAt?: string;
   durationMs?: number;
   outputPath?: string;
+  archivedPath?: string;
   totalRows: number;
   matchedRows: number;
   exceptionRows: number;
@@ -72,6 +73,7 @@ export type TaskHistoryRecord = {
   totalRows: number;
   matchedRows: number;
   exceptionRows: number;
+  outputRoot?: string;
   outputDir?: string;
   fileNames?: string[];
   detailAvailable?: boolean;
@@ -150,6 +152,21 @@ export type TaskBatchMetadataUpdate = {
   batchId: string;
   name?: string;
   note?: string;
+};
+
+export type TaskBatchFinishRequest = {
+  batchId?: string;
+  name: string;
+  note?: string;
+  files: string[];
+  outputRoot: string;
+  diagnostics?: TaskRunDiagnostics[];
+};
+
+export type TaskBatchFinishResult = {
+  record: TaskHistoryRecord;
+  archivedCount: number;
+  unprocessedDir?: string;
 };
 
 export const TASK_ISSUE_LABELS: Record<TaskIssueCode, string> = {

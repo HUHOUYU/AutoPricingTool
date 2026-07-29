@@ -9,8 +9,16 @@ import { assertTrustedIpcSender, isTrustedRendererUrl } from "./security";
 import { readExcelPreviewFile } from "./excel-preview-file";
 import { resolveLocalProcessorExecutable } from "./processor-path";
 import { TaskHistoryStore, TASK_HISTORY_SCHEMA_VERSION } from "./task-history-store";
+import {
+  archiveUnprocessedFiles,
+  createBatchOutputDirectory,
+  remapBatchOutputPath,
+  renameBatchOutputDirectory,
+} from "./batch-output";
 import type {
   TaskAnalyticsQuery,
+  TaskBatchFinishRequest,
+  TaskBatchFinishResult,
   TaskBatchMetadataUpdate,
   TaskExecutionType,
   TaskFileResult,
@@ -840,6 +848,31 @@ function validateTaskBatchMetadataUpdate(value: unknown): TaskBatchMetadataUpdat
   };
 }
 
+async function validateTaskBatchFinishRequest(value: unknown): Promise<TaskBatchFinishRequest> {
+  const input = requireRecord(value, "批次结束参数");
+  if (!Array.isArray(input.files) || input.files.length === 0 || input.files.length > MAX_INPUT_FILES) {
+    throw new TypeError(`批次结束参数 files 必须是 1-${MAX_INPUT_FILES} 个文件路径`);
+  }
+  const files: string[] = [];
+  for (const item of input.files) {
+    if (typeof item !== "string" || !isAbsolute(item) || !isSupportedExcelPath(item) || !(await pathExists(item))) {
+      throw new TypeError(`未处理文件不存在或不是有效的 Excel 文件：${String(item)}`);
+    }
+    files.push(resolve(item));
+  }
+  if (typeof input.outputRoot !== "string" || !isAbsolute(input.outputRoot) || input.outputRoot.length > 32_767) {
+    throw new TypeError("批次结束参数 outputRoot 必须是有效的绝对路径");
+  }
+  return {
+    ...(input.batchId !== undefined ? { batchId: validateBatchId(input.batchId) } : {}),
+    name: sanitizedBatchText(input.name, TASK_BATCH_NAME_MAX_LENGTH),
+    ...(input.note !== undefined ? { note: sanitizedBatchText(input.note, TASK_BATCH_NOTE_MAX_LENGTH) } : {}),
+    files,
+    outputRoot: resolve(input.outputRoot),
+    ...(Array.isArray(input.diagnostics) ? { diagnostics: input.diagnostics as TaskRunDiagnostics[] } : {}),
+  };
+}
+
 function validateBatchId(value: unknown): string {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
     throw new TypeError("批次 ID 无效");
@@ -1405,50 +1438,148 @@ app.whenReady().then(async () => {
     const update = validateTaskBatchMetadataUpdate(payload);
     const detail = await taskHistoryStore.getTaskHistoryDetail(update.batchId);
     if (!detail) throw new Error("批次不存在");
-    const record: TaskHistoryRecord = {
-      ...detail.record,
-      ...(update.name !== undefined
-        ? { name: update.name || defaultBatchName(detail.record.fileNames, detail.record.id) }
-        : {}),
-      ...(update.note !== undefined ? { note: update.note } : {}),
-    };
-    await persistTaskRecord(record);
-    if (activeTask?.id === record.id) activeTask = record;
-    return { ...detail, record };
-  });
-  ipcMain.handle("history:finish-batch", async (event, batchId: unknown) => {
-    requireTrustedIpc(event);
-    const id = validateBatchId(batchId);
-    if (activeTask?.id === id) throw new Error("批次仍在处理中");
-    const detail = await taskHistoryStore.getTaskHistoryDetail(id);
-    if (!detail) throw new Error("批次不存在");
-    const completedAt = new Date().toISOString();
-    const files = detail.files.map((file) =>
-      file.status === "queued" || file.status === "running"
-        ? { ...file, status: "stopped" as const, completedAt }
-        : file);
-    for (const file of files) {
-      if (file.status === "stopped" && detail.files.find((item) => item.path === file.path)?.status !== "stopped") {
-        await taskHistoryStore.appendFileResult(id, file);
+    if (update.name !== undefined && activeTask?.id === update.batchId) {
+      throw new Error("批次处理中不能修改名称，请在本轮处理完成后重试");
+    }
+    const nextName = update.name === undefined
+      ? detail.record.name
+      : update.name || defaultBatchName(detail.record.fileNames, detail.record.id);
+    let nextOutputDir = detail.record.outputDir;
+    let nextFiles = detail.files;
+    if (
+      update.name !== undefined
+      && nextName
+      && detail.record.outputRoot
+      && detail.record.outputDir
+    ) {
+      const previousOutputDir = detail.record.outputDir;
+      nextOutputDir = await renameBatchOutputDirectory(
+        detail.record.outputRoot,
+        previousOutputDir,
+        nextName,
+        detail.record.id,
+      );
+      if (!samePath(previousOutputDir, nextOutputDir)) {
+        nextFiles = detail.files.map((file) => ({
+          ...file,
+          ...(file.outputPath
+            ? { outputPath: remapBatchOutputPath(file.outputPath, previousOutputDir, nextOutputDir!) }
+            : {}),
+          ...(file.archivedPath
+            ? { archivedPath: remapBatchOutputPath(file.archivedPath, previousOutputDir, nextOutputDir!) }
+            : {}),
+        }));
+        for (const file of nextFiles) await taskHistoryStore.appendFileResult(detail.record.id, file);
       }
     }
     const record: TaskHistoryRecord = {
       ...detail.record,
+      ...(update.name !== undefined ? { name: nextName } : {}),
+      ...(update.note !== undefined ? { note: update.note } : {}),
+      ...(nextOutputDir ? { outputDir: nextOutputDir } : {}),
+    };
+    await persistTaskRecord(record);
+    if (activeTask?.id === record.id) activeTask = record;
+    return { ...detail, record, files: nextFiles };
+  });
+  ipcMain.handle("history:finish-batch", async (event, payload: unknown): Promise<TaskBatchFinishResult> => {
+    requireTrustedIpc(event);
+    const request = await validateTaskBatchFinishRequest(payload);
+    const id = request.batchId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    if (activeTask?.id === id) throw new Error("批次仍在处理中");
+    const detail = await taskHistoryStore.getTaskHistoryDetail(id);
+    if (request.batchId && !detail) throw new Error("批次不存在");
+    const diagnostics = normalizeTaskDiagnostics(request.diagnostics);
+    const filesByPath = new Map((detail?.files ?? []).map((file) => [resolve(file.path), file]));
+    for (const path of request.files) {
+      if (filesByPath.has(path)) continue;
+      filesByPath.set(path, {
+        path,
+        fileName: basename(path),
+        status: "queued",
+        totalRows: 0,
+        matchedRows: 0,
+        exceptionRows: 0,
+        issueSummaries: diagnostics.get(path) ?? [],
+      });
+    }
+    const currentFiles = [...filesByPath.values()];
+    const unresolvedFiles = currentFiles.filter((file) => file.status !== "completed");
+    if (unresolvedFiles.length === 0) throw new Error("当前批次没有需要归档的未处理文件");
+    const name = request.name || detail?.record.name || defaultBatchName(request.files.map((path) => basename(path)), id);
+    const outputRoot = detail?.record.outputRoot ?? request.outputRoot;
+    const outputDir = detail?.record.outputDir
+      ?? await createBatchOutputDirectory(outputRoot, name, id);
+    let archived: Awaited<ReturnType<typeof archiveUnprocessedFiles>>;
+    try {
+      archived = await archiveUnprocessedFiles(
+        outputDir,
+        id,
+        unresolvedFiles.map((file) => file.path),
+      );
+    } catch (error) {
+      throw new Error(`归档未处理文件失败：${String(error)}`);
+    }
+    const completedAt = new Date().toISOString();
+    const archivedPaths = new Map(archived.files.map((file) => [file.sourcePath, file.archivedPath]));
+    const files = currentFiles.map((file) => {
+      if (file.status === "completed") return file;
+      return {
+        ...file,
+        ...(file.status === "queued" || file.status === "running" ? { status: "stopped" as const } : {}),
+        completedAt: file.completedAt ?? completedAt,
+        archivedPath: archivedPaths.get(resolve(file.path)),
+      };
+    });
+    const record: TaskHistoryRecord = {
+      ...(detail?.record ?? {
+        id,
+        startedAt: completedAt,
+        status: "stopped" as const,
+        totalFiles: files.length,
+        completedFiles: 0,
+        failedFiles: 0,
+        totalRows: 0,
+        matchedRows: 0,
+        exceptionRows: 0,
+      }),
+      id,
+      name,
+      ...(request.note !== undefined ? { note: request.note } : {}),
+      schemaVersion: TASK_HISTORY_SCHEMA_VERSION,
       ...aggregateTaskFiles(files),
+      totalFiles: files.length,
       status: "stopped",
       completedAt,
-      durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(detail.record.startedAt)),
+      durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(detail?.record.startedAt ?? completedAt)),
+      outputRoot,
+      outputDir,
+      fileNames: files.map((file) => file.fileName),
+      detailAvailable: true,
     };
-    await taskHistoryStore.appendEvent(id, {
-      id: `${id}-${(detail.events.at(-1)?.sequence ?? 0) + 1}`,
-      sequence: (detail.events.at(-1)?.sequence ?? 0) + 1,
-      time: completedAt,
-      level: "warning",
-      phase: "batch",
-      message: "用户结束当前批次，未处理文件已标记为未完成",
-    });
-    await persistTaskRecord(record);
-    return record;
+    const nextSequence = (detail?.events.at(-1)?.sequence ?? 0) + 1;
+    try {
+      for (const file of files.filter((file) => file.status !== "completed")) {
+        await taskHistoryStore.appendFileResult(id, file);
+      }
+      await taskHistoryStore.appendEvent(id, {
+        id: `${id}-${nextSequence}`,
+        sequence: nextSequence,
+        time: completedAt,
+        level: "warning",
+        phase: "batch",
+        message: `用户结束当前批次，${unresolvedFiles.length} 个未完成文件已归档到：${archived.directory}`,
+      });
+      await persistTaskRecord(record);
+    } catch (error) {
+      await rm(archived.directory, { recursive: true, force: true });
+      throw new Error(`保存批次结束记录失败：${String(error)}`);
+    }
+    return {
+      record,
+      archivedCount: unresolvedFiles.length,
+      unprocessedDir: archived.directory,
+    };
   });
   ipcMain.handle("history:get-analytics", (event, query: unknown) => {
     requireTrustedIpc(event);
@@ -1603,6 +1734,16 @@ app.whenReady().then(async () => {
       ...files,
     ])];
     const previousRecord = existingDetail?.record;
+    const batchName = previousRecord?.name
+      || sanitizedBatchText(validated.batchName, TASK_BATCH_NAME_MAX_LENGTH)
+      || defaultBatchName(allBatchFiles.map((path) => basename(path)), batchId);
+    const requestedOutputRoot = typeof validated.outputDir === "string" ? validated.outputDir : undefined;
+    const outputRoot = previousRecord?.outputRoot ?? requestedOutputRoot;
+    const batchOutputDir = previousRecord?.outputRoot && previousRecord.outputDir
+      ? previousRecord.outputDir
+      : outputRoot
+        ? await createBatchOutputDirectory(outputRoot, batchName, batchId)
+        : undefined;
     const {
       completedAt: _previousCompletedAt,
       durationMs: _previousDurationMs,
@@ -1611,9 +1752,7 @@ app.whenReady().then(async () => {
     activeTask = {
       ...previousRecordWithoutCompletion,
       id: batchId,
-      name: sanitizedBatchText(validated.batchName, TASK_BATCH_NAME_MAX_LENGTH)
-        || previousRecord?.name
-        || defaultBatchName(allBatchFiles.map((path) => basename(path)), batchId),
+      name: batchName,
       note: validated.batchNote === undefined
         ? previousRecord?.note
         : sanitizedBatchText(validated.batchNote, TASK_BATCH_NOTE_MAX_LENGTH),
@@ -1628,7 +1767,8 @@ app.whenReady().then(async () => {
       exceptionRows: previousRecord?.exceptionRows ?? 0,
       fileNames: allBatchFiles.map((path) => basename(path)),
       detailAvailable: true,
-      ...(typeof validated.outputDir === "string" ? { outputDir: validated.outputDir } : {}),
+      ...(outputRoot ? { outputRoot } : {}),
+      ...(batchOutputDir ? { outputDir: batchOutputDir } : {}),
     };
     activeTaskEventSequence = existingDetail?.events.at(-1)?.sequence ?? 0;
     activeTaskLastPersistedFiles = 0;
@@ -1682,7 +1822,12 @@ app.whenReady().then(async () => {
     }
     processorActivity = "price-run";
     try {
-      sendProcessorCommand({ ...validated, headerTemplates: await readHeaderTemplates(), action: "price-check-run" });
+      sendProcessorCommand({
+        ...validated,
+        ...(batchOutputDir ? { outputDir: batchOutputDir } : {}),
+        headerTemplates: await readHeaderTemplates(),
+        action: "price-check-run",
+      });
     } catch (error) {
       completeActiveTask("failed", `批次提交失败：${String(error)}`);
       throw error;

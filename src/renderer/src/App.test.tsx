@@ -458,8 +458,28 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(container.querySelector(".cyber-batch-file")).toHaveTextContent("1/2 个文件 · first.xlsx");
   });
 
-  it("keeps a stopped batch available until the user successfully selects the next batch", async () => {
+  it("archives an unfinished batch before returning to the empty import view", async () => {
     const api = createDesktopAPI();
+    api.finishTaskBatch = vi.fn(async () => ({
+      record: {
+        id: "stopped-batch",
+        name: "completed.xlsx",
+        startedAt: "2026-07-29T01:00:00.000Z",
+        completedAt: "2026-07-29T01:01:00.000Z",
+        status: "stopped" as const,
+        totalFiles: 1,
+        completedFiles: 0,
+        failedFiles: 0,
+        totalRows: 0,
+        matchedRows: 0,
+        exceptionRows: 0,
+        outputRoot: "C:\\output",
+        outputDir: "C:\\output\\completed.xlsx",
+        detailAvailable: true,
+      },
+      archivedCount: 1,
+      unprocessedDir: "C:\\output\\completed.xlsx\\未处理",
+    }));
     installAPI(api);
     render(<App />);
     openFileProcessing();
@@ -477,14 +497,16 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     expect(screen.getByText("completed.xlsx")).toBeInTheDocument();
 
-    vi.mocked(api.selectExcelFiles).mockResolvedValue(["C:\\orders\\next.xlsx"]);
     fireEvent.click(screen.getByRole("button", { name: "结束本批并处理下一批" }));
     const nextDialog = await screen.findByRole("alertdialog");
-    fireEvent.click(within(nextDialog).getByRole("button", { name: "结束并选择下一批" }));
-    expect(await screen.findByText("next.xlsx")).toBeInTheDocument();
-    expect(screen.queryByText("completed.xlsx")).not.toBeInTheDocument();
+    fireEvent.click(within(nextDialog).getByRole("button", { name: "结束并归档" }));
+    await waitFor(() => expect(api.finishTaskBatch).toHaveBeenCalledWith(expect.objectContaining({
+      files: ["C:\\orders\\completed.xlsx"],
+      outputRoot: "C:\\output",
+    })));
+    expect(await screen.findByText("拖拽一个或多个 Excel 文件到此处")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByLabelText("批次处理进度")).not.toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "开始处理" })).toBeEnabled();
+    expect(api.selectExcelFiles).not.toHaveBeenCalled();
   });
 
   it("centers the empty state independently from the table columns", () => {
@@ -710,15 +732,11 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.queryByText(/1\/14 个文件/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "处理下一批" }));
-    await waitFor(() => expect(api.selectExcelFiles).toHaveBeenCalled());
-    expect(screen.getAllByText("order.xlsx").length).toBeGreaterThan(0);
-
-    vi.mocked(api.selectExcelFiles).mockResolvedValue(["C:\\orders\\next-order.xlsx"]);
-    fireEvent.click(screen.getByRole("button", { name: "处理下一批" }));
-    expect(await screen.findByText("next-order.xlsx")).toBeInTheDocument();
+    expect(await screen.findByText("拖拽一个或多个 Excel 文件到此处")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByTitle("C:\\orders\\order.xlsx")).not.toBeInTheDocument());
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "开始处理" })).toBeEnabled();
+    expect(api.selectExcelFiles).not.toHaveBeenCalled();
+    expect(api.finishTaskBatch).not.toHaveBeenCalled();
   });
 
   it("asks for and persists an output directory before importing a dropped workbook", async () => {
