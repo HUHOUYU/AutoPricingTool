@@ -13,6 +13,19 @@ import type {
   TaskHistorySummary,
   TaskRunDiagnostics,
 } from "../shared/task-history";
+import type {
+  AppPreferences,
+  AppPreferencesUpdate,
+  AppState,
+  AppStateUpdate,
+} from "../shared/app-settings";
+
+export type {
+  AppPreferences,
+  AppPreferencesUpdate,
+  AppState,
+  AppStateUpdate,
+} from "../shared/app-settings";
 
 export type {
   TaskAnalyticsQuery,
@@ -36,15 +49,6 @@ export type {
   TaskIssueSummary,
   TaskRunDiagnostics,
 } from "../shared/task-history";
-
-export type RuntimeConfig = {
-  recent_input_dir?: string;
-  recent_output_dir?: string;
-  recent_config_path?: string;
-  archive_standard_files?: boolean;
-  auto_reveal_manual_result?: boolean;
-  continuous_issue_review_enabled?: boolean;
-};
 
 export type WindowPreferences = {
   rememberSize: boolean;
@@ -297,10 +301,13 @@ const desktopAPI = {
   closeWindow: (): Promise<void> => ipcRenderer.invoke("window:close"),
   getWindowPreferences: (): Promise<WindowPreferences> => ipcRenderer.invoke("window:get-preferences"),
   setRememberWindowSize: (rememberSize: boolean): Promise<WindowPreferences> => ipcRenderer.invoke("window:set-remember-size", rememberSize),
-  getRuntimeConfig: (): Promise<RuntimeConfig> => ipcRenderer.invoke("app:get-runtime-config"),
+  getAppPreferences: (): Promise<AppPreferences> => ipcRenderer.invoke("app:get-preferences"),
+  setAppPreferences: (preferences: AppPreferencesUpdate): Promise<AppPreferences> =>
+    ipcRenderer.invoke("app:set-preferences", preferences),
+  getAppState: (): Promise<AppState> => ipcRenderer.invoke("app:get-state"),
+  setAppState: (state: AppStateUpdate): Promise<AppState> => ipcRenderer.invoke("app:set-state", state),
   getDefaultPriceOutputDir: (): Promise<string> => ipcRenderer.invoke("app:get-default-price-output-dir"),
   getProcessingCapacity: (): Promise<ProcessingCapacity> => ipcRenderer.invoke("app:get-processing-capacity"),
-  setRuntimeConfig: (config: RuntimeConfig): Promise<RuntimeConfig> => ipcRenderer.invoke("app:set-runtime-config", config),
   getConfigDocument: (path?: string): Promise<ConfigDocument> => ipcRenderer.invoke("config:get-document", path),
   validateConfigDocument: (content: string): Promise<ConfigValidationResult> => ipcRenderer.invoke("config:validate-document", content),
   saveConfigDocument: (payload: { path: string; content: string; expectedModifiedAt: number }): Promise<ConfigDocument> => ipcRenderer.invoke("config:save-document", payload),

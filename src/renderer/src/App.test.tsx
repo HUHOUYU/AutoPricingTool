@@ -103,10 +103,36 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
     closeWindow: vi.fn(async () => undefined),
     getWindowPreferences: vi.fn(async () => ({ rememberSize: false })),
     setRememberWindowSize: vi.fn(async (rememberSize) => ({ rememberSize, width: 1650, height: 1120 })),
-    getRuntimeConfig: vi.fn(async () => ({ recent_output_dir: "C:\\output", recent_config_path: "C:\\config.json" })),
+    getAppPreferences: vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      archiveStandardFiles: false,
+      autoRevealManualResult: false,
+      continuousIssueReviewEnabled: false,
+      rememberWindowSize: false,
+    })),
+    setAppPreferences: vi.fn(async (preferences) => ({
+      schemaVersion: 1 as const,
+      archiveStandardFiles: false,
+      autoRevealManualResult: false,
+      continuousIssueReviewEnabled: false,
+      rememberWindowSize: false,
+      ...preferences,
+    })),
+    getAppState: vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      activeBusinessConfigPath: "C:\\config.json",
+      recentInputDirectory: "",
+      recentOutputDirectory: "C:\\output",
+    })),
+    setAppState: vi.fn(async (state) => ({
+      schemaVersion: 1 as const,
+      activeBusinessConfigPath: "C:\\config.json",
+      recentInputDirectory: "",
+      recentOutputDirectory: "C:\\output",
+      ...state,
+    })),
     getDefaultPriceOutputDir: vi.fn(async () => "C:\\Program\\核价结果"),
     getProcessingCapacity: vi.fn(async () => ({ detectedThreads: 8, maxWorkers: 7 })),
-    setRuntimeConfig: vi.fn(async (config) => config),
     getConfigDocument: vi.fn(async () => ({ path: "C:\\config.json", content: "{}\n", modifiedAt: 1, isDefault: false })),
     validateConfigDocument: vi.fn(async () => ({ valid: true, issues: [] })),
     saveConfigDocument: vi.fn(async ({ path, content }) => ({ path, content, modifiedAt: 2, isDefault: false })),
@@ -535,7 +561,7 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(within(resetDialog).getByRole("button", { name: "重置本批" }));
     await waitFor(() => expect(screen.queryByText("before-reset.xlsx")).not.toBeInTheDocument());
     expect(screen.getByRole("heading", { name: "文件列表 （0）" })).toBeInTheDocument();
-    expect(api.setRuntimeConfig).not.toHaveBeenCalled();
+    expect(api.setAppState).not.toHaveBeenCalled();
 
     dropFiles([new File(["xlsx"], "after-reset.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
     expect(await screen.findByText("after-reset.xlsx")).toBeInTheDocument();
@@ -693,13 +719,13 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByRole("region", { name: "配置中心" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "选择输入目录" }));
     await waitFor(() => {
-      expect(api.selectDirectory).toHaveBeenCalledWith("input", false);
+      expect(api.selectDirectory).toHaveBeenCalledWith("input");
       expect(screen.getByRole("textbox", { name: "输入目录" })).toHaveValue("C:\\input-selected");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "选择输出目录" }));
     await waitFor(() => {
-      expect(api.selectDirectory).toHaveBeenCalledWith("output", false);
+      expect(api.selectDirectory).toHaveBeenCalledWith("output");
       expect(screen.getByRole("textbox", { name: "输出目录" })).toHaveValue("C:\\output-selected");
     });
     expect(api.saveConfigDocument).not.toHaveBeenCalled();
@@ -707,7 +733,13 @@ describe("AutoPricingTool cyber workstation", () => {
 
   it("runs pricing after analysis completes", async () => {
     const api = createDesktopAPI();
-    api.getRuntimeConfig = vi.fn(async () => ({ recent_output_dir: "C:\\output", recent_config_path: "C:\\config.json", auto_reveal_manual_result: true }));
+    api.getAppPreferences = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      archiveStandardFiles: false,
+      autoRevealManualResult: true,
+      continuousIssueReviewEnabled: false,
+      rememberWindowSize: false,
+    }));
     installAPI(api);
     render(<App />);
     openFileProcessing();
@@ -741,11 +773,16 @@ describe("AutoPricingTool cyber workstation", () => {
 
   it("asks for and persists an output directory before importing a dropped workbook", async () => {
     const api = createDesktopAPI();
-    api.getRuntimeConfig = vi.fn(async () => ({ recent_config_path: "C:\\config.json" }));
+    api.getAppState = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      activeBusinessConfigPath: "C:\\config.json",
+      recentInputDirectory: "",
+      recentOutputDirectory: "",
+    }));
     installAPI(api);
     render(<App />);
     openFileProcessing();
-    await waitFor(() => expect(api.getRuntimeConfig).toHaveBeenCalled());
+    await waitFor(() => expect(api.getAppState).toHaveBeenCalled());
     dropFiles([new File(["xlsx"], "order.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
     await waitFor(() => expect(api.selectDirectory).toHaveBeenCalledWith("output", true));
     expect(await screen.findByText("order.xlsx")).toBeInTheDocument();
@@ -760,12 +797,17 @@ describe("AutoPricingTool cyber workstation", () => {
 
   it("does not import a dropped folder when output directory selection is canceled", async () => {
     const api = createDesktopAPI();
-    api.getRuntimeConfig = vi.fn(async () => ({ recent_config_path: "C:\\config.json" }));
+    api.getAppState = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      activeBusinessConfigPath: "C:\\config.json",
+      recentInputDirectory: "",
+      recentOutputDirectory: "",
+    }));
     vi.mocked(api.selectDirectory).mockResolvedValue(null);
     installAPI(api);
     render(<App />);
     openFileProcessing();
-    await waitFor(() => expect(api.getRuntimeConfig).toHaveBeenCalled());
+    await waitFor(() => expect(api.getAppState).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("switch", { name: "导入模式：单文件" }));
     const folderFiles = [new File(["xlsx"], "folder-order.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })];
     Object.defineProperty(folderFiles[0], "path", { value: "/batch/folder-order.xlsx" });
@@ -798,7 +840,13 @@ describe("AutoPricingTool cyber workstation", () => {
     const api = createDesktopAPI();
     const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
-    api.getRuntimeConfig = vi.fn(async () => ({ recent_output_dir: "C:\\output", recent_config_path: "C:\\config.json", auto_reveal_manual_result: true }));
+    api.getAppPreferences = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      archiveStandardFiles: false,
+      autoRevealManualResult: true,
+      continuousIssueReviewEnabled: false,
+      rememberWindowSize: false,
+    }));
     api.listExcelFiles = vi.fn(async () => ({
       files: ["C:\\orders\\order.xlsx", "C:\\orders\\other.xlsx"],
       skippedTemporary: 0,
@@ -871,11 +919,12 @@ describe("AutoPricingTool cyber workstation", () => {
 
   it("continuously opens confirmation files before falling back to abnormal files", async () => {
     const api = createDesktopAPI();
-    api.getRuntimeConfig = vi.fn(async () => ({
-      recent_output_dir: "C:\\output",
-      recent_config_path: "C:\\config.json",
-      auto_reveal_manual_result: true,
-      continuous_issue_review_enabled: true,
+    api.getAppPreferences = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      archiveStandardFiles: false,
+      autoRevealManualResult: true,
+      continuousIssueReviewEnabled: true,
+      rememberWindowSize: false,
     }));
     api.listExcelFiles = vi.fn(async () => ({
       files: [
@@ -940,10 +989,12 @@ describe("AutoPricingTool cyber workstation", () => {
 
   it("stops continuous review on the current file when manual pricing fails", async () => {
     const api = createDesktopAPI();
-    api.getRuntimeConfig = vi.fn(async () => ({
-      recent_output_dir: "C:\\output",
-      recent_config_path: "C:\\config.json",
-      continuous_issue_review_enabled: true,
+    api.getAppPreferences = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      archiveStandardFiles: false,
+      autoRevealManualResult: false,
+      continuousIssueReviewEnabled: true,
+      rememberWindowSize: false,
     }));
     api.listExcelFiles = vi.fn(async () => ({
       files: ["C:\\orders\\failed.xlsx", "C:\\orders\\next.xlsx"],
@@ -989,10 +1040,12 @@ describe("AutoPricingTool cyber workstation", () => {
 
   it("reopens the current abnormal file when manual reanalysis remains unresolved", async () => {
     const api = createDesktopAPI();
-    api.getRuntimeConfig = vi.fn(async () => ({
-      recent_output_dir: "C:\\output",
-      recent_config_path: "C:\\config.json",
-      continuous_issue_review_enabled: true,
+    api.getAppPreferences = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      archiveStandardFiles: false,
+      autoRevealManualResult: false,
+      continuousIssueReviewEnabled: true,
+      rememberWindowSize: false,
     }));
     api.listExcelFiles = vi.fn(async () => ({
       files: ["C:\\orders\\current-error.xlsx", "C:\\orders\\next-error.xlsx"],
@@ -2227,9 +2280,9 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.queryByText("headers.xlsx")).not.toBeInTheDocument();
   }, 15_000);
 
-  it("synchronizes grouped config fields with JSON while preserving unknown fields", async () => {
+  it("keeps app preferences separate while synchronizing business fields with JSON", async () => {
     const api = createDesktopAPI();
-    const content = JSON.stringify({ performance: { processing_workers: 0 }, runtime: {}, pricing: {}, extension_field: { keep: true } }, null, 2) + "\n";
+    const content = JSON.stringify({ performance: { processing_workers: 0 }, pricing: {}, extension_field: { keep: true } }, null, 2) + "\n";
     vi.mocked(api.getConfigDocument).mockResolvedValue({ path: "C:\\config.json", content, modifiedAt: 10, isDefault: false });
     installAPI(api);
     render(<App />);
@@ -2247,11 +2300,11 @@ describe("AutoPricingTool cyber workstation", () => {
     const revealSwitch = screen.getByRole("switch", { name: "手动处理后定位结果" });
     expect(revealSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(revealSwitch);
-    expect(revealSwitch).toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(revealSwitch).toHaveAttribute("aria-checked", "true"));
     const continuousReviewSwitch = screen.getByRole("switch", { name: "连续处理问题文件" });
     expect(continuousReviewSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(continuousReviewSwitch);
-    expect(continuousReviewSwitch).toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(continuousReviewSwitch).toHaveAttribute("aria-checked", "true"));
     const singleShipmentSwitch = screen.getByRole("switch", { name: "启用单独发货价格匹配" });
     const recipientNameField = screen.getByRole("checkbox", { name: "收件人姓名" });
     const phoneField = screen.getByRole("checkbox", { name: "电话" });
@@ -2269,8 +2322,9 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(source.value).toContain('"extension_field"');
     expect(source.value).toContain('"processing_workers": 4');
     expect(source.value).toContain('"template_match_priority": true');
-    expect(source.value).toContain('"auto_reveal_manual_result": true');
-    expect(source.value).toContain('"continuous_issue_review_enabled": true');
+    expect(source.value).not.toContain('"runtime"');
+    expect(api.setAppPreferences).toHaveBeenCalledWith({ autoRevealManualResult: true });
+    expect(api.setAppPreferences).toHaveBeenCalledWith({ continuousIssueReviewEnabled: true });
     expect(source.value).toContain('"single_shipment_matching_enabled": true');
     expect(source.value).toContain('"single_shipment_match_fields"');
     expect(source.value).not.toContain('"postal_code"');
@@ -2324,9 +2378,9 @@ describe("AutoPricingTool cyber workstation", () => {
     render(<App />);
     fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[0]);
     const source = await screen.findByRole("textbox", { name: "JSON 源码" }) as HTMLTextAreaElement;
-    fireEvent.change(source, { target: { value: '{"runtime":{},"extension_field":{"keep":true}}' } });
+    fireEvent.change(source, { target: { value: '{"extension_field":{"keep":true}}' } });
     fireEvent.click(screen.getByRole("button", { name: "格式化" }));
-    expect(source.value).toBe('{\n  "runtime": {},\n  "extension_field": {\n    "keep": true\n  }\n}\n');
-    expect(screen.getByText("7 行")).toBeInTheDocument();
+    expect(source.value).toBe('{\n  "extension_field": {\n    "keep": true\n  }\n}\n');
+    expect(screen.getByText("5 行")).toBeInTheDocument();
   });
 });

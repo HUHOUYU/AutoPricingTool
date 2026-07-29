@@ -3,7 +3,16 @@ import { AlertTriangle, Braces, CheckCircle2, FileJson2, FolderOpen, RefreshCw, 
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import type { ConfigDocument, ConfigValidationResult, DesktopAPI, ProcessingCapacity } from "../../../preload";
+import type {
+  AppPreferences,
+  AppPreferencesUpdate,
+  AppState,
+  AppStateUpdate,
+  ConfigDocument,
+  ConfigValidationResult,
+  DesktopAPI,
+  ProcessingCapacity,
+} from "../../../preload";
 
 type JsonObject = Record<string, unknown>;
 type SingleShipmentMatchField = "recipient_name" | "phone" | "postal_code" | "address" | "email";
@@ -11,6 +20,7 @@ type SingleShipmentMatchField = "recipient_name" | "phone" | "postal_code" | "ad
 type ConfigCenterPageProps = {
   api: DesktopAPI | null;
   onDocumentSaved?: (document: ConfigDocument) => void | Promise<void>;
+  onAppSettingsChanged?: (preferences: AppPreferences, state: AppState) => void;
 };
 
 const SINGLE_SHIPMENT_MATCH_FIELD_OPTIONS: Array<{ value: SingleShipmentMatchField; label: string }> = [
@@ -30,7 +40,11 @@ function cloneConfig(value: JsonObject): JsonObject {
   return JSON.parse(JSON.stringify(value)) as JsonObject;
 }
 
-export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps): React.JSX.Element {
+export function ConfigCenterPage({
+  api,
+  onDocumentSaved,
+  onAppSettingsChanged,
+}: ConfigCenterPageProps): React.JSX.Element {
   const [document, setDocument] = useState<ConfigDocument | null>(null);
   const [source, setSource] = useState("");
   const [parsed, setParsed] = useState<JsonObject>({});
@@ -41,8 +55,9 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
   const [restoring, setRestoring] = useState(false);
   const [sourceScrollTop, setSourceScrollTop] = useState(0);
   const [processingCapacity, setProcessingCapacity] = useState<ProcessingCapacity | null>(null);
-  const [rememberWindowSize, setRememberWindowSize] = useState(false);
-  const [windowPreferenceLoading, setWindowPreferenceLoading] = useState(true);
+  const [preferences, setPreferences] = useState<AppPreferences | null>(null);
+  const [appState, setAppState] = useState<AppState | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(true);
 
   const applyDocument = useCallback((next: ConfigDocument): void => {
     setDocument(next);
@@ -56,7 +71,9 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
     if (!api) return;
     setLoading(true);
     try {
-      applyDocument(await api.getConfigDocument(path));
+      const nextDocument = await api.getConfigDocument(path);
+      applyDocument(nextDocument);
+      setValidation(await api.validateConfigDocument(nextDocument.content));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "配置读取失败");
     } finally {
@@ -71,27 +88,60 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
   }, [api]);
   useEffect(() => {
     if (!api) {
-      setWindowPreferenceLoading(false);
+      setSettingsLoading(false);
       return;
     }
-    void api.getWindowPreferences()
-      .then((preferences) => setRememberWindowSize(preferences.rememberSize))
-      .catch(() => toast.error("窗口大小设置读取失败"))
-      .finally(() => setWindowPreferenceLoading(false));
-  }, [api]);
+    void Promise.all([api.getAppPreferences(), api.getAppState()])
+      .then(([nextPreferences, nextState]) => {
+        setPreferences(nextPreferences);
+        setAppState(nextState);
+        onAppSettingsChanged?.(nextPreferences, nextState);
+      })
+      .catch(() => toast.error("应用设置读取失败"))
+      .finally(() => setSettingsLoading(false));
+  }, [api, onAppSettingsChanged]);
+
+  const savePreferences = async (update: AppPreferencesUpdate): Promise<void> => {
+    if (!api || !preferences) return;
+    try {
+      const nextPreferences = await api.setAppPreferences(update);
+      setPreferences(nextPreferences);
+      if (appState) onAppSettingsChanged?.(nextPreferences, appState);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "应用偏好保存失败");
+    }
+  };
+
+  const saveAppState = async (update: AppStateUpdate): Promise<void> => {
+    if (!api || !appState) return;
+    try {
+      const nextState = await api.setAppState(update);
+      setAppState(nextState);
+      if (preferences) onAppSettingsChanged?.(preferences, nextState);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "应用状态保存失败");
+    }
+  };
 
   const toggleRememberWindowSize = async (): Promise<void> => {
-    if (!api || windowPreferenceLoading) return;
-    const nextValue = !rememberWindowSize;
-    setWindowPreferenceLoading(true);
+    if (!api || settingsLoading || !preferences) return;
+    const nextValue = !preferences.rememberWindowSize;
+    setSettingsLoading(true);
     try {
-      const preferences = await api.setRememberWindowSize(nextValue);
-      setRememberWindowSize(preferences.rememberSize);
-      toast.success(preferences.rememberSize ? "已记录当前窗口大小" : "已关闭窗口大小记录");
+      const windowPreferences = await api.setRememberWindowSize(nextValue);
+      const nextState = await api.getAppState();
+      const nextPreferences = {
+        ...preferences,
+        rememberWindowSize: windowPreferences.rememberSize,
+      };
+      setPreferences(nextPreferences);
+      setAppState(nextState);
+      onAppSettingsChanged?.(nextPreferences, nextState);
+      toast.success(nextPreferences.rememberWindowSize ? "已记录当前窗口大小" : "已关闭窗口大小记录");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "窗口大小设置保存失败");
     } finally {
-      setWindowPreferenceLoading(false);
+      setSettingsLoading(false);
     }
   };
 
@@ -167,14 +217,20 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
   const selectDocument = async (): Promise<void> => {
     if (!api) return;
     const selected = await api.selectConfig();
-    if (selected) await loadDocument(selected);
+    if (selected) {
+      await loadDocument(selected);
+      await saveAppState({ activeBusinessConfigPath: selected });
+    }
   };
 
-  const selectRuntimeDirectory = async (key: "recent_input_dir" | "recent_output_dir", purpose: "input" | "output"): Promise<void> => {
+  const selectStateDirectory = async (
+    key: "recentInputDirectory" | "recentOutputDirectory",
+    purpose: "input" | "output",
+  ): Promise<void> => {
     if (!api) return;
     try {
-      const selected = await api.selectDirectory(purpose, false);
-      if (selected) updateField("runtime", key, selected);
+      const selected = await api.selectDirectory(purpose);
+      if (selected) await saveAppState({ [key]: selected });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "目录选择失败");
     }
@@ -214,7 +270,6 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
     }
   };
 
-  const runtime = useMemo(() => asObject(parsed.runtime), [parsed]);
   const performance = useMemo(() => asObject(parsed.performance), [parsed]);
   const automation = useMemo(() => asObject(parsed.automation), [parsed]);
   const pricing = useMemo(() => asObject(parsed.pricing), [parsed]);
@@ -225,7 +280,7 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
       : DEFAULT_SINGLE_SHIPMENT_MATCH_FIELDS
   ).filter((value): value is SingleShipmentMatchField =>
     SINGLE_SHIPMENT_MATCH_FIELD_OPTIONS.some((option) => option.value === value));
-  const sourceLineCount = source.split(/\r?\n/).length;
+  const sourceLineCount = source.replace(/\r?\n$/, "").split(/\r?\n/).length;
   const sourceLineNumbers = useMemo(() => Array.from({ length: sourceLineCount }, (_, index) => index + 1).join("\n"), [sourceLineCount]);
 
   return (
@@ -247,14 +302,14 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
 
       <div className="config-center-grid">
         <section className="config-form-panel">
-          <header><FileJson2 /><div><h2>分组设置</h2><p>常用设置会与右侧 JSON 实时同步</p></div></header>
+          <header><FileJson2 /><div><h2>分组设置</h2><p>本机设置自动保存；业务规则与右侧 JSON 同步</p></div></header>
           <div className="config-form-scroll">
             <fieldset>
-              <legend>运行路径</legend>
+              <legend>本机设置</legend>
               <label>配置文件{dirty ? " · 未保存" : ""}<input aria-label="当前配置文件" title={document?.path} value={document?.path ?? "正在读取配置文件…"} readOnly /></label>
-              <div className="config-field"><span>输入目录</span><div className="config-path-field"><input aria-label="输入目录" value={String(runtime.recent_input_dir ?? "")} onChange={(event) => updateField("runtime", "recent_input_dir", event.currentTarget.value)} /><Button type="button" variant="outline" aria-label="选择输入目录" onClick={() => void selectRuntimeDirectory("recent_input_dir", "input")}><FolderOpen />选择</Button></div></div>
-              <div className="config-field"><span>输出目录</span><div className="config-path-field"><input aria-label="输出目录" value={String(runtime.recent_output_dir ?? "")} onChange={(event) => updateField("runtime", "recent_output_dir", event.currentTarget.value)} /><Button type="button" variant="outline" aria-label="选择输出目录" onClick={() => void selectRuntimeDirectory("recent_output_dir", "output")}><FolderOpen />选择</Button></div></div>
-              <label className="config-check"><input type="checkbox" checked={Boolean(runtime.archive_standard_files)} onChange={(event) => updateField("runtime", "archive_standard_files", event.currentTarget.checked)} />归档标准文件</label>
+              <div className="config-field"><span>输入目录</span><div className="config-path-field"><input aria-label="输入目录" value={appState?.recentInputDirectory ?? ""} onChange={(event) => setAppState((current) => current ? { ...current, recentInputDirectory: event.currentTarget.value } : current)} onBlur={(event) => void saveAppState({ recentInputDirectory: event.currentTarget.value })} /><Button type="button" variant="outline" aria-label="选择输入目录" onClick={() => void selectStateDirectory("recentInputDirectory", "input")}><FolderOpen />选择</Button></div></div>
+              <div className="config-field"><span>输出目录</span><div className="config-path-field"><input aria-label="输出目录" value={appState?.recentOutputDirectory ?? ""} onChange={(event) => setAppState((current) => current ? { ...current, recentOutputDirectory: event.currentTarget.value } : current)} onBlur={(event) => void saveAppState({ recentOutputDirectory: event.currentTarget.value })} /><Button type="button" variant="outline" aria-label="选择输出目录" onClick={() => void selectStateDirectory("recentOutputDirectory", "output")}><FolderOpen />选择</Button></div></div>
+              <label className="config-check"><input type="checkbox" checked={preferences?.archiveStandardFiles ?? false} onChange={(event) => void savePreferences({ archiveStandardFiles: event.currentTarget.checked })} />归档标准文件</label>
             </fieldset>
             <fieldset>
               <legend>界面偏好</legend>
@@ -264,9 +319,9 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
                   type="button"
                   role="switch"
                   aria-label="手动处理后定位结果"
-                  aria-checked={Boolean(runtime.auto_reveal_manual_result)}
+                  aria-checked={preferences?.autoRevealManualResult ?? false}
                   className="config-switch"
-                  onClick={() => updateField("runtime", "auto_reveal_manual_result", !Boolean(runtime.auto_reveal_manual_result))}
+                  onClick={() => void savePreferences({ autoRevealManualResult: !(preferences?.autoRevealManualResult ?? false) })}
                 ><i /></button>
               </div>
               <div className="config-switch-row">
@@ -275,9 +330,9 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
                   type="button"
                   role="switch"
                   aria-label="连续处理问题文件"
-                  aria-checked={Boolean(runtime.continuous_issue_review_enabled)}
+                  aria-checked={preferences?.continuousIssueReviewEnabled ?? false}
                   className="config-switch"
-                  onClick={() => updateField("runtime", "continuous_issue_review_enabled", !Boolean(runtime.continuous_issue_review_enabled))}
+                  onClick={() => void savePreferences({ continuousIssueReviewEnabled: !(preferences?.continuousIssueReviewEnabled ?? false) })}
                 ><i /></button>
               </div>
               <div className="config-switch-row">
@@ -286,9 +341,9 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
                   type="button"
                   role="switch"
                   aria-label="记住窗口大小"
-                  aria-checked={rememberWindowSize}
+                  aria-checked={preferences?.rememberWindowSize ?? false}
                   className="config-switch"
-                  disabled={windowPreferenceLoading}
+                  disabled={settingsLoading}
                   onClick={() => void toggleRememberWindowSize()}
                 ><i /></button>
               </div>
@@ -359,7 +414,7 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
         </section>
 
         <section className="config-source-panel">
-          <header><div><h2>JSON 源码</h2><p>未识别字段会原样保留</p></div><div className="config-source-tools"><span>JSON</span><small>{sourceLineCount} 行</small><Button type="button" variant="outline" aria-label="格式化" title="格式化 JSON" onClick={formatSource} disabled={!source.trim()}><Braces /></Button></div></header>
+          <header><div><h2>业务规则 JSON</h2><p>仅保存可共享规则；未识别字段会原样保留</p></div><div className="config-source-tools"><span>JSON</span><small>{sourceLineCount} 行</small><Button type="button" variant="outline" aria-label="格式化" title="格式化 JSON" onClick={formatSource} disabled={!source.trim()}><Braces /></Button></div></header>
           <div className="config-source-editor">
             <div className="config-source-code">
               <div className="config-source-gutter" aria-hidden="true"><pre style={{ transform: `translateY(-${sourceScrollTop}px)` }}>{sourceLineNumbers}</pre></div>

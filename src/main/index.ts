@@ -31,23 +31,25 @@ import type {
   TaskRunDiagnostics,
 } from "../shared/task-history";
 import { TASK_ISSUE_LABELS } from "../shared/task-history";
+import type {
+  AppPreferences,
+  AppPreferencesUpdate,
+  AppState,
+  AppStateUpdate,
+} from "../shared/app-settings";
+import { DEFAULT_APP_PREFERENCES, defaultAppState } from "../shared/app-settings";
+import {
+  AppSettingsStore,
+  validateAppPreferencesUpdate,
+  validateAppStateUpdate,
+} from "./app-settings-store";
 import {
   initialWindowSize,
   MIN_WINDOW_SIZE,
-  normalizeWindowPreferences,
   setRememberedWindowSize,
   type WindowPreferences,
   type WindowSize,
 } from "./window-preferences";
-
-type RuntimeConfig = {
-  recent_input_dir?: string;
-  recent_output_dir?: string;
-  recent_config_path?: string;
-  archive_standard_files?: boolean;
-  auto_reveal_manual_result?: boolean;
-  continuous_issue_review_enabled?: boolean;
-};
 
 type ExportFileRowsPayload = {
   categoryLabel: string;
@@ -126,14 +128,15 @@ const portableRootDir =
   app.isPackaged && process.env.PORTABLE_EXECUTABLE_DIR ? process.env.PORTABLE_EXECUTABLE_DIR : dirname(process.execPath);
 const bundledDefaultConfigPath = join(resourceRootDir, "defaults", "extract_rules.json");
 const defaultExtractConfigPath = join(writableRootDir, "config", "extract_rules.json");
-const legacyRuntimeConfigPath = join(writableRootDir, "runtime", "app_config.json");
 const runtimeLogPath = join(writableRootDir, "runtime", "logs", "app.log");
 const taskHistoryPath = join(writableRootDir, "runtime", "task-history.jsonl");
 const taskHistoryDetailsDir = join(writableRootDir, "runtime", "task-details");
 const taskHistoryStore = new TaskHistoryStore(taskHistoryPath, taskHistoryDetailsDir);
 const templateStoreDir = join(app.getPath("userData"), "templates");
 const templateStorePath = join(templateStoreDir, "templates.json");
-const windowPreferencesPath = join(app.getPath("userData"), "window-preferences.json");
+const preferencesPath = join(app.getPath("userData"), "preferences.json");
+const statePath = join(app.getPath("userData"), "state.json");
+const appSettingsStore = new AppSettingsStore(preferencesPath, statePath, defaultExtractConfigPath);
 const appIconPath = join(resourceRootDir, "resources", "app-icon.ico");
 const rendererHtmlPath = join(__dirname, "../renderer/index.html");
 const devServerUrl = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL;
@@ -170,8 +173,8 @@ const activeTaskFiles = new Map<string, TaskFileResult>();
 const activeRunFiles = new Set<string>();
 let activeTaskRemainingFiles = 0;
 let activeTaskExecutionType: TaskExecutionType = "automatic";
-let windowPreferences: WindowPreferences = { rememberSize: false };
-let windowPreferencesWriteQueue: Promise<void> = Promise.resolve();
+let appPreferences: AppPreferences = { ...DEFAULT_APP_PREFERENCES };
+let appState: AppState = defaultAppState(defaultExtractConfigPath);
 
 type ProcessorCommand = Record<string, unknown> & {
   action: string;
@@ -188,38 +191,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function validateRuntimeConfigUpdate(value: unknown): RuntimeConfig {
-  const input = requireRecord(value, "运行配置");
-  const result: RuntimeConfig = {};
-  for (const key of ["recent_input_dir", "recent_output_dir", "recent_config_path"] as const) {
-    const candidate = input[key];
-    if (candidate === undefined) continue;
-    if (typeof candidate !== "string" || candidate.length > 32_767) {
-      throw new TypeError(`运行配置字段 ${key} 必须是有效路径字符串`);
-    }
-    result[key] = candidate;
-  }
-  if (input.archive_standard_files !== undefined) {
-    if (typeof input.archive_standard_files !== "boolean") {
-      throw new TypeError("运行配置字段 archive_standard_files 必须是布尔值");
-    }
-    result.archive_standard_files = input.archive_standard_files;
-  }
-  if (input.auto_reveal_manual_result !== undefined) {
-    if (typeof input.auto_reveal_manual_result !== "boolean") {
-      throw new TypeError("运行配置字段 auto_reveal_manual_result 必须是布尔值");
-    }
-    result.auto_reveal_manual_result = input.auto_reveal_manual_result;
-  }
-  if (input.continuous_issue_review_enabled !== undefined) {
-    if (typeof input.continuous_issue_review_enabled !== "boolean") {
-      throw new TypeError("运行配置字段 continuous_issue_review_enabled 必须是布尔值");
-    }
-    result.continuous_issue_review_enabled = input.continuous_issue_review_enabled;
-  }
-  return result;
-}
-
 function samePath(left: string, right: string): boolean {
   const leftPath = resolve(left);
   const rightPath = resolve(right);
@@ -228,23 +199,12 @@ function samePath(left: string, right: string): boolean {
     : leftPath === rightPath;
 }
 
-async function readWindowPreferences(): Promise<WindowPreferences> {
-  try {
-    return normalizeWindowPreferences(JSON.parse(await readFile(windowPreferencesPath, "utf8")) as unknown);
-  } catch {
-    return { rememberSize: false };
-  }
-}
-
-async function writeWindowPreferences(preferences: WindowPreferences): Promise<void> {
-  const content = `${JSON.stringify(preferences, null, 2)}\n`;
-  windowPreferencesWriteQueue = windowPreferencesWriteQueue.catch(() => undefined).then(async () => {
-    await mkdir(dirname(windowPreferencesPath), { recursive: true });
-    const temporaryPath = `${windowPreferencesPath}.${process.pid}.tmp`;
-    await writeFile(temporaryPath, content, "utf8");
-    await rename(temporaryPath, windowPreferencesPath);
-  });
-  return windowPreferencesWriteQueue;
+function currentWindowPreferences(): WindowPreferences {
+  return {
+    rememberSize: appPreferences.rememberWindowSize,
+    ...(appState.windowWidth !== undefined ? { width: appState.windowWidth } : {}),
+    ...(appState.windowHeight !== undefined ? { height: appState.windowHeight } : {}),
+  };
 }
 
 function isSupportedExcelPath(path: string): boolean {
@@ -301,9 +261,22 @@ async function validatePricePayload(value: unknown): Promise<Record<string, unkn
   if (outputDir !== undefined && (typeof outputDir !== "string" || !isAbsolute(outputDir) || outputDir.length > 32_767)) {
     throw new TypeError("核价输出目录必须是绝对路径");
   }
+  if (input.configPath !== undefined && (typeof input.configPath !== "string" || !isAbsolute(input.configPath))) {
+    throw new TypeError("业务配置必须是绝对路径");
+  }
+  const configDocument = await readConfigDocument(
+    typeof input.configPath === "string" ? input.configPath : undefined,
+  );
+  const configValidation = validateConfigContent(configDocument.content);
+  if (!configValidation.valid) {
+    throw new Error(
+      `配置校验失败：${configValidation.issues[0]?.path} ${configValidation.issues[0]?.message}`,
+    );
+  }
   return {
     ...input,
     files: normalizedFiles,
+    configPath: configDocument.path,
     ...(typeof outputDir === "string" ? { outputDir: resolve(outputDir) } : {}),
   };
 }
@@ -567,23 +540,11 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
       });
     }
   }
-  const runtime = config.runtime as Record<string, unknown> | undefined;
-  if (runtime) {
-    for (const key of ["recent_input_dir", "recent_output_dir", "recent_config_path"] as const) {
-      const value = runtime[key];
-      if (value !== undefined && typeof value !== "string") {
-        issues.push({ path: `runtime.${key}`, message: "必须是字符串" });
-      }
-    }
-    if (runtime.archive_standard_files !== undefined && typeof runtime.archive_standard_files !== "boolean") {
-      issues.push({ path: "runtime.archive_standard_files", message: "必须是布尔值" });
-    }
-    if (runtime.auto_reveal_manual_result !== undefined && typeof runtime.auto_reveal_manual_result !== "boolean") {
-      issues.push({ path: "runtime.auto_reveal_manual_result", message: "必须是布尔值" });
-    }
-    if (runtime.continuous_issue_review_enabled !== undefined && typeof runtime.continuous_issue_review_enabled !== "boolean") {
-      issues.push({ path: "runtime.continuous_issue_review_enabled", message: "必须是布尔值" });
-    }
+  if (Object.prototype.hasOwnProperty.call(config, "runtime")) {
+    issues.push({
+      path: "runtime",
+      message: "运行路径和界面偏好不属于业务规则，请在配置中心左侧设置",
+    });
   }
   return { valid: issues.length === 0, issues };
 }
@@ -627,7 +588,7 @@ async function saveConfigDocument(payload: unknown): Promise<ConfigDocument> {
     }
   }
   const document = await atomicWriteConfig(resolve(input.path), input.content);
-  await writeDefaultConfigPointer(document.path);
+  appState = await appSettingsStore.updateState({ activeBusinessConfigPath: document.path });
   return readConfigDocument(document.path);
 }
 
@@ -636,150 +597,35 @@ async function saveConfigDocumentAs(content: string): Promise<ConfigDocument | n
   if (!validation.valid) {
     throw new Error(`配置校验失败：${validation.issues[0]?.path} ${validation.issues[0]?.message}`);
   }
-  const runtime = await readRuntimeConfig();
   const result = await dialog.showSaveDialog({
-    defaultPath: runtime.recent_config_path ?? defaultExtractConfigPath,
+    defaultPath: appState.activeBusinessConfigPath || defaultExtractConfigPath,
     filters: [{ name: "JSON 配置", extensions: ["json"] }],
   });
   if (result.canceled || !result.filePath) return null;
   const document = await atomicWriteConfig(resolve(result.filePath), content);
-  await writeDefaultConfigPointer(document.path);
+  appState = await appSettingsStore.updateState({ activeBusinessConfigPath: document.path });
   return readConfigDocument(document.path);
 }
 
 async function restoreDefaultConfig(): Promise<ConfigDocument> {
   const current = await readConfigDocument();
   const bundledContent = await readFile(bundledDefaultConfigPath, "utf8");
-  const bundled = parseConfigContent(bundledContent);
-  bundled.runtime = {
-    ...runtimeFromConfig(bundled),
-    ...runtimeFromConfig(parseConfigContent(current.content)),
-    recent_config_path: current.path,
-  };
-  return atomicWriteConfig(current.path, JSON.stringify(bundled));
+  return atomicWriteConfig(current.path, bundledContent);
 }
 
 const persistTaskRecord = (record: TaskHistoryRecord): Promise<void> => taskHistoryStore.persistTaskRecord(record);
 const markInterruptedTasks = (): Promise<void> => taskHistoryStore.markInterruptedTasks();
 const getTaskHistorySummary = () => taskHistoryStore.getTaskHistorySummary();
 
-async function readConfigFile(configPath: string): Promise<Record<string, unknown>> {
-  const text = await readFile(configPath, "utf8");
-  return requireRecord(JSON.parse(text) as unknown, "配置文件根节点");
-}
-
-function runtimeFromConfig(config: Record<string, unknown>): RuntimeConfig {
-  const runtime = config.runtime;
-  if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
-    return {};
-  }
-  const input = runtime as Record<string, unknown>;
-  return {
-    ...(typeof input.recent_input_dir === "string" ? { recent_input_dir: input.recent_input_dir } : {}),
-    ...(typeof input.recent_output_dir === "string" ? { recent_output_dir: input.recent_output_dir } : {}),
-    ...(typeof input.recent_config_path === "string" ? { recent_config_path: input.recent_config_path } : {}),
-    ...(typeof input.archive_standard_files === "boolean"
-      ? { archive_standard_files: input.archive_standard_files }
-      : {}),
-    ...(typeof input.auto_reveal_manual_result === "boolean"
-      ? { auto_reveal_manual_result: input.auto_reveal_manual_result }
-      : {}),
-    ...(typeof input.continuous_issue_review_enabled === "boolean"
-      ? { continuous_issue_review_enabled: input.continuous_issue_review_enabled }
-      : {}),
-  };
-}
-
-async function readRuntimeFromConfig(configPath: string): Promise<RuntimeConfig> {
-  try {
-    return runtimeFromConfig(await readConfigFile(configPath));
-  } catch {
-    return {};
-  }
-}
-
 async function resolveActiveConfigPath(candidatePath?: string): Promise<string> {
   await ensureWritableConfig();
   if (candidatePath && (await pathExists(candidatePath))) {
     return candidatePath;
   }
-
-  const defaultRuntime = await readRuntimeFromConfig(defaultExtractConfigPath);
-  if (defaultRuntime.recent_config_path && (await pathExists(defaultRuntime.recent_config_path))) {
-    return defaultRuntime.recent_config_path;
+  if (appState.activeBusinessConfigPath && (await pathExists(appState.activeBusinessConfigPath))) {
+    return appState.activeBusinessConfigPath;
   }
-
   return defaultExtractConfigPath;
-}
-
-async function writeRuntimeToConfig(configPath: string, runtime: RuntimeConfig): Promise<void> {
-  const parsed = await readConfigFile(configPath);
-  parsed.runtime = runtime;
-  await writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
-}
-
-async function writeDefaultConfigPointer(configPath: string): Promise<void> {
-  if (configPath === defaultExtractConfigPath) {
-    return;
-  }
-  try {
-    const parsed = await readConfigFile(defaultExtractConfigPath);
-    parsed.runtime = {
-      ...runtimeFromConfig(parsed),
-      recent_config_path: configPath,
-    };
-    await writeFile(defaultExtractConfigPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
-  } catch {
-    // 选择的配置文件仍是权威入口；默认配置指针写入失败不影响本次运行。
-  }
-}
-
-async function readRuntimeConfig(): Promise<RuntimeConfig> {
-  const defaults: RuntimeConfig = {
-    recent_input_dir: "",
-    recent_output_dir: "",
-    recent_config_path: defaultExtractConfigPath,
-    archive_standard_files: false,
-    auto_reveal_manual_result: false,
-    continuous_issue_review_enabled: false,
-  };
-
-  try {
-    await ensureWritableConfig();
-    const defaultRuntime = await readRuntimeFromConfig(defaultExtractConfigPath);
-    const activeConfigPath = await resolveActiveConfigPath(defaultRuntime.recent_config_path);
-    const activeRuntime = await readRuntimeFromConfig(activeConfigPath);
-    return {
-      ...defaults,
-      ...defaultRuntime,
-      ...activeRuntime,
-      recent_config_path: activeConfigPath,
-    };
-  } catch {
-    // 兼容旧版本：如果提取配置读取失败，就尝试读取旧的运行配置文件。
-  }
-
-  try {
-    const text = await readFile(legacyRuntimeConfigPath, "utf8");
-    const legacyRuntime = JSON.parse(text) as RuntimeConfig;
-    const activeConfigPath = await resolveActiveConfigPath(legacyRuntime.recent_config_path);
-    return { ...defaults, ...legacyRuntime, recent_config_path: activeConfigPath };
-  } catch {
-    return defaults;
-  }
-}
-
-async function writeRuntimeConfig(nextConfig: RuntimeConfig): Promise<RuntimeConfig> {
-  const currentConfig = await readRuntimeConfig();
-  const activeConfigPath = await resolveActiveConfigPath(nextConfig.recent_config_path ?? currentConfig.recent_config_path);
-  const mergedConfig: RuntimeConfig = {
-    ...currentConfig,
-    ...nextConfig,
-    recent_config_path: activeConfigPath,
-  };
-  await writeRuntimeToConfig(activeConfigPath, mergedConfig);
-  await writeDefaultConfigPointer(activeConfigPath);
-  return mergedConfig;
 }
 
 async function appendRuntimeLogs(rows: RuntimeLogRow[]): Promise<void> {
@@ -929,8 +775,7 @@ async function clearOutputArtifacts(event: Electron.IpcMainInvokeEvent, outputDi
   }
 
   const resolvedOutputDir = resolve(outputDir);
-  const runtimeConfig = await readRuntimeConfig();
-  if (!runtimeConfig.recent_output_dir || !samePath(runtimeConfig.recent_output_dir, resolvedOutputDir)) {
+  if (!appState.recentOutputDirectory || !samePath(appState.recentOutputDirectory, resolvedOutputDir)) {
     throw new Error("拒绝清理未由用户选择的输出目录");
   }
   const removedDirs: string[] = [];
@@ -952,9 +797,8 @@ async function exportFileRows(event: Electron.IpcMainInvokeEvent, payload: Expor
   if (rows.length > 100_000) {
     throw new RangeError("单次导出文件不能超过 100000 个");
   }
-  const config = await readRuntimeConfig();
   const result = await dialog.showOpenDialog({
-    defaultPath: config.recent_output_dir,
+    defaultPath: appState.recentOutputDirectory,
     properties: ["openDirectory", "createDirectory"],
   });
   if (result.canceled || !result.filePaths[0]) {
@@ -980,7 +824,7 @@ async function exportFileRows(event: Electron.IpcMainInvokeEvent, payload: Expor
     const destinationPath = await nextAvailableCopyPath(destinationDir, sourceName);
     await copyFile(sourcePath, destinationPath);
   }
-  await writeRuntimeConfig({ recent_output_dir: destinationDir });
+  appState = await appSettingsStore.updateState({ recentOutputDirectory: destinationDir });
   return destinationDir;
 }
 
@@ -1003,7 +847,7 @@ async function nextAvailableCopyPath(directory: string, fileName: string): Promi
 }
 
 function createWindow(): void {
-  const initialSize = initialWindowSize(windowPreferences);
+  const initialSize = initialWindowSize(currentWindowPreferences());
   const mainWindow = new BrowserWindow({
     width: initialSize.width,
     height: initialSize.height,
@@ -1024,22 +868,28 @@ function createWindow(): void {
   let resizeSaveTimer: NodeJS.Timeout | undefined;
   let pendingWindowSize: WindowSize | undefined;
   mainWindow.on("resize", () => {
-    if (!windowPreferences.rememberSize || mainWindow.isMaximized() || mainWindow.isMinimized() || mainWindow.isFullScreen()) return;
+    if (!appPreferences.rememberWindowSize || mainWindow.isMaximized() || mainWindow.isMinimized() || mainWindow.isFullScreen()) return;
     const [width, height] = mainWindow.getSize();
     pendingWindowSize = { width, height };
     if (resizeSaveTimer) clearTimeout(resizeSaveTimer);
     resizeSaveTimer = setTimeout(() => {
       if (!pendingWindowSize) return;
-      windowPreferences = setRememberedWindowSize(windowPreferences, true, pendingWindowSize);
+      const next = setRememberedWindowSize(currentWindowPreferences(), true, pendingWindowSize);
       pendingWindowSize = undefined;
-      void writeWindowPreferences(windowPreferences).catch(() => undefined);
+      void appSettingsStore.updateState({
+        ...(next.width !== undefined ? { windowWidth: next.width } : {}),
+        ...(next.height !== undefined ? { windowHeight: next.height } : {}),
+      }).then((state) => { appState = state; }).catch(() => undefined);
     }, windowResizeSaveDelayMs);
   });
   mainWindow.on("closed", () => {
     if (resizeSaveTimer) clearTimeout(resizeSaveTimer);
-    if (windowPreferences.rememberSize && pendingWindowSize) {
-      windowPreferences = setRememberedWindowSize(windowPreferences, true, pendingWindowSize);
-      void writeWindowPreferences(windowPreferences).catch(() => undefined);
+    if (appPreferences.rememberWindowSize && pendingWindowSize) {
+      const next = setRememberedWindowSize(currentWindowPreferences(), true, pendingWindowSize);
+      void appSettingsStore.updateState({
+        ...(next.width !== undefined ? { windowWidth: next.width } : {}),
+        ...(next.height !== undefined ? { windowHeight: next.height } : {}),
+      }).then((state) => { appState = state; }).catch(() => undefined);
     }
   });
   mainWindow.once("ready-to-show", () => mainWindow.show());
@@ -1363,11 +1213,28 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   installContentSecurityPolicy();
   await markInterruptedTasks();
-  windowPreferences = await readWindowPreferences();
+  [appPreferences, appState] = await Promise.all([
+    appSettingsStore.readPreferences(),
+    appSettingsStore.readState(),
+  ]);
 
-  ipcMain.handle("app:get-runtime-config", (event) => {
+  ipcMain.handle("app:get-preferences", (event) => {
     requireTrustedIpc(event);
-    return readRuntimeConfig();
+    return appPreferences;
+  });
+  ipcMain.handle("app:set-preferences", async (event, payload: unknown) => {
+    requireTrustedIpc(event);
+    appPreferences = await appSettingsStore.updatePreferences(validateAppPreferencesUpdate(payload));
+    return appPreferences;
+  });
+  ipcMain.handle("app:get-state", (event) => {
+    requireTrustedIpc(event);
+    return appState;
+  });
+  ipcMain.handle("app:set-state", async (event, payload: unknown) => {
+    requireTrustedIpc(event);
+    appState = await appSettingsStore.updateState(validateAppStateUpdate(payload));
+    return appState;
   });
   ipcMain.handle("app:get-default-price-output-dir", (event) => {
     requireTrustedIpc(event);
@@ -1394,21 +1261,23 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("window:get-preferences", (event) => {
     requireTrustedIpc(event);
-    return windowPreferences;
+    return currentWindowPreferences();
   });
   ipcMain.handle("window:set-remember-size", async (event, rememberSize: unknown) => {
     requireTrustedIpc(event);
     if (typeof rememberSize !== "boolean") throw new TypeError("记住窗口大小选项必须是布尔值");
     const targetWindow = BrowserWindow.fromWebContents(event.sender);
-    const fallbackSize = initialWindowSize(windowPreferences);
+    const fallbackSize = initialWindowSize(currentWindowPreferences());
     const [width, height] = targetWindow?.getSize() ?? [fallbackSize.width, fallbackSize.height];
-    windowPreferences = setRememberedWindowSize(windowPreferences, rememberSize, { width, height });
-    await writeWindowPreferences(windowPreferences);
-    return windowPreferences;
-  });
-  ipcMain.handle("app:set-runtime-config", (event, payload: unknown) => {
-    requireTrustedIpc(event);
-    return writeRuntimeConfig(validateRuntimeConfigUpdate(payload));
+    const next = setRememberedWindowSize(currentWindowPreferences(), rememberSize, { width, height });
+    [appPreferences, appState] = await Promise.all([
+      appSettingsStore.updatePreferences({ rememberWindowSize: rememberSize }),
+      appSettingsStore.updateState({
+        ...(next.width !== undefined ? { windowWidth: next.width } : {}),
+        ...(next.height !== undefined ? { windowHeight: next.height } : {}),
+      }),
+    ]);
+    return currentWindowPreferences();
   });
   ipcMain.handle("config:get-document", (event, candidatePath?: unknown) => {
     requireTrustedIpc(event);
@@ -1709,7 +1578,11 @@ app.whenReady().then(async () => {
   ipcMain.handle("processor:start", (event, payload: unknown) => {
     requireTrustedIpc(event);
     processorActivity = "start";
-    sendProcessorCommand({ ...requireRecord(payload, "处理参数"), action: "start" });
+    sendProcessorCommand({
+      ...requireRecord(payload, "处理参数"),
+      archiveStandardFiles: appPreferences.archiveStandardFiles,
+      action: "start",
+    });
   });
   ipcMain.handle("processor:merge-summaries", (event, payload: unknown) => {
     requireTrustedIpc(event);
@@ -1878,40 +1751,37 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("dialog:select-directory", async (event, purpose: "input" | "output" = "input", persist = true) => {
     requireTrustedIpc(event);
-    const config = await readRuntimeConfig();
-    const configKey = purpose === "output" ? "recent_output_dir" : "recent_input_dir";
+    const configKey = purpose === "output" ? "recentOutputDirectory" : "recentInputDirectory";
     const result = await dialog.showOpenDialog({
-      defaultPath: config[configKey],
+      defaultPath: appState[configKey],
       properties: ["openDirectory"],
     });
     if (result.canceled || !result.filePaths[0]) {
       return null;
     }
     if (persist) {
-      await writeRuntimeConfig({ [configKey]: result.filePaths[0] });
+      appState = await appSettingsStore.updateState({ [configKey]: result.filePaths[0] });
     }
     return result.filePaths[0];
   });
   ipcMain.handle("dialog:select-excel-files", async (event) => {
     requireTrustedIpc(event);
-    const config = await readRuntimeConfig();
     const result = await dialog.showOpenDialog({
-      defaultPath: config.recent_input_dir,
+      defaultPath: appState.recentInputDirectory,
       filters: [{ name: "Excel 文件", extensions: ["xlsx", "xls", "xlsm", "xlsb"] }],
       properties: ["openFile", "multiSelections"],
     });
     if (result.canceled || result.filePaths.length === 0) {
       return null;
     }
-    await writeRuntimeConfig({ recent_input_dir: dirname(result.filePaths[0]) });
+    appState = await appSettingsStore.updateState({ recentInputDirectory: dirname(result.filePaths[0]) });
     return result.filePaths;
   });
 
   ipcMain.handle("dialog:select-config", async (event) => {
     requireTrustedIpc(event);
-    const config = await readRuntimeConfig();
     const result = await dialog.showOpenDialog({
-      defaultPath: config.recent_config_path,
+      defaultPath: appState.activeBusinessConfigPath,
       filters: [
         { name: "JSON 配置", extensions: ["json"] },
         { name: "所有文件", extensions: ["*"] },
@@ -1926,7 +1796,7 @@ app.whenReady().then(async () => {
     if (!validation.valid) {
       throw new Error(`配置校验失败：${validation.issues[0]?.path} ${validation.issues[0]?.message}`);
     }
-    await writeDefaultConfigPointer(selectedDocument.path);
+    appState = await appSettingsStore.updateState({ activeBusinessConfigPath: selectedDocument.path });
     return selectedDocument.path;
   });
 

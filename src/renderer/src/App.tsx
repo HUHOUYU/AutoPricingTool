@@ -70,6 +70,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useUIStore, type FileTab, type WorkbenchPage } from "@/stores/ui-store";
 import type { ExcelPreviewWorkbook } from "@/lib/excel-preview";
 import type {
+  AppPreferences,
+  AppState,
   ConfigDocument,
   DesktopAPI,
   PriceAnalysisCandidate,
@@ -79,7 +81,6 @@ import type {
   PricePreviewWritebackRow,
   PriceUnmatchedIssue,
   ProcessorEvent,
-  RuntimeConfig,
   TaskExecutionType,
   TaskIssueSummary,
 } from "../../preload";
@@ -995,17 +996,16 @@ export function App(): React.JSX.Element {
       return undefined;
     }
     let active = true;
-    void api
-      .getRuntimeConfig()
-      .then((config: RuntimeConfig) => {
+    void Promise.all([api.getAppPreferences(), api.getAppState()])
+      .then(([preferences, state]) => {
         if (!active) return;
-        setInputDir(config.recent_input_dir ?? "");
-        setOutputDir(config.recent_output_dir ?? "");
-        setConfigPath(config.recent_config_path ?? "");
-        setAutoRevealManualResult(config.auto_reveal_manual_result ?? false);
-        setContinuousIssueReviewEnabled(config.continuous_issue_review_enabled ?? false);
+        setInputDir(state.recentInputDirectory);
+        setOutputDir(state.recentOutputDirectory);
+        setConfigPath(state.activeBusinessConfigPath);
+        setAutoRevealManualResult(preferences.autoRevealManualResult);
+        setContinuousIssueReviewEnabled(preferences.continuousIssueReviewEnabled);
       })
-      .catch((error: unknown) => appendLog("读取运行配置失败：" + String(error), "warning"));
+      .catch((error: unknown) => appendLog("读取应用设置失败：" + String(error), "warning"));
     return () => {
       active = false;
     };
@@ -1360,7 +1360,7 @@ export function App(): React.JSX.Element {
     if (!api) return null;
     if (outputDir) return outputDir;
     try {
-      const configuredOutputDir = (await api.getRuntimeConfig()).recent_output_dir?.trim() ?? "";
+      const configuredOutputDir = (await api.getAppState()).recentOutputDirectory.trim();
       if (configuredOutputDir) {
         setOutputDir(configuredOutputDir);
         return configuredOutputDir;
@@ -1582,15 +1582,6 @@ export function App(): React.JSX.Element {
 
   const handleConfigDocumentSaved = async (document: ConfigDocument): Promise<void> => {
     setConfigPath(document.path);
-    try {
-      const runtime = await getDesktopAPI()?.getRuntimeConfig();
-      if (runtime) {
-        setAutoRevealManualResult(runtime.auto_reveal_manual_result ?? false);
-        setContinuousIssueReviewEnabled(runtime.continuous_issue_review_enabled ?? false);
-      }
-    } catch (error) {
-      appendLog("配置已保存，但界面偏好刷新失败：" + String(error), "warning");
-    }
     if (files.length === 0) return;
     if (isAnalyzing || isRunning) {
       appendLog("配置已保存；当前任务结束后请重新分析，使新配置应用到现有文件", "warning");
@@ -1601,6 +1592,14 @@ export function App(): React.JSX.Element {
     toast.info("配置已生效，正在重新分析已导入文件");
     await analyzeFiles(files, document.path);
   };
+
+  const handleAppSettingsChanged = useCallback((preferences: AppPreferences, state: AppState): void => {
+    setInputDir(state.recentInputDirectory);
+    setOutputDir(state.recentOutputDirectory);
+    setConfigPath(state.activeBusinessConfigPath);
+    setAutoRevealManualResult(preferences.autoRevealManualResult);
+    setContinuousIssueReviewEnabled(preferences.continuousIssueReviewEnabled);
+  }, []);
 
   const runPricing = async (
     targetFiles: string[] = actionFiles,
@@ -1676,7 +1675,7 @@ export function App(): React.JSX.Element {
       });
       batchIdRef.current = response.batchId;
       setBatchId(response.batchId);
-      if (outputDir) await api.setRuntimeConfig({ recent_output_dir: outputDir });
+      if (outputDir) await api.setAppState({ recentOutputDirectory: outputDir });
     } catch (error) {
       setIsRunning(false);
       const manualReview = manualIssueReviewRef.current;
@@ -3218,7 +3217,11 @@ export function App(): React.JSX.Element {
             </footer>
           </section>
           </> : activePage === "config" ? (
-            <ConfigCenterPage api={getDesktopAPI()} onDocumentSaved={handleConfigDocumentSaved} />
+            <ConfigCenterPage
+              api={getDesktopAPI()}
+              onDocumentSaved={handleConfigDocumentSaved}
+              onAppSettingsChanged={handleAppSettingsChanged}
+            />
           ) : activePage === "templates" ? (
             <TemplateManagementPage api={getDesktopAPI()} />
           ) : activePage === "logs" ? (

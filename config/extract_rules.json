@@ -1,12 +1,4 @@
 {
-  "runtime": {
-    "recent_input_dir": "C:\\Users\\Administrator\\Desktop\\要处理的文件",
-    "recent_output_dir": "C:\\Users\\Administrator\\Desktop\\输出目录",
-    "recent_config_path": "C:\\Users\\Administrator\\Desktop\\AutoPricingTool\\config\\extract_rules.json",
-    "archive_standard_files": false,
-    "auto_reveal_manual_result": false,
-    "continuous_issue_review_enabled": false
-  },
   "sheet_rules": {
     "header_scan_rows": 30,
     "data_sample_rows": 120,
@@ -50,20 +42,10 @@
       "单独发货价",
       "单独发货报价"
     ],
-    "sku_qty_pair_selection": "max_match_coverage",
-    "quantity_policy": "nearest",
-    "multiply_quantity_by_price": true,
-    "zero_price_is_valid": true,
-    "unavailable_price_tokens": [
-      "/",
-      "未核价",
-      "#VALUE!",
-      "#N/A"
-    ],
-    "output_sheets": [
-      "核价结果",
-      "核价异常",
-      "字段映射"
+    "single_shipment_matching_enabled": false,
+    "single_shipment_match_fields": [
+      "recipient_name",
+      "phone"
     ]
   },
   "fields": {},
@@ -172,6 +154,60 @@
         "negative_headers": [
           "Product shipping VAT tax"
         ]
+      },
+      "recipient_name": {
+        "header_aliases": [
+          "Name",
+          "收件人",
+          "收货人",
+          "收件人姓名",
+          "收货人姓名"
+        ]
+      },
+      "phone": {
+        "header_aliases": [
+          "Phone",
+          "Phone number",
+          "Telephone",
+          "Mobile",
+          "电话",
+          "联系电话",
+          "手机",
+          "手机号码",
+          "收件人电话"
+        ]
+      },
+      "postal_code": {
+        "header_aliases": [
+          "Zip code",
+          "Zipcode",
+          "Postal code",
+          "Postcode",
+          "Code",
+          "邮编",
+          "邮政编码"
+        ]
+      },
+      "address": {
+        "header_aliases": [
+          "Address",
+          "Address1",
+          "Address2",
+          "Street",
+          "Street address",
+          "地址",
+          "地址1",
+          "地址2",
+          "详细地址"
+        ]
+      },
+      "email": {
+        "header_aliases": [
+          "Email",
+          "BuyerEmail",
+          "收件人邮箱",
+          "邮箱"
+        ]
       }
     },
     "pricing": {
@@ -223,8 +259,8 @@
   "automation": {
     "auto_run": true,
     "coverage_threshold": 1,
-    "min_trial_rows": 50,
-    "candidate_score_gap": 2,
+    "min_trial_rows": 100000,
+    "candidate_score_gap": 0.01,
     "template_match_priority": true
   }
 }

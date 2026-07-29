@@ -31,14 +31,14 @@
     "processing_workbook_max_mb": 512,
     "processing_xml_entry_max_mb": 256,
     "processing_shared_strings_max_mb": 128,
-    "processing_max_rows": 400000,
+    "processing_max_rows": 1000000,
     "processing_workers": 0
   },
   "automation": {
     "auto_run": true,
     "template_match_priority": true,
     "coverage_threshold": 1,
-    "min_trial_rows": 20,
+    "min_trial_rows": 20000,
     "candidate_coverage_gap": 0.02,
     "candidate_score_gap": 5
   },
@@ -59,13 +59,6 @@
       "phone",
       "postal_code"
     ]
-  },
-  "runtime": {
-    "recent_input_dir": "",
-    "recent_output_dir": "",
-    "recent_config_path": "",
-    "archive_standard_files": false,
-    "auto_reveal_manual_result": false
   },
   "fields": {},
   "pricing_fields": {
@@ -186,19 +179,58 @@
         ]
       },
       "recipient_name": {
-        "header_aliases": ["Name", "收件人", "收货人", "收件人姓名", "收货人姓名"]
+        "header_aliases": [
+          "Name",
+          "收件人",
+          "收货人",
+          "收件人姓名",
+          "收货人姓名"
+        ]
       },
       "phone": {
-        "header_aliases": ["Phone", "Phone number", "Telephone", "Mobile", "电话", "联系电话", "手机", "手机号码", "收件人电话"]
+        "header_aliases": [
+          "Phone",
+          "Phone number",
+          "Telephone",
+          "Mobile",
+          "电话",
+          "联系电话",
+          "手机",
+          "手机号码",
+          "收件人电话"
+        ]
       },
       "postal_code": {
-        "header_aliases": ["Zip code", "Zipcode", "Postal code", "Postcode", "Code", "邮编", "邮政编码"]
+        "header_aliases": [
+          "Zip code",
+          "Zipcode",
+          "Postal code",
+          "Postcode",
+          "Code",
+          "邮编",
+          "邮政编码"
+        ]
       },
       "address": {
-        "header_aliases": ["Address", "Address1", "Address2", "Street", "Street address", "地址", "地址1", "地址2", "详细地址"]
+        "header_aliases": [
+          "Address",
+          "Address1",
+          "Address2",
+          "Street",
+          "Street address",
+          "地址",
+          "地址1",
+          "地址2",
+          "详细地址"
+        ]
       },
       "email": {
-        "header_aliases": ["Email", "BuyerEmail", "收件人邮箱", "邮箱"]
+        "header_aliases": [
+          "Email",
+          "BuyerEmail",
+          "收件人邮箱",
+          "邮箱"
+        ]
       }
     },
     "pricing": {
