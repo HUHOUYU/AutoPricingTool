@@ -1724,6 +1724,40 @@ html:not(.dark) .cyber-file-table th { background: #edf4fb; }
   padding: 0;
   place-items: center;
 }
+.ui-checkbox {
+  border-color: var(--cyber-border);
+  color: var(--primary-foreground);
+  background: var(--cyber-panel);
+  box-shadow: none;
+}
+.ui-checkbox:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cyber-primary) 72%, var(--cyber-border));
+}
+.ui-checkbox[data-state="checked"],
+.ui-checkbox[data-state="indeterminate"] {
+  border-color: var(--cyber-primary);
+  color: var(--primary-foreground);
+  background: var(--cyber-primary);
+}
+html.dark .ui-checkbox {
+  border-color: #71695f;
+  color: #fffaf6;
+  background: #2d2a25;
+}
+html.dark .ui-checkbox:hover:not(:disabled) {
+  border-color: var(--cyber-primary-bright);
+  background: #35312c;
+}
+html.dark .ui-checkbox[data-state="checked"],
+html.dark .ui-checkbox[data-state="indeterminate"] {
+  border-color: var(--cyber-primary-bright);
+  color: #211f1c;
+  background: var(--cyber-primary-bright);
+}
+html.dark .config-check input[type="checkbox"] {
+  color-scheme: dark;
+  accent-color: var(--cyber-primary);
+}
 .cyber-file-table .index-column { width: 64px !important; min-width: 64px; max-width: 64px; text-align: center; white-space: nowrap; }
 .cyber-file-table th.index-column button { justify-content: center; }
 .cyber-file-table .action-column { text-align: right; }
@@ -6205,6 +6239,11 @@ html.dark .issue-details-dialog {
   outline: 0;
   caret-color: var(--cyber-primary);
 }
+html.dark .excel-preview-row > span.is-editing-cell,
+html.dark .excel-preview-row > span.is-editing-cell input {
+  color: var(--cyber-text);
+  background: var(--cyber-panel-soft) !important;
+}
 .excel-preview-row.excel-preview-total-row { font-weight: 800; background: color-mix(in srgb, var(--cyber-primary) 8%, var(--cyber-panel)); box-shadow: inset 0 2px var(--cyber-primary); }
 .excel-preview-row.excel-preview-total-row > span.is-writeback-column { color: #000; background: #c9e5d5; }
 .excel-preview-header > span.is-pinned-column.is-mapped-column,
@@ -6219,6 +6258,26 @@ html.dark .issue-details-dialog {
 .excel-preview-row > span.is-pinned-column.is-writeback-column.has-writeback-value { background: #d8eee0; }
 .excel-preview-row > span.is-pinned-column.is-writeback-column.is-positive-difference,
 .excel-preview-row > span.is-pinned-column.is-writeback-column.is-mismatched-quantity { background: #ffc7ce; }
+html.dark .excel-preview-header > span.is-writeback-column,
+html.dark .excel-preview-row > span.is-writeback-column.has-writeback-value,
+html.dark .excel-preview-row > span.is-writeback-column.is-header-cell,
+html.dark .excel-preview-row > span.is-writeback-column.is-negative-difference,
+html.dark .excel-preview-header > span.is-pinned-column.is-writeback-column,
+html.dark .excel-preview-row > span.is-pinned-column.is-writeback-column.has-writeback-value {
+  color: #dceee3;
+  background: #294538;
+}
+html.dark .excel-preview-row > span.is-writeback-column.is-positive-difference,
+html.dark .excel-preview-row > span.is-writeback-column.is-mismatched-quantity,
+html.dark .excel-preview-row > span.is-pinned-column.is-writeback-column.is-positive-difference,
+html.dark .excel-preview-row > span.is-pinned-column.is-writeback-column.is-mismatched-quantity {
+  color: #ffd9d6;
+  background: #563033;
+}
+html.dark .excel-preview-row.excel-preview-total-row > span.is-writeback-column {
+  color: #e7f5ec;
+  background: #315343;
+}
 .excel-preview-header > span.is-active-column,
 .excel-preview-row > span.is-active-column { box-shadow: inset 2px 0 var(--cyber-primary), inset -2px 0 var(--cyber-primary); }
 .excel-preview-header > span.is-hover-column,
@@ -6229,6 +6288,10 @@ html.dark .issue-details-dialog {
 .excel-preview-row > span.is-header-cell.is-empty-header { color: var(--cyber-muted); font-weight: 600; font-style: italic; opacity: 0.85; }
 .excel-preview-row .excel-preview-row-number { cursor: pointer; }
 .excel-preview-row .excel-preview-row-number.is-matched-row:not(.is-header-row) { color: color-mix(in srgb, var(--success) 82%, var(--cyber-text)); background: #d8eee0; font-weight: 700; }
+html.dark .excel-preview-row .excel-preview-row-number.is-matched-row:not(.is-header-row) {
+  color: #a7dfbd;
+  background: #294538;
+}
 .excel-preview-row.is-unmatched-target-row > span { box-shadow: inset 0 2px var(--cyber-amber), inset 0 -2px var(--cyber-amber); }
 .excel-preview-row .excel-preview-row-number.is-unmatched-target { color: var(--cyber-text); background: color-mix(in srgb, var(--cyber-amber) 36%, var(--cyber-panel)); font-weight: 800; }
 .excel-preview-row .excel-preview-row-number.is-header-row { color: #ffffff; background: var(--cyber-primary); font-weight: 800; }
@@ -6303,6 +6366,10 @@ html.dark .issue-details-dialog {
 .excel-preview-legend i.is-price { background: #d8a74d; }
 .excel-preview-legend i.is-mapped { background: #4d9fd8; }
 .excel-preview-legend i.is-writeback { background: #d8eee0; border: 1px solid color-mix(in srgb, #6fbf8f 55%, transparent); }
+html.dark .excel-preview-legend i.is-writeback {
+  border-color: color-mix(in srgb, #7fc69a 58%, transparent);
+  background: #294538;
+}
 .excel-preview-legend i.is-alert { background: #ffc7ce; border: 1px solid color-mix(in srgb, #e07080 50%, transparent); }
 .excel-preview-legend i.is-matched-row { background: #d8eee0; border: 1px solid color-mix(in srgb, #2f9d6a 45%, transparent); border-radius: 999px; }
 .excel-preview-legend i.is-unmatched-row { background: color-mix(in srgb, var(--cyber-amber) 42%, var(--cyber-panel)); border: 1px solid color-mix(in srgb, var(--cyber-amber) 55%, transparent); border-radius: 999px; }
