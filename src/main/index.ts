@@ -43,6 +43,7 @@ import {
   validateAppPreferencesUpdate,
   validateAppStateUpdate,
 } from "./app-settings-store";
+import { resolveBundledDefaultConfigPath } from "./resource-paths";
 import {
   initialWindowSize,
   MIN_WINDOW_SIZE,
@@ -126,7 +127,7 @@ const resourceRootDir = app.isPackaged ? process.resourcesPath : rootDir;
 const writableRootDir = app.isPackaged ? app.getPath("userData") : rootDir;
 const portableRootDir =
   app.isPackaged && process.env.PORTABLE_EXECUTABLE_DIR ? process.env.PORTABLE_EXECUTABLE_DIR : dirname(process.execPath);
-const bundledDefaultConfigPath = join(resourceRootDir, "defaults", "extract_rules.json");
+const bundledDefaultConfigPath = resolveBundledDefaultConfigPath(resourceRootDir, app.isPackaged);
 const defaultExtractConfigPath = join(writableRootDir, "config", "extract_rules.json");
 const runtimeLogPath = join(writableRootDir, "runtime", "logs", "app.log");
 const taskHistoryPath = join(writableRootDir, "runtime", "task-history.jsonl");
