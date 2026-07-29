@@ -81,7 +81,8 @@
   --radius: 0.625rem;
 }
 
-.dark {
+/* Portal 弹层挂载在 body 下；提高根主题变量优先级，避免后续浅色 :root 声明覆盖。 */
+:root.dark {
   --background: #211f1c;
   --foreground: #f2eee7;
   --card: #25231f;
