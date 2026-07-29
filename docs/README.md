@@ -98,6 +98,7 @@ pnpm run dist:win
 AutoPricingTool/
   config/extract_rules.json     # 开发态默认可写配置
   resources/defaults/           # 打包时随程序发布的不可变默认配置
+  src/main/app-settings-store.ts # 本机偏好与运行状态持久化
   processor-rust/src/pricing.rs # 核价核心
   processor-rust/src/pricing_writer.rs # 原工作簿写回
   src/main/                     # Electron 主进程
@@ -110,8 +111,9 @@ AutoPricingTool/
 
 打包运行时，首次启动会把发布默认配置复制到
 `%APPDATA%\auto-pricing-tool\config\extract_rules.json`；如果该文件已经存在，
-程序不会用新安装包中的默认配置覆盖它。配置路径、最近输入输出目录等运行状态
-以当前激活的可写配置为准。
+程序不会用新安装包中的默认配置覆盖它。本机偏好保存到 `preferences.json`，
+当前业务配置路径、最近输入输出目录和窗口尺寸保存到 `state.json`，不会写入
+业务规则文件。
 
 ## 文档防漂移约定
 
