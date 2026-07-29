@@ -941,7 +941,7 @@ mod tests {
             }
           },
           "output": {
-            "max_sku_groups": 1
+            "extracted_sku_group_limit": 1
           }
         }"##;
         fs::write(path, config_text)?;

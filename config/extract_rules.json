@@ -5,21 +5,24 @@
     "sample_column_scan_limit": 180,
     "empty_gap_limit": 20,
     "preferred_sheet_names": [
-      "order",
-      "Cost"
+      "Cost",
+      "order_1",
+      "orders_export",
+      "Order",
+      "order_",
+      "Sheet1",
+      "Sheet2",
+      "Sheet4",
+      "核价"
     ]
   },
   "sheet_selection": {
     "sequential_numeric_header_penalty": 500,
     "reject_header_keywords": [
       "Dropshipping price",
-      "Product Description",
-      "Photos",
       "Payment Way",
       "Picture",
-      "Item No.",
-      "Item  No",
-      "Client No."
+      "Item No."
     ]
   },
   "performance": {
@@ -28,8 +31,16 @@
     "processing_workbook_max_mb": 512,
     "processing_xml_entry_max_mb": 256,
     "processing_shared_strings_max_mb": 128,
-    "processing_max_rows": 400000,
-    "processing_workers": 11
+    "processing_max_rows": 1000000,
+    "processing_workers": 0
+  },
+  "automation": {
+    "auto_run": true,
+    "template_match_priority": true,
+    "coverage_threshold": 1,
+    "min_trial_rows": 20000,
+    "candidate_coverage_gap": 0.02,
+    "candidate_score_gap": 5
   },
   "pricing": {
     "country_identity": [
@@ -45,7 +56,8 @@
     "single_shipment_matching_enabled": false,
     "single_shipment_match_fields": [
       "recipient_name",
-      "phone"
+      "phone",
+      "postal_code"
     ]
   },
   "fields": {},
@@ -53,52 +65,60 @@
     "order": {
       "order_number": {
         "header_aliases": [
-          "Order number-PY",
           "Order number",
           "订单号",
-          "店铺单号"
+          "订单编号",
+          "业务订单号",
+          "平台订单号",
+          "平台单号",
+          "子订单号",
+          "Sub order number",
+          "Platform order",
+          "Order ID",
+          "Order No.",
+          "Name",
+          "Order"
         ],
         "value_patterns": [
-          "^[A-Za-z]+[0-9]+(?:#[0-9]+)?$",
-          "^(?:[A-Za-z][A-Za-z0-9-]*[0-9][A-Za-z0-9-]*|[0-9][A-Za-z0-9-]*[A-Za-z][A-Za-z0-9-]*)$"
+          "(?i)^(?:#?[a-z0-9]+(?:[-_][a-z0-9]+)+|#?\\d{4,})$"
         ]
       },
       "country_code": {
         "header_aliases": [
-          "收货国家二字码",
           "国家二字码",
-          "Country",
-          "Shipping Country",
-          "Shipping: Country",
-          "Country/Region"
+          "国家代码",
+          "Country code",
+          "ISO",
+          "Country"
         ],
         "value_patterns": [
-          "^[A-Z]{2}$"
+          "(?i)^[a-z]{2}$"
         ]
       },
       "country_english": {
         "header_aliases": [
+          "Country/Region",
+          "Shipping Country",
           "Country",
-          "收货国家名称",
+          "英文国家名",
           "收货人国家",
-          "国家",
-          "Shipping: Country"
+          "配送国家"
         ],
         "value_patterns": [
-          "^[A-Z][A-Za-z\\s\\-()]{3,}$"
+          "(?i)^[a-z][a-z .'-]{2,}$"
         ],
         "negative_patterns": [
-          "^[A-Z]{2}$"
+          "(?i)^[a-z]{2}$"
         ]
       },
       "country_chinese": {
         "header_aliases": [
-          "Country",
-          "国家",
-          "国家中文",
-          "收货人国家中文",
           "中文国家名",
-          "国家名中文"
+          "中文国家",
+          "国家中文",
+          "目的国家",
+          "收货国家",
+          "国家"
         ],
         "value_patterns": [
           "[\\u4e00-\\u9fff]"
@@ -106,11 +126,12 @@
       },
       "sku": {
         "header_aliases": [
-          "SKU",
           "核价SKU",
           "Line: SKU",
-          "SKU 1",
+          "Product's SKU (sales number)",
+          "SKU",
           "Item No.",
+          "货号",
           "产品编码",
           "商品编码"
         ],
@@ -129,16 +150,13 @@
       },
       "quantity": {
         "header_aliases": [
-          "Qty",
           "Quantity",
+          "Qty",
           "数量",
-          "产品数量",
           "产品总数",
+          "商品总数",
           "Total number of products",
-          "Line: Fulfillable Quantity",
-          "Lineitem quantity",
-          "导单数量",
-          "核价Qty"
+          "Lineitem quantity"
         ],
         "value_patterns": [
           "^\\d+(?:\\.0+)?$"
@@ -149,7 +167,12 @@
           "TOTAL Price",
           "Total price",
           "Price",
-          "Cost"
+          "Cost",
+          "价格",
+          "售价",
+          "原价",
+          "订单金额",
+          "销售金额"
         ],
         "negative_headers": [
           "Product shipping VAT tax"
@@ -215,7 +238,11 @@
         "header_aliases": [
           "Item No.",
           "Item number",
-          "SKU"
+          "核价SKU",
+          "SKU",
+          "货号",
+          "产品编码",
+          "商品编码"
         ],
         "value_patterns": [
           "(?i)^[a-z0-9][a-z0-9+._-]{2,}$"
@@ -227,18 +254,22 @@
           "国家",
           "Country code",
           "国家代码",
-          "国家二字码"
+          "国家二字码",
+          "配送国家"
         ],
         "value_patterns": [
           "(?i)^(?:[a-z]{2}|[a-z][a-z .'-]{2,}|.*[\\u4e00-\\u9fff].*)$"
         ]
       },
-      "fixed_price": {
+      "quantity_one_price": {
         "header_aliases": [
           "Product shipping VAT tax",
           "Shipping VAT tax",
           "Price",
-          "Cost"
+          "Cost",
+          "价格",
+          "核价",
+          "单价"
         ],
         "negative_headers": [
           "Shipping Country"
@@ -250,17 +281,8 @@
     }
   },
   "output": {
-    "max_sku_groups": 3,
-    "summary_flush_files": 60,
-    "summary_flush_rows": 100000,
-    "manifest_flush_files": 150,
-    "manifest_flush_seconds": 60
-  },
-  "automation": {
-    "auto_run": true,
-    "coverage_threshold": 1,
-    "min_trial_rows": 100000,
-    "candidate_score_gap": 0.01,
-    "template_match_priority": true
+    "extracted_sku_group_limit": 3,
+    "summary_buffer_file_limit": 60,
+    "summary_buffer_row_limit": 100000
   }
 }

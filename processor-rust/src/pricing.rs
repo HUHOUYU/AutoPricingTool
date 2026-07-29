@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 const ORDER_HEADER_SCAN_ROWS: usize = 30;
 const PRICE_HEADER_SCAN_ROWS: usize = 24;
 const PRICE_TIER_LOOKAHEAD_ROWS: usize = 2;
-const FIXED_PRICE_QUANTITY: i64 = 1;
+const QUANTITY_ONE_PRICE_QUANTITY: i64 = 1;
 const HEADER_EXACT_SCORE: i32 = 300;
 const HEADER_CONTAINS_SCORE: i32 = 160;
 const HEADER_ALIAS_ORDER_STEP: i32 = 1;
@@ -106,7 +106,7 @@ const PRICE_ALIASES: &[&str] = &[
     "单价",
     "销售价",
 ];
-const FIXED_PRICE_ALIASES: &[&str] = &["productshippingvattax", "shippingvattax"];
+const QUANTITY_ONE_PRICE_ALIASES: &[&str] = &["productshippingvattax", "shippingvattax"];
 const ORDER_TAX_ALIASES: &[&str] = &["EU TAX"];
 const PRICE_DIFFERENCE_ZERO_EPSILON: f64 = 1e-9;
 const SINGLE_SHIPMENT_FIELD_ALIASES: &[&str] =
@@ -2264,30 +2264,31 @@ fn infer_pricing_candidate_with_config(
                 (!tiers.is_empty()).then_some((row_idx, tiers))
             })
             .max_by_key(|(row_idx, tiers)| (tiers.len(), std::cmp::Reverse(*row_idx)));
-        let fixed_price_column = best_fixed_price_column(
+        let quantity_one_price_column = best_quantity_one_price_column(
             sheet,
             header_idx,
-            pricing_field_rule(config, "fixed_price"),
+            quantity_one_price_rule(config),
             [sku_column, country_column]
                 .into_iter()
                 .flatten()
                 .collect::<HashSet<_>>(),
         );
-        let (quantity_header_row, tiers, fixed_price) = if let Some((row_idx, tiers)) = tier_row {
-            ((row_idx != header_idx).then_some(row_idx + 1), tiers, false)
-        } else if let Some(column) = fixed_price_column {
-            (
-                None,
-                vec![PriceTierColumn {
-                    quantity: FIXED_PRICE_QUANTITY,
-                    column: column + 1,
-                    header: header[column].text(),
-                }],
-                true,
-            )
-        } else {
-            (None, Vec::new(), false)
-        };
+        let (quantity_header_row, tiers, quantity_one_price) =
+            if let Some((row_idx, tiers)) = tier_row {
+                ((row_idx != header_idx).then_some(row_idx + 1), tiers, false)
+            } else if let Some(column) = quantity_one_price_column {
+                (
+                    None,
+                    vec![PriceTierColumn {
+                        quantity: QUANTITY_ONE_PRICE_QUANTITY,
+                        column: column + 1,
+                        header: header[column].text(),
+                    }],
+                    true,
+                )
+            } else {
+                (None, Vec::new(), false)
+            };
         if sku_column.is_none() || country_column.is_none() || tiers.is_empty() {
             continue;
         }
@@ -2312,8 +2313,8 @@ fn infer_pricing_candidate_with_config(
                 "跳过空白行识别数量档位".to_string()
             });
         }
-        if fixed_price {
-            notes.push("使用固定单价列作为数量 1 档位".to_string());
+        if quantity_one_price {
+            notes.push("使用单列价格作为数量 1 档位".to_string());
         }
         if tiers.iter().any(|tier| tier.quantity == 0) {
             notes.push("数量档位包含 0，按有效档位处理".to_string());
@@ -2504,7 +2505,7 @@ fn best_pricing_country_column(
         .map(|(_, _, column)| column)
 }
 
-fn best_fixed_price_column(
+fn best_quantity_one_price_column(
     sheet: &SheetData,
     header_idx: usize,
     rule: Option<&FieldRule>,
@@ -2517,7 +2518,7 @@ fn best_fixed_price_column(
         .filter(|(column, _)| !excluded.contains(column))
         .filter_map(|(column, cell)| {
             let value = cell.text();
-            let header_score = configured_header_score(&value, rule, FIXED_PRICE_ALIASES)
+            let header_score = configured_header_score(&value, rule, QUANTITY_ONE_PRICE_ALIASES)
                 .max(configured_header_score(&value, rule, PRICE_ALIASES));
             if header_score <= 0 {
                 return None;
@@ -2645,6 +2646,11 @@ fn order_field_rule<'a>(config: &'a Config, name: &str) -> Option<&'a FieldRule>
 
 fn pricing_field_rule<'a>(config: &'a Config, name: &str) -> Option<&'a FieldRule> {
     config.pricing_fields.pricing.get(name)
+}
+
+fn quantity_one_price_rule(config: &Config) -> Option<&FieldRule> {
+    pricing_field_rule(config, "quantity_one_price")
+        .or_else(|| pricing_field_rule(config, "fixed_price"))
 }
 
 fn configured_matching_columns(
@@ -5376,7 +5382,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
     }
 
     #[test]
-    fn pricing_candidate_supports_fixed_unit_price_column() {
+    fn pricing_candidate_supports_quantity_one_price_column() {
         let sheet = SheetData {
             name: "price".to_string(),
             rows: vec![
@@ -5446,7 +5452,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
     }
 
     #[test]
-    fn fixed_price_index_requires_the_same_full_sku() {
+    fn quantity_one_price_index_requires_the_same_full_sku() {
         let sheet = SheetData {
             name: "price".to_string(),
             rows: vec![
@@ -5478,6 +5484,43 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         let lookup = index.lookup("US", "CORDLESSSNOWBLOWER", 1);
         assert_eq!(lookup.status, "SKU不存在");
         assert_eq!(index.lookup("US", "QY2600223", 1).price, Some(112.0));
+    }
+
+    #[test]
+    fn quantity_one_price_rule_prefers_new_name_and_supports_legacy_name() {
+        let mut config = Config::default();
+        config.pricing_fields.pricing.insert(
+            "fixed_price".to_string(),
+            FieldRule {
+                header_aliases: vec!["旧名称".to_string()],
+                ..FieldRule::default()
+            },
+        );
+        config.pricing_fields.pricing.insert(
+            "quantity_one_price".to_string(),
+            FieldRule {
+                header_aliases: vec!["新名称".to_string()],
+                ..FieldRule::default()
+            },
+        );
+
+        assert_eq!(
+            quantity_one_price_rule(&config)
+                .and_then(|rule| rule.header_aliases.first())
+                .map(String::as_str),
+            Some("新名称")
+        );
+
+        config
+            .pricing_fields
+            .pricing
+            .shift_remove("quantity_one_price");
+        assert_eq!(
+            quantity_one_price_rule(&config)
+                .and_then(|rule| rule.header_aliases.first())
+                .map(String::as_str),
+            Some("旧名称")
+        );
     }
 
     #[test]

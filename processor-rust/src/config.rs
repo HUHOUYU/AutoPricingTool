@@ -28,7 +28,7 @@ const PRICING_ORDER_FIELD_KEYS: &[&str] = &[
     "address",
     "email",
 ];
-const PRICING_TABLE_FIELD_KEYS: &[&str] = &["sku", "country", "fixed_price"];
+const PRICING_TABLE_FIELD_KEYS: &[&str] = &["sku", "country", "quantity_one_price", "fixed_price"];
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct Config {
@@ -327,20 +327,29 @@ pub(crate) struct PricingFieldRules {
 
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct OutputRules {
-    #[serde(default = "default_max_sku_groups")]
-    pub(crate) max_sku_groups: usize,
-    #[serde(default = "default_summary_flush_files")]
-    pub(crate) summary_flush_files: usize,
-    #[serde(default = "default_summary_flush_rows")]
-    pub(crate) summary_flush_rows: usize,
+    #[serde(
+        default = "default_extracted_sku_group_limit",
+        alias = "max_sku_groups"
+    )]
+    pub(crate) extracted_sku_group_limit: usize,
+    #[serde(
+        default = "default_summary_buffer_file_limit",
+        alias = "summary_flush_files"
+    )]
+    pub(crate) summary_buffer_file_limit: usize,
+    #[serde(
+        default = "default_summary_buffer_row_limit",
+        alias = "summary_flush_rows"
+    )]
+    pub(crate) summary_buffer_row_limit: usize,
 }
 
 impl Default for OutputRules {
     fn default() -> Self {
         Self {
-            max_sku_groups: default_max_sku_groups(),
-            summary_flush_files: default_summary_flush_files(),
-            summary_flush_rows: default_summary_flush_rows(),
+            extracted_sku_group_limit: default_extracted_sku_group_limit(),
+            summary_buffer_file_limit: default_summary_buffer_file_limit(),
+            summary_buffer_row_limit: default_summary_buffer_row_limit(),
         }
     }
 }
@@ -445,15 +454,15 @@ fn default_year() -> i32 {
     2026
 }
 
-fn default_max_sku_groups() -> usize {
+fn default_extracted_sku_group_limit() -> usize {
     2
 }
 
-fn default_summary_flush_files() -> usize {
+fn default_summary_buffer_file_limit() -> usize {
     50
 }
 
-fn default_summary_flush_rows() -> usize {
+fn default_summary_buffer_row_limit() -> usize {
     100_000
 }
 
@@ -676,8 +685,31 @@ mod tests {
 
         let config = load_config(&path).expect("checked-in extraction config must be valid");
         assert!(config.pricing_fields.order.contains_key("sku"));
-        assert!(config.pricing_fields.pricing.contains_key("fixed_price"));
+        assert!(
+            config
+                .pricing_fields
+                .pricing
+                .contains_key("quantity_one_price")
+        );
         assert_eq!(config.pricing.country_identity.len(), 3);
+    }
+
+    #[test]
+    fn legacy_output_names_remain_compatible() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "output": {
+                    "max_sku_groups": 3,
+                    "summary_flush_files": 60,
+                    "summary_flush_rows": 100000
+                }
+            }"#,
+        )
+        .expect("legacy output names must remain compatible");
+
+        assert_eq!(config.output.extracted_sku_group_limit, 3);
+        assert_eq!(config.output.summary_buffer_file_limit, 60);
+        assert_eq!(config.output.summary_buffer_row_limit, 100_000);
     }
 
     #[test]

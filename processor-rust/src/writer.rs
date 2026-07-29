@@ -106,8 +106,8 @@ impl SummaryWriter {
             pending_row_count: 0,
             next_row: 1,
             column_count: headers.len(),
-            flush_files: config.output.summary_flush_files.max(1),
-            flush_rows: config.output.summary_flush_rows.max(1),
+            flush_files: config.output.summary_buffer_file_limit.max(1),
+            flush_rows: config.output.summary_buffer_row_limit.max(1),
         })
     }
 
@@ -286,7 +286,7 @@ fn output_headers(config: &Config) -> Vec<String> {
         output_header(config, "country_en", "收货国家名称"),
         output_header(config, "country_cn", "收货人国家中文"),
     ];
-    for index in 1..=config.output.max_sku_groups {
+    for index in 1..=config.output.extracted_sku_group_limit {
         headers.push(format!("SKU{index}"));
         headers.push(format!("Qty{index}"));
     }
@@ -336,7 +336,7 @@ fn records_to_rows(records: &[Record], config: &Config) -> Vec<Vec<CellValue>> {
                 record.values.get("country_en").cloned().unwrap_or_default(),
                 record.values.get("country_cn").cloned().unwrap_or_default(),
             ];
-            for index in 0..config.output.max_sku_groups {
+            for index in 0..config.output.extracted_sku_group_limit {
                 let (sku, qty) = record
                     .sku_pairs
                     .get(index)

@@ -112,7 +112,7 @@ const PRICING_ORDER_FIELD_KEYS = new Set([
   "price",
   ...SINGLE_SHIPMENT_MATCH_FIELDS,
 ]);
-const PRICING_TABLE_FIELD_KEYS = new Set(["sku", "country", "fixed_price"]);
+const PRICING_TABLE_FIELD_KEYS = new Set(["sku", "country", "quantity_one_price", "fixed_price"]);
 const UNSUPPORTED_PRICING_FIELDS = [
   "sku_qty_pair_selection",
   "quantity_policy",

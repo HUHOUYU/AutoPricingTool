@@ -1039,7 +1039,7 @@ fn sku_pair_columns(
             sku_column: sku.column,
             qty_column,
         });
-        if pair_columns.len() >= config.output.max_sku_groups {
+        if pair_columns.len() >= config.output.extracted_sku_group_limit {
             break;
         }
     }
@@ -1362,7 +1362,7 @@ mod tests {
             }
           },
           "output": {
-            "max_sku_groups": 1
+            "extracted_sku_group_limit": 1
           }
         }"#;
         fs::write(path, config_text)?;
@@ -1412,7 +1412,7 @@ mod tests {
             }
           },
           "output": {
-            "max_sku_groups": 1
+            "extracted_sku_group_limit": 1
           }
         }"#;
         fs::write(path, config_text)?;
@@ -1528,7 +1528,7 @@ mod tests {
             }
           },
           "output": {
-            "max_sku_groups": 3
+            "extracted_sku_group_limit": 3
           }
         }"#;
         fs::write(path, config_text)?;
@@ -1867,7 +1867,7 @@ mod tests {
             }
           },
           "output": {
-            "max_sku_groups": 1
+            "extracted_sku_group_limit": 1
           }
         }"#;
         fs::write(&config_path, config_text)?;
