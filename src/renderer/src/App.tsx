@@ -111,6 +111,10 @@ type RegisterPathsOptions = {
   replaceBatch?: boolean;
 };
 
+type AnalyzeFilesOptions = {
+  preserveExisting?: boolean;
+};
+
 type LogEntry = {
   id: number;
   time: string;
@@ -120,6 +124,20 @@ type LogEntry = {
 
 type FileStatus = "pending" | "running" | "ready" | "success" | "warning" | "error";
 type DotStatus = FileStatus;
+type IssueReviewTab = Extract<FileTab, "confirm" | "error">;
+
+type ManualIssueReviewContext = {
+  path: string;
+  preferredTab: IssueReviewTab;
+  phase: "analysis" | "run";
+  outcome?: "completed" | "failed";
+};
+
+type ManualIssueReviewResolution = {
+  path: string;
+  preferredTab: IssueReviewTab;
+  outcome: "completed" | "failed" | "unresolved";
+};
 
 type ProgressDot = {
   path: string;
@@ -744,8 +762,10 @@ export function App(): React.JSX.Element {
   const [outputDir, setOutputDir] = useState("");
   const [configPath, setConfigPath] = useState("");
   const [autoRevealManualResult, setAutoRevealManualResult] = useState(false);
+  const [continuousIssueReviewEnabled, setContinuousIssueReviewEnabled] = useState(false);
   const [pendingResultRevealPath, setPendingResultRevealPath] = useState<string | null>(null);
   const [highlightedResultPath, setHighlightedResultPath] = useState<string | null>(null);
+  const [manualIssueReviewResolution, setManualIssueReviewResolution] = useState<ManualIssueReviewResolution | null>(null);
   const { activeTab, setActiveTab, activePage, setActivePage, theme, toggleTheme, sidebarCollapsed, toggleSidebar } = useUIStore();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -794,12 +814,15 @@ export function App(): React.JSX.Element {
   const detailDrawerCustomWidthRef = useRef(false);
   const detailDrawerWidthRef = useRef(detailDrawerWidth);
   const analysesRef = useRef<Record<string, PriceAnalysisFile>>({});
+  const resultsRef = useRef<Record<string, FileResult>>({});
   const mappingsRef = useRef<Record<string, PriceCheckMapping>>({});
   const writebackEditsRef = useRef<Record<string, PricePreviewWritebackRow[]>>({});
   const cellEditsRef = useRef<Record<string, PricePreviewCellEdit[]>>({});
   const confirmedPathsRef = useRef<Set<string>>(new Set());
   const resultRevealHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRunRequestedRef = useRef(false);
+  const autoRunTargetPathsRef = useRef<string[]>([]);
+  const manualIssueReviewRef = useRef<ManualIssueReviewContext | null>(null);
   const userTabLockedRef = useRef(false);
   const batchTaskWasActiveRef = useRef(false);
   const batchIdRef = useRef<string | null>(null);
@@ -816,6 +839,16 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     setIssueDetailsRequest(null);
   }, [detailPath]);
+
+  useEffect(() => {
+    resultsRef.current = results;
+  }, [results]);
+
+  useEffect(() => {
+    if (continuousIssueReviewEnabled) return;
+    manualIssueReviewRef.current = null;
+    setManualIssueReviewResolution(null);
+  }, [continuousIssueReviewEnabled]);
 
   useEffect(() => {
     setDetailContentReady(false);
@@ -970,6 +1003,7 @@ export function App(): React.JSX.Element {
         setOutputDir(config.recent_output_dir ?? "");
         setConfigPath(config.recent_config_path ?? "");
         setAutoRevealManualResult(config.auto_reveal_manual_result ?? false);
+        setContinuousIssueReviewEnabled(config.continuous_issue_review_enabled ?? false);
       })
       .catch((error: unknown) => appendLog("读取运行配置失败：" + String(error), "warning"));
     return () => {
@@ -1093,8 +1127,16 @@ export function App(): React.JSX.Element {
           message: event.message,
           completedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
         };
+        resultsRef.current = { ...resultsRef.current, [event.path]: result };
         setResults((current) => ({ ...current, [event.path]: result }));
-        if (autoRevealManualResult && confirmedPathsRef.current.has(event.path)) {
+        const manualReview = manualIssueReviewRef.current;
+        const isContinuousManualReview = continuousIssueReviewEnabled
+          && manualReview?.phase === "run"
+          && manualReview.path === event.path;
+        if (isContinuousManualReview && manualReview) {
+          manualReview.outcome = event.status;
+        }
+        if (autoRevealManualResult && confirmedPathsRef.current.has(event.path) && !isContinuousManualReview) {
           setActiveTab(event.status === "completed" ? "success" : "error");
           setPendingResultRevealPath(event.path);
         }
@@ -1118,11 +1160,43 @@ export function App(): React.JSX.Element {
         if (event.mode === "analysis") {
           setIsAnalyzing(false);
           setIsPaused(false);
+          const manualReview = manualIssueReviewRef.current;
+          if (manualReview?.phase === "analysis") {
+            if (event.stopped) {
+              manualIssueReviewRef.current = null;
+              setManualIssueReviewResolution({
+                path: manualReview.path,
+                preferredTab: manualReview.preferredTab,
+                outcome: "unresolved",
+              });
+            } else {
+              const decision = analysesRef.current[manualReview.path]?.automationDecision.status;
+              if (decision === "eligible") {
+                manualReview.phase = "run";
+              } else {
+                manualIssueReviewRef.current = null;
+                setManualIssueReviewResolution({
+                  path: manualReview.path,
+                  preferredTab: manualReview.preferredTab,
+                  outcome: "unresolved",
+                });
+              }
+            }
+          }
           appendLog(event.stopped ? "分析已停止" : "分析完成，请检查待确认文件", event.stopped ? "warning" : "success");
           if (!event.stopped) setAnalysisCompletedToken((current) => current + 1);
         } else {
           setIsRunning(false);
           setIsPaused(false);
+          const manualReview = manualIssueReviewRef.current;
+          if (manualReview?.phase === "run") {
+            manualIssueReviewRef.current = null;
+            setManualIssueReviewResolution({
+              path: manualReview.path,
+              preferredTab: manualReview.preferredTab,
+              outcome: !event.stopped && manualReview.outcome === "completed" ? "completed" : "failed",
+            });
+          }
           setProgress((current) => event.stopped
             ? { ...current, path: "" }
             : { ...current, current: current.total, phase: "run", path: "" });
@@ -1187,10 +1261,19 @@ export function App(): React.JSX.Element {
         setIsRunning(false);
         setIsPaused(false);
         setActivePath("");
+        const manualReview = manualIssueReviewRef.current;
+        if (manualReview) {
+          manualIssueReviewRef.current = null;
+          setManualIssueReviewResolution({
+            path: manualReview.path,
+            preferredTab: manualReview.preferredTab,
+            outcome: "failed",
+          });
+        }
         appendLog(event.userMessage ?? event.message, "error");
       }
     },
-    [appendLog, autoRevealManualResult, sendMappingValidation, setActiveTab],
+    [appendLog, autoRevealManualResult, continuousIssueReviewEnabled, sendMappingValidation, setActiveTab],
   );
 
   useEffect(() => {
@@ -1249,9 +1332,13 @@ export function App(): React.JSX.Element {
     setMatchedOrderRowsBySheet({});
     setDetailPreviewWorkbook(null);
     setActiveMappingTarget(null);
+    resultsRef.current = {};
     setResults({});
     setExpandedPath(null);
     setDetailPath(null);
+    manualIssueReviewRef.current = null;
+    setManualIssueReviewResolution(null);
+    autoRunTargetPathsRef.current = [];
     setProgress({ current: 0, total: 0, phase: "", path: "" });
     setPageIndex(0);
     setActivePath("");
@@ -1438,6 +1525,7 @@ export function App(): React.JSX.Element {
   const analyzeFiles = async (
     targetFiles: string[] = actionFiles,
     configPathOverride?: string,
+    options: AnalyzeFilesOptions = {},
   ): Promise<void> => {
     const api = getDesktopAPI();
     if (!api || targetFiles.length === 0 || isAnalyzing || isRunning) return;
@@ -1445,27 +1533,30 @@ export function App(): React.JSX.Element {
     setIsAnalyzing(true);
     setActiveTab("pending");
     setActivePath("");
-    analysesRef.current = {};
-    mappingsRef.current = {};
-    writebackEditsRef.current = {};
-    cellEditsRef.current = {};
-    mappingValidationVersionsRef.current = {};
-    priceRowValidationVersionsRef.current = {};
-    pendingMappingValidationRef.current = null;
-    mappingValidationInFlightRef.current = false;
-    activeMappingValidationRef.current = null;
-    if (mappingValidationTimerRef.current) clearTimeout(mappingValidationTimerRef.current);
-    setAnalyses({});
-    setMappings({});
-    setWritebackEdits({});
-    setCellEdits({});
-    setMappingValidations({});
-    setMatchedOrderRowsBySheet({});
-    setDetailPreviewWorkbook(null);
-    setActiveMappingTarget(null);
-    setResults({});
-    setExpandedPath(null);
-    confirmedPathsRef.current = new Set();
+    if (!options.preserveExisting) {
+      analysesRef.current = {};
+      mappingsRef.current = {};
+      writebackEditsRef.current = {};
+      cellEditsRef.current = {};
+      mappingValidationVersionsRef.current = {};
+      priceRowValidationVersionsRef.current = {};
+      pendingMappingValidationRef.current = null;
+      mappingValidationInFlightRef.current = false;
+      activeMappingValidationRef.current = null;
+      if (mappingValidationTimerRef.current) clearTimeout(mappingValidationTimerRef.current);
+      setAnalyses({});
+      setMappings({});
+      setWritebackEdits({});
+      setCellEdits({});
+      setMappingValidations({});
+      setMatchedOrderRowsBySheet({});
+      setDetailPreviewWorkbook(null);
+      setActiveMappingTarget(null);
+      resultsRef.current = {};
+      setResults({});
+      setExpandedPath(null);
+      confirmedPathsRef.current = new Set();
+    }
     setProgress({ current: 0, total: targetFiles.length, phase: "analyze", path: "" });
     appendLog("开始分析 " + targetFiles.length + " 个文件");
     try {
@@ -1476,12 +1567,30 @@ export function App(): React.JSX.Element {
       });
     } catch (error) {
       setIsAnalyzing(false);
+      const manualReview = manualIssueReviewRef.current;
+      if (manualReview?.phase === "analysis" && manualReview.path === targetFiles[0]) {
+        manualIssueReviewRef.current = null;
+        setManualIssueReviewResolution({
+          path: manualReview.path,
+          preferredTab: manualReview.preferredTab,
+          outcome: "failed",
+        });
+      }
       appendLog("提交分析失败：" + String(error), "error");
     }
   };
 
   const handleConfigDocumentSaved = async (document: ConfigDocument): Promise<void> => {
     setConfigPath(document.path);
+    try {
+      const runtime = await getDesktopAPI()?.getRuntimeConfig();
+      if (runtime) {
+        setAutoRevealManualResult(runtime.auto_reveal_manual_result ?? false);
+        setContinuousIssueReviewEnabled(runtime.continuous_issue_review_enabled ?? false);
+      }
+    } catch (error) {
+      appendLog("配置已保存，但界面偏好刷新失败：" + String(error), "warning");
+    }
     if (files.length === 0) return;
     if (isAnalyzing || isRunning) {
       appendLog("配置已保存；当前任务结束后请重新分析，使新配置应用到现有文件", "warning");
@@ -1530,6 +1639,9 @@ export function App(): React.JSX.Element {
     setIsAnalyzing(false);
     setIsRunning(true);
     setIsPaused(false);
+    const nextResults = { ...resultsRef.current };
+    for (const path of runnableFiles) delete nextResults[path];
+    resultsRef.current = nextResults;
     setResults((current) => {
       const next = { ...current };
       for (const path of runnableFiles) delete next[path];
@@ -1567,6 +1679,15 @@ export function App(): React.JSX.Element {
       if (outputDir) await api.setRuntimeConfig({ recent_output_dir: outputDir });
     } catch (error) {
       setIsRunning(false);
+      const manualReview = manualIssueReviewRef.current;
+      if (manualReview?.phase === "run" && runnableFiles.includes(manualReview.path)) {
+        manualIssueReviewRef.current = null;
+        setManualIssueReviewResolution({
+          path: manualReview.path,
+          preferredTab: manualReview.preferredTab,
+          outcome: "failed",
+        });
+      }
       appendLog("提交核价失败：" + String(error), "error");
     }
   };
@@ -1621,7 +1742,10 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     if (analysisCompletedToken === 0 || !autoRunRequestedRef.current) return;
     autoRunRequestedRef.current = false;
-    const analyzedFiles = files.filter((path) => analysesRef.current[path]);
+    const requestedPaths = autoRunTargetPathsRef.current;
+    autoRunTargetPathsRef.current = [];
+    const requestedSet = new Set(requestedPaths);
+    const analyzedFiles = files.filter((path) => analysesRef.current[path] && (requestedSet.size === 0 || requestedSet.has(path)));
     const eligibleFiles = analyzedFiles.filter((path) => analysesRef.current[path]?.automationDecision.status === "eligible");
     const confirmCount = analyzedFiles.filter((path) => analysesRef.current[path]?.automationDecision.status === "confirm").length;
     const errorCount = analyzedFiles.filter((path) => analysesRef.current[path]?.automationDecision.status === "error").length;
@@ -1752,6 +1876,10 @@ export function App(): React.JSX.Element {
     activeMappingValidationRef.current = null;
     if (mappingValidationTimerRef.current) clearTimeout(mappingValidationTimerRef.current);
     confirmedPathsRef.current = new Set();
+    resultsRef.current = {};
+    manualIssueReviewRef.current = null;
+    setManualIssueReviewResolution(null);
+    autoRunTargetPathsRef.current = [];
     userTabLockedRef.current = false;
     batchTaskWasActiveRef.current = false;
     setResetConfirmOpen(false);
@@ -1879,12 +2007,18 @@ export function App(): React.JSX.Element {
       return;
     }
     confirmedPathsRef.current.add(path);
+    if (continuousIssueReviewEnabled) {
+      manualIssueReviewRef.current = { path, preferredTab: "confirm", phase: "run" };
+    }
     setDetailPath(null);
     toast.success("映射已确认，开始处理当前文件");
     await runPricing([path], "manual");
   };
 
   const retryAnalysis = async (path: string): Promise<void> => {
+    if (continuousIssueReviewEnabled) {
+      manualIssueReviewRef.current = { path, preferredTab: "error", phase: "analysis" };
+    }
     setDetailPath(null);
     const nextWritebackEdits = { ...writebackEditsRef.current };
     delete nextWritebackEdits[path];
@@ -1931,7 +2065,8 @@ export function App(): React.JSX.Element {
     confirmedPathsRef.current.delete(path);
     setActiveTab("pending");
     autoRunRequestedRef.current = true;
-    await analyzeFiles([path]);
+    autoRunTargetPathsRef.current = [path];
+    await analyzeFiles([path], undefined, { preserveExisting: true });
   };
 
   const fileStatusByPath = useMemo<Record<string, FileStatus>>(
@@ -2338,6 +2473,57 @@ export function App(): React.JSX.Element {
     setDetailPath(path);
   };
 
+  useEffect(() => {
+    if (!manualIssueReviewResolution) return;
+    const { path, preferredTab, outcome } = manualIssueReviewResolution;
+    const currentStatus = fileStatusByPath[path];
+    const currentTab = currentStatus ? tabForStatus(currentStatus) : preferredTab;
+    const currentStillNeedsReview = currentTab === "confirm" || currentTab === "error";
+
+    let targetPath: string | null = null;
+    let targetTab: IssueReviewTab | null = null;
+    if (outcome === "failed") {
+      targetPath = path;
+      targetTab = "error";
+    } else if (outcome !== "completed" || currentStillNeedsReview) {
+      targetPath = path;
+      targetTab = currentStillNeedsReview ? currentTab : preferredTab;
+    } else {
+      const currentIndex = files.indexOf(path);
+      const orderedPaths = currentIndex < 0
+        ? files
+        : [...files.slice(currentIndex + 1), ...files.slice(0, currentIndex)];
+      const findInTab = (tab: IssueReviewTab): string | undefined =>
+        orderedPaths.find((candidate) => tabForStatus(fileStatusByPath[candidate]) === tab);
+      const alternateTab: IssueReviewTab = preferredTab === "confirm" ? "error" : "confirm";
+      targetPath = findInTab(preferredTab) ?? findInTab(alternateTab) ?? null;
+      targetTab = targetPath
+        ? tabForStatus(fileStatusByPath[targetPath]) as IssueReviewTab
+        : null;
+    }
+
+    setManualIssueReviewResolution(null);
+    if (!targetPath || !targetTab) {
+      if (outcome === "completed" && autoRevealManualResult) {
+        setActiveTab("success");
+        setPendingResultRevealPath(path);
+      }
+      return;
+    }
+
+    userTabLockedRef.current = true;
+    setActiveTab(targetTab);
+    const targetFiles = files.filter((candidate) => tabForStatus(fileStatusByPath[candidate]) === targetTab);
+    const targetIndex = targetFiles.indexOf(targetPath);
+    setPageIndex(targetIndex < 0 ? 0 : Math.floor(targetIndex / pageSize));
+    openDetailDrawer(targetPath);
+    setHighlightedResultPath(targetPath);
+    if (resultRevealHighlightTimerRef.current) clearTimeout(resultRevealHighlightTimerRef.current);
+    resultRevealHighlightTimerRef.current = setTimeout(() => {
+      setHighlightedResultPath((current) => current === targetPath ? null : current);
+    }, RESULT_REVEAL_HIGHLIGHT_MS);
+  }, [autoRevealManualResult, fileStatusByPath, files, manualIssueReviewResolution, pageSize, setActiveTab]);
+
   // 批次从运行中结束时：自动切到有结果的 Tab，单文件待确认则打开详情
   useEffect(() => {
     if (isTaskActive) {
@@ -2395,6 +2581,7 @@ export function App(): React.JSX.Element {
           userTabLockedRef.current = false;
           if (needsAnalysis) {
             autoRunRequestedRef.current = true;
+            autoRunTargetPathsRef.current = unfinishedFiles;
             void analyzeFiles(unfinishedFiles);
           } else {
             void runPricing(unfinishedFiles, "retry");
@@ -2471,6 +2658,7 @@ export function App(): React.JSX.Element {
     const needsAnalysis = actionFiles.some((path) => !analysesRef.current[path] && !analyses[path]);
     if (needsAnalysis) {
       autoRunRequestedRef.current = true;
+      autoRunTargetPathsRef.current = actionFiles;
       await analyzeFiles(actionFiles);
     }
     else await runPricing(actionFiles);

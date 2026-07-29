@@ -869,6 +869,174 @@ describe("AutoPricingTool cyber workstation", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "完成2" })).toHaveClass("is-active"));
   });
 
+  it("continuously opens confirmation files before falling back to abnormal files", async () => {
+    const api = createDesktopAPI();
+    api.getRuntimeConfig = vi.fn(async () => ({
+      recent_output_dir: "C:\\output",
+      recent_config_path: "C:\\config.json",
+      auto_reveal_manual_result: true,
+      continuous_issue_review_enabled: true,
+    }));
+    api.listExcelFiles = vi.fn(async () => ({
+      files: [
+        "C:\\orders\\first.xlsx",
+        "C:\\orders\\second.xlsx",
+        "C:\\orders\\abnormal.xlsx",
+      ],
+      skippedTemporary: 0,
+      skippedUnsupported: 0,
+      skippedOutput: 0,
+    }));
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    fireEvent.click(screen.getByRole("switch", { name: "导入模式：单文件" }));
+    fireEvent.doubleClick(document.querySelector(".cyber-dropzone")!);
+    expect(await screen.findByText("first.xlsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
+
+    const firstAnalysis = createAnalysis("C:\\orders\\first.xlsx");
+    firstAnalysis.fileName = "first.xlsx";
+    firstAnalysis.requiresConfirmation = true;
+    firstAnalysis.automationDecision = { ...firstAnalysis.automationDecision, status: "confirm", reasons: ["需要确认"] };
+    const secondAnalysis = createAnalysis("C:\\orders\\second.xlsx");
+    secondAnalysis.fileName = "second.xlsx";
+    secondAnalysis.requiresConfirmation = true;
+    secondAnalysis.automationDecision = { ...secondAnalysis.automationDecision, status: "confirm", reasons: ["需要确认"] };
+    const abnormalAnalysis = createAnalysis("C:\\orders\\abnormal.xlsx");
+    abnormalAnalysis.fileName = "abnormal.xlsx";
+    abnormalAnalysis.requiresConfirmation = true;
+    abnormalAnalysis.automationDecision = { ...abnormalAnalysis.automationDecision, status: "error", reasons: ["分析异常"] };
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: firstAnalysis });
+      api.emit({ type: "price-analysis", file: secondAnalysis });
+      api.emit({ type: "price-analysis", file: abnormalAnalysis });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "待确认2" }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "详情" }))[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "确认并处理此文件" }));
+    await waitFor(() => expect(api.runPriceCheck).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      api.emit({ type: "price-file-result", path: "C:\\orders\\first.xlsx", status: "completed", totalRows: 20, matchedRows: 20, exceptionRows: 0 });
+      api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ path: "C:\\orders\\first.xlsx", totalRows: 20, matchedRows: 20, exceptionRows: 0 }] });
+    });
+
+    let detailDialog = await screen.findByRole("dialog", { name: "文件处理详情" });
+    expect(within(detailDialog).getByText("second.xlsx")).toBeInTheDocument();
+    fireEvent.click(await within(detailDialog).findByRole("button", { name: "确认并处理此文件" }));
+    await waitFor(() => expect(api.runPriceCheck).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      api.emit({ type: "price-file-result", path: "C:\\orders\\second.xlsx", status: "completed", totalRows: 20, matchedRows: 20, exceptionRows: 0 });
+      api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ path: "C:\\orders\\second.xlsx", totalRows: 20, matchedRows: 20, exceptionRows: 0 }] });
+    });
+
+    detailDialog = await screen.findByRole("dialog", { name: "文件处理详情" });
+    expect(within(detailDialog).getByText("abnormal.xlsx")).toBeInTheDocument();
+    expect(within(detailDialog).getByRole("button", { name: "重新分析此文件" })).toBeInTheDocument();
+    expect(useUIStore.getState().activeTab).toBe("error");
+  });
+
+  it("stops continuous review on the current file when manual pricing fails", async () => {
+    const api = createDesktopAPI();
+    api.getRuntimeConfig = vi.fn(async () => ({
+      recent_output_dir: "C:\\output",
+      recent_config_path: "C:\\config.json",
+      continuous_issue_review_enabled: true,
+    }));
+    api.listExcelFiles = vi.fn(async () => ({
+      files: ["C:\\orders\\failed.xlsx", "C:\\orders\\next.xlsx"],
+      skippedTemporary: 0,
+      skippedUnsupported: 0,
+      skippedOutput: 0,
+    }));
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    fireEvent.click(screen.getByRole("switch", { name: "导入模式：单文件" }));
+    fireEvent.doubleClick(document.querySelector(".cyber-dropzone")!);
+    expect(await screen.findByText("failed.xlsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
+
+    const failedAnalysis = createAnalysis("C:\\orders\\failed.xlsx");
+    failedAnalysis.fileName = "failed.xlsx";
+    failedAnalysis.requiresConfirmation = true;
+    failedAnalysis.automationDecision = { ...failedAnalysis.automationDecision, status: "confirm", reasons: ["需要确认"] };
+    const nextAnalysis = createAnalysis("C:\\orders\\next.xlsx");
+    nextAnalysis.fileName = "next.xlsx";
+    nextAnalysis.requiresConfirmation = true;
+    nextAnalysis.automationDecision = { ...nextAnalysis.automationDecision, status: "confirm", reasons: ["需要确认"] };
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: failedAnalysis });
+      api.emit({ type: "price-analysis", file: nextAnalysis });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "待确认2" }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "详情" }))[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "确认并处理此文件" }));
+    await act(async () => {
+      api.emit({ type: "price-file-result", path: "C:\\orders\\failed.xlsx", status: "failed", message: "核价失败" });
+      api.emit({ type: "price-done", mode: "run", stopped: false, files: [] });
+    });
+
+    const detailDialog = await screen.findByRole("dialog", { name: "文件处理详情" });
+    expect(within(detailDialog).getByText("failed.xlsx")).toBeInTheDocument();
+    expect(within(detailDialog).queryByText("next.xlsx")).not.toBeInTheDocument();
+    expect(useUIStore.getState().activeTab).toBe("error");
+  });
+
+  it("reopens the current abnormal file when manual reanalysis remains unresolved", async () => {
+    const api = createDesktopAPI();
+    api.getRuntimeConfig = vi.fn(async () => ({
+      recent_output_dir: "C:\\output",
+      recent_config_path: "C:\\config.json",
+      continuous_issue_review_enabled: true,
+    }));
+    api.listExcelFiles = vi.fn(async () => ({
+      files: ["C:\\orders\\current-error.xlsx", "C:\\orders\\next-error.xlsx"],
+      skippedTemporary: 0,
+      skippedUnsupported: 0,
+      skippedOutput: 0,
+    }));
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    fireEvent.click(screen.getByRole("switch", { name: "导入模式：单文件" }));
+    fireEvent.doubleClick(document.querySelector(".cyber-dropzone")!);
+    expect(await screen.findByText("current-error.xlsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
+
+    const currentAnalysis = createAnalysis("C:\\orders\\current-error.xlsx");
+    currentAnalysis.fileName = "current-error.xlsx";
+    currentAnalysis.requiresConfirmation = true;
+    currentAnalysis.automationDecision = { ...currentAnalysis.automationDecision, status: "error", reasons: ["分析异常"] };
+    const nextAnalysis = createAnalysis("C:\\orders\\next-error.xlsx");
+    nextAnalysis.fileName = "next-error.xlsx";
+    nextAnalysis.requiresConfirmation = true;
+    nextAnalysis.automationDecision = { ...nextAnalysis.automationDecision, status: "error", reasons: ["分析异常"] };
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: currentAnalysis });
+      api.emit({ type: "price-analysis", file: nextAnalysis });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "异常2" }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "详情" }))[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "重新分析此文件" }));
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: currentAnalysis });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+
+    const detailDialog = await screen.findByRole("dialog", { name: "文件处理详情" });
+    expect(within(detailDialog).getByText("current-error.xlsx")).toBeInTheDocument();
+    expect(within(detailDialog).queryByText("next-error.xlsx")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "异常2" })).toBeInTheDocument();
+    expect(useUIStore.getState().activeTab).toBe("error");
+  });
+
   it("keeps the confirmation tab active after a manual file result by default", async () => {
     const api = createDesktopAPI();
     installAPI(api);
@@ -2080,6 +2248,10 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(revealSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(revealSwitch);
     expect(revealSwitch).toHaveAttribute("aria-checked", "true");
+    const continuousReviewSwitch = screen.getByRole("switch", { name: "连续处理问题文件" });
+    expect(continuousReviewSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(continuousReviewSwitch);
+    expect(continuousReviewSwitch).toHaveAttribute("aria-checked", "true");
     const singleShipmentSwitch = screen.getByRole("switch", { name: "启用单独发货价格匹配" });
     const recipientNameField = screen.getByRole("checkbox", { name: "收件人姓名" });
     const phoneField = screen.getByRole("checkbox", { name: "电话" });
@@ -2098,6 +2270,7 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(source.value).toContain('"processing_workers": 4');
     expect(source.value).toContain('"template_match_priority": true');
     expect(source.value).toContain('"auto_reveal_manual_result": true');
+    expect(source.value).toContain('"continuous_issue_review_enabled": true');
     expect(source.value).toContain('"single_shipment_matching_enabled": true');
     expect(source.value).toContain('"single_shipment_match_fields"');
     expect(source.value).not.toContain('"postal_code"');
