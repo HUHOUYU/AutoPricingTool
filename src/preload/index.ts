@@ -43,6 +43,7 @@ export type RuntimeConfig = {
   recent_config_path?: string;
   archive_standard_files?: boolean;
   auto_reveal_manual_result?: boolean;
+  continuous_issue_review_enabled?: boolean;
 };
 
 export type WindowPreferences = {

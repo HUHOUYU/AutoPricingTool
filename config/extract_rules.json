@@ -4,7 +4,8 @@
     "recent_output_dir": "C:\\Users\\Administrator\\Desktop\\输出目录",
     "recent_config_path": "C:\\Users\\Administrator\\Desktop\\AutoPricingTool\\config\\extract_rules.json",
     "archive_standard_files": false,
-    "auto_reveal_manual_result": false
+    "auto_reveal_manual_result": false,
+    "continuous_issue_review_enabled": false
   },
   "sheet_rules": {
     "header_scan_rows": 30,

@@ -46,6 +46,7 @@ type RuntimeConfig = {
   recent_config_path?: string;
   archive_standard_files?: boolean;
   auto_reveal_manual_result?: boolean;
+  continuous_issue_review_enabled?: boolean;
 };
 
 type ExportFileRowsPayload = {
@@ -209,6 +210,12 @@ function validateRuntimeConfigUpdate(value: unknown): RuntimeConfig {
       throw new TypeError("运行配置字段 auto_reveal_manual_result 必须是布尔值");
     }
     result.auto_reveal_manual_result = input.auto_reveal_manual_result;
+  }
+  if (input.continuous_issue_review_enabled !== undefined) {
+    if (typeof input.continuous_issue_review_enabled !== "boolean") {
+      throw new TypeError("运行配置字段 continuous_issue_review_enabled 必须是布尔值");
+    }
+    result.continuous_issue_review_enabled = input.continuous_issue_review_enabled;
   }
   return result;
 }
@@ -574,6 +581,9 @@ function validateConfigContent(content: string): { valid: boolean; issues: Confi
     if (runtime.auto_reveal_manual_result !== undefined && typeof runtime.auto_reveal_manual_result !== "boolean") {
       issues.push({ path: "runtime.auto_reveal_manual_result", message: "必须是布尔值" });
     }
+    if (runtime.continuous_issue_review_enabled !== undefined && typeof runtime.continuous_issue_review_enabled !== "boolean") {
+      issues.push({ path: "runtime.continuous_issue_review_enabled", message: "必须是布尔值" });
+    }
   }
   return { valid: issues.length === 0, issues };
 }
@@ -674,6 +684,9 @@ function runtimeFromConfig(config: Record<string, unknown>): RuntimeConfig {
     ...(typeof input.auto_reveal_manual_result === "boolean"
       ? { auto_reveal_manual_result: input.auto_reveal_manual_result }
       : {}),
+    ...(typeof input.continuous_issue_review_enabled === "boolean"
+      ? { continuous_issue_review_enabled: input.continuous_issue_review_enabled }
+      : {}),
   };
 }
 
@@ -728,6 +741,7 @@ async function readRuntimeConfig(): Promise<RuntimeConfig> {
     recent_config_path: defaultExtractConfigPath,
     archive_standard_files: false,
     auto_reveal_manual_result: false,
+    continuous_issue_review_enabled: false,
   };
 
   try {

@@ -270,6 +270,17 @@ export function ConfigCenterPage({ api, onDocumentSaved }: ConfigCenterPageProps
                 ><i /></button>
               </div>
               <div className="config-switch-row">
+                <span><strong>连续处理问题文件</strong><small>人工处理成功后，自动打开下一个待确认或异常文件</small></span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="连续处理问题文件"
+                  aria-checked={Boolean(runtime.continuous_issue_review_enabled)}
+                  className="config-switch"
+                  onClick={() => updateField("runtime", "continuous_issue_review_enabled", !Boolean(runtime.continuous_issue_review_enabled))}
+                ><i /></button>
+              </div>
+              <div className="config-switch-row">
                 <span><strong>记住窗口大小</strong><small>开启后记录当前宽高，下次启动时自动恢复</small></span>
                 <button
                   type="button"
