@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } from "electron";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { access, appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, appendFile, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { availableParallelism, userInfo } from "node:os";
@@ -44,6 +44,8 @@ import {
   validateAppStateUpdate,
 } from "./app-settings-store";
 import { resolveBundledDefaultConfigPath } from "./resource-paths";
+import { createConfigDocumentService } from "./config-document-service";
+import { samePath } from "./path-utils";
 import {
   initialWindowSize,
   MIN_WINDOW_SIZE,
@@ -63,18 +65,6 @@ type RuntimeLogRow = {
   message: string;
 };
 
-type ConfigValidationIssue = {
-  path: string;
-  message: string;
-};
-
-type ConfigDocument = {
-  path: string;
-  content: string;
-  modifiedAt: number;
-  isDefault: boolean;
-};
-
 type HeaderTemplateFieldMapping = {
   fieldKey: string;
   label: string;
@@ -92,35 +82,6 @@ type HeaderTemplateRecord = {
   filePath: string;
   mappings: HeaderTemplateFieldMapping[];
 };
-
-const SINGLE_SHIPMENT_MATCH_FIELDS = new Set([
-  "recipient_name",
-  "phone",
-  "postal_code",
-  "address",
-  "email",
-]);
-const DEFAULT_SINGLE_SHIPMENT_MATCH_FIELDS = ["recipient_name", "phone", "postal_code"];
-const PRICING_ORDER_FIELD_KEYS = new Set([
-  "order_number",
-  "country_code",
-  "country_english",
-  "country_chinese",
-  "sku",
-  "product_name",
-  "quantity",
-  "price",
-  ...SINGLE_SHIPMENT_MATCH_FIELDS,
-]);
-const PRICING_TABLE_FIELD_KEYS = new Set(["sku", "country", "quantity_one_price", "fixed_price"]);
-const UNSUPPORTED_PRICING_FIELDS = [
-  "sku_qty_pair_selection",
-  "quantity_policy",
-  "multiply_quantity_by_price",
-  "zero_price_is_valid",
-  "unavailable_price_tokens",
-  "output_sheets",
-] as const;
 
 const rootDir = resolve(__dirname, "../..");
 const resourceRootDir = app.isPackaged ? process.resourcesPath : rootDir;
@@ -176,6 +137,31 @@ let activeTaskRemainingFiles = 0;
 let activeTaskExecutionType: TaskExecutionType = "automatic";
 let appPreferences: AppPreferences = { ...DEFAULT_APP_PREFERENCES };
 let appState: AppState = defaultAppState(defaultExtractConfigPath);
+const configDocuments = createConfigDocumentService({
+  bundledDefaultConfigPath,
+  defaultConfigPath: defaultExtractConfigPath,
+  getActiveConfigPath: () => appState.activeBusinessConfigPath,
+  maxProcessingWorkers: maxConfiguredProcessingWorkers,
+  selectSavePath: async (defaultPath) => {
+    const result = await dialog.showSaveDialog({
+      defaultPath,
+      filters: [{ name: "JSON 配置", extensions: ["json"] }],
+    });
+    return result.canceled || !result.filePath ? null : result.filePath;
+  },
+  setActiveConfigPath: async (path) => {
+    appState = await appSettingsStore.updateState({ activeBusinessConfigPath: path });
+  },
+});
+const {
+  ensureWritableConfig,
+  readDocument: readConfigDocument,
+  resolveActiveConfigPath,
+  restoreDefault: restoreDefaultConfig,
+  saveDocument: saveConfigDocument,
+  saveDocumentAs: saveConfigDocumentAs,
+  validate: validateConfigContent,
+} = configDocuments;
 
 type ProcessorCommand = Record<string, unknown> & {
   action: string;
@@ -190,14 +176,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new TypeError(`${label}必须是对象`);
   }
   return value as Record<string, unknown>;
-}
-
-function samePath(left: string, right: string): boolean {
-  const leftPath = resolve(left);
-  const rightPath = resolve(right);
-  return process.platform === "win32"
-    ? leftPath.toLowerCase() === rightPath.toLowerCase()
-    : leftPath === rightPath;
 }
 
 function currentWindowPreferences(): WindowPreferences {
@@ -328,15 +306,6 @@ function installContentSecurityPolicy(): void {
   });
 }
 
-async function ensureWritableConfig(): Promise<void> {
-  await mkdir(dirname(defaultExtractConfigPath), { recursive: true });
-  try {
-    await access(defaultExtractConfigPath);
-  } catch {
-    await copyFile(bundledDefaultConfigPath, defaultExtractConfigPath);
-  }
-}
-
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -393,241 +362,9 @@ function parseHeaderTemplateMappings(value: unknown): HeaderTemplateFieldMapping
   });
 }
 
-function parseConfigContent(content: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content) as unknown;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "JSON 格式无效";
-    throw new SyntaxError(message);
-  }
-  return requireRecord(parsed, "配置文件根节点");
-}
-
-function validateConfigContent(content: string): { valid: boolean; issues: ConfigValidationIssue[] } {
-  const issues: ConfigValidationIssue[] = [];
-  let config: Record<string, unknown>;
-  try {
-    config = parseConfigContent(content);
-  } catch (error) {
-    return {
-      valid: false,
-      issues: [{ path: "$", message: error instanceof Error ? error.message : "JSON 格式无效" }],
-    };
-  }
-
-  const objectSections = ["sheet_rules", "sheet_selection", "performance", "automation", "pricing", "pricing_fields", "runtime", "fields", "output"];
-  for (const key of objectSections) {
-    const value = config[key];
-    if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
-      issues.push({ path: key, message: "必须是对象" });
-    }
-  }
-
-  const pricingFields = config.pricing_fields as Record<string, unknown> | undefined;
-  if (pricingFields) {
-    for (const section of ["order", "pricing"] as const) {
-      const fields = pricingFields[section];
-      if (fields !== undefined && (!fields || typeof fields !== "object" || Array.isArray(fields))) {
-        issues.push({ path: `pricing_fields.${section}`, message: "必须是对象" });
-        continue;
-      }
-      const allowedKeys = section === "order" ? PRICING_ORDER_FIELD_KEYS : PRICING_TABLE_FIELD_KEYS;
-      for (const key of Object.keys((fields ?? {}) as Record<string, unknown>)) {
-        if (!allowedKeys.has(key)) {
-          issues.push({
-            path: `pricing_fields.${section}.${key}`,
-            message: "当前处理器不读取该字段",
-          });
-        }
-      }
-    }
-  }
-
-  const performance = config.performance as Record<string, unknown> | undefined;
-  if (performance) {
-    for (const key of ["processing_workbook_max_mb", "processing_xml_entry_max_mb", "processing_shared_strings_max_mb", "processing_max_rows"] as const) {
-      const value = performance[key];
-      if (value !== undefined && (!Number.isInteger(value) || Number(value) < 1)) {
-        issues.push({ path: `performance.${key}`, message: "必须是大于 0 的整数" });
-      }
-    }
-    if (performance.processing_workers !== undefined) {
-      if (!Number.isInteger(performance.processing_workers) || Number(performance.processing_workers) < 0) {
-        issues.push({ path: "performance.processing_workers", message: "必须是大于或等于 0 的整数" });
-      } else if (Number(performance.processing_workers) > maxConfiguredProcessingWorkers) {
-        issues.push({ path: "performance.processing_workers", message: `不能超过 ${maxConfiguredProcessingWorkers}（当前机器最大线程数减 1）` });
-      }
-    }
-  }
-
-  const automation = config.automation as Record<string, unknown> | undefined;
-  if (automation) {
-    if (automation.auto_run !== undefined && typeof automation.auto_run !== "boolean") {
-      issues.push({ path: "automation.auto_run", message: "必须是布尔值" });
-    }
-    if (automation.template_match_priority !== undefined && typeof automation.template_match_priority !== "boolean") {
-      issues.push({ path: "automation.template_match_priority", message: "必须是布尔值" });
-    }
-    for (const key of ["coverage_threshold", "candidate_coverage_gap"] as const) {
-      const value = automation[key];
-      if (value !== undefined && (typeof value !== "number" || value < 0 || value > 1)) {
-        issues.push({ path: `automation.${key}`, message: "必须是 0 到 1 之间的数字" });
-      }
-    }
-    if (automation.min_trial_rows !== undefined && (!Number.isInteger(automation.min_trial_rows) || Number(automation.min_trial_rows) < 1)) {
-      issues.push({ path: "automation.min_trial_rows", message: "必须是大于 0 的整数" });
-    }
-    if (automation.candidate_score_gap !== undefined && (typeof automation.candidate_score_gap !== "number" || automation.candidate_score_gap < 0)) {
-      issues.push({ path: "automation.candidate_score_gap", message: "必须是大于或等于 0 的数字" });
-    }
-  }
-
-  const pricing = config.pricing as Record<string, unknown> | undefined;
-  if (pricing) {
-    for (const key of UNSUPPORTED_PRICING_FIELDS) {
-      if (Object.hasOwn(pricing, key)) {
-        issues.push({
-          path: `pricing.${key}`,
-          message: "当前处理器不读取该字段，请删除后使用现行固定规则",
-        });
-      }
-    }
-    if (pricing.country_identity !== undefined) {
-      const countryIdentity = pricing.country_identity;
-      const allowedCountryIdentities = new Set(["iso2", "english", "chinese"]);
-      if (!Array.isArray(countryIdentity)) {
-        issues.push({ path: "pricing.country_identity", message: "必须是数组" });
-      } else if (countryIdentity.length === 0) {
-        issues.push({ path: "pricing.country_identity", message: "至少需要保留一个国家身份字段" });
-      } else {
-        countryIdentity.forEach((value, index) => {
-          if (typeof value !== "string" || !allowedCountryIdentities.has(value)) {
-            issues.push({
-              path: `pricing.country_identity[${index}]`,
-              message: "仅支持 iso2、english、chinese",
-            });
-          }
-        });
-      }
-    }
-    if (pricing.single_shipment_matching_enabled !== undefined
-      && typeof pricing.single_shipment_matching_enabled !== "boolean") {
-      issues.push({ path: "pricing.single_shipment_matching_enabled", message: "必须是布尔值" });
-    }
-    const configuredMatchFields = pricing.single_shipment_match_fields;
-    let validMatchFields = DEFAULT_SINGLE_SHIPMENT_MATCH_FIELDS;
-    if (configuredMatchFields !== undefined) {
-      if (!Array.isArray(configuredMatchFields)) {
-        issues.push({ path: "pricing.single_shipment_match_fields", message: "必须是数组" });
-        validMatchFields = [];
-      } else {
-        validMatchFields = configuredMatchFields.filter((value): value is string => typeof value === "string" && SINGLE_SHIPMENT_MATCH_FIELDS.has(value));
-        configuredMatchFields.forEach((value, index) => {
-          if (typeof value !== "string" || !SINGLE_SHIPMENT_MATCH_FIELDS.has(value)) {
-            issues.push({
-              path: `pricing.single_shipment_match_fields[${index}]`,
-              message: "仅支持 recipient_name、phone、postal_code、address、email",
-            });
-          }
-        });
-      }
-    }
-    if (pricing.single_shipment_matching_enabled === true
-      && new Set(validMatchFields).size < 2) {
-      issues.push({
-        path: "pricing.single_shipment_match_fields",
-        message: "启用单独发货匹配时至少选择两个不同字段",
-      });
-    }
-  }
-  if (Object.prototype.hasOwnProperty.call(config, "runtime")) {
-    issues.push({
-      path: "runtime",
-      message: "运行路径和界面偏好不属于业务规则，请在配置中心左侧设置",
-    });
-  }
-  return { valid: issues.length === 0, issues };
-}
-
-async function readConfigDocument(candidatePath?: string): Promise<ConfigDocument> {
-  const configPath = await resolveActiveConfigPath(candidatePath);
-  const [content, fileStat] = await Promise.all([readFile(configPath, "utf8"), stat(configPath)]);
-  return {
-    path: configPath,
-    content,
-    modifiedAt: fileStat.mtimeMs,
-    isDefault: samePath(configPath, defaultExtractConfigPath),
-  };
-}
-
-async function atomicWriteConfig(configPath: string, content: string): Promise<ConfigDocument> {
-  const validation = validateConfigContent(content);
-  if (!validation.valid) {
-    throw new Error(`配置校验失败：${validation.issues[0]?.path} ${validation.issues[0]?.message}`);
-  }
-  const normalizedContent = `${JSON.stringify(parseConfigContent(content), null, 2)}\n`;
-  await mkdir(dirname(configPath), { recursive: true });
-  const temporaryPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
-  if (await pathExists(configPath)) {
-    await copyFile(configPath, `${configPath}.bak`);
-  }
-  await writeFile(temporaryPath, normalizedContent, "utf8");
-  await rename(temporaryPath, configPath);
-  return readConfigDocument(configPath);
-}
-
-async function saveConfigDocument(payload: unknown): Promise<ConfigDocument> {
-  const input = requireRecord(payload, "配置保存参数");
-  if (typeof input.path !== "string" || !isAbsolute(input.path) || typeof input.content !== "string") {
-    throw new TypeError("配置保存参数无效");
-  }
-  if (typeof input.expectedModifiedAt === "number" && (await pathExists(input.path))) {
-    const currentStat = await stat(input.path);
-    if (Math.abs(currentStat.mtimeMs - input.expectedModifiedAt) > 1) {
-      throw new Error("配置文件已被外部修改，请重新加载后再保存");
-    }
-  }
-  const document = await atomicWriteConfig(resolve(input.path), input.content);
-  appState = await appSettingsStore.updateState({ activeBusinessConfigPath: document.path });
-  return readConfigDocument(document.path);
-}
-
-async function saveConfigDocumentAs(content: string): Promise<ConfigDocument | null> {
-  const validation = validateConfigContent(content);
-  if (!validation.valid) {
-    throw new Error(`配置校验失败：${validation.issues[0]?.path} ${validation.issues[0]?.message}`);
-  }
-  const result = await dialog.showSaveDialog({
-    defaultPath: appState.activeBusinessConfigPath || defaultExtractConfigPath,
-    filters: [{ name: "JSON 配置", extensions: ["json"] }],
-  });
-  if (result.canceled || !result.filePath) return null;
-  const document = await atomicWriteConfig(resolve(result.filePath), content);
-  appState = await appSettingsStore.updateState({ activeBusinessConfigPath: document.path });
-  return readConfigDocument(document.path);
-}
-
-async function restoreDefaultConfig(): Promise<ConfigDocument> {
-  const current = await readConfigDocument();
-  const bundledContent = await readFile(bundledDefaultConfigPath, "utf8");
-  return atomicWriteConfig(current.path, bundledContent);
-}
-
 const persistTaskRecord = (record: TaskHistoryRecord): Promise<void> => taskHistoryStore.persistTaskRecord(record);
 const markInterruptedTasks = (): Promise<void> => taskHistoryStore.markInterruptedTasks();
 const getTaskHistorySummary = () => taskHistoryStore.getTaskHistorySummary();
-
-async function resolveActiveConfigPath(candidatePath?: string): Promise<string> {
-  await ensureWritableConfig();
-  if (candidatePath && (await pathExists(candidatePath))) {
-    return candidatePath;
-  }
-  if (appState.activeBusinessConfigPath && (await pathExists(appState.activeBusinessConfigPath))) {
-    return appState.activeBusinessConfigPath;
-  }
-  return defaultExtractConfigPath;
-}
 
 async function appendRuntimeLogs(rows: RuntimeLogRow[]): Promise<void> {
   if (!Array.isArray(rows) || rows.length === 0) {
