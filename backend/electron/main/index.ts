@@ -1,9 +1,7 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } from "electron";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { access, appendFile, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
 import { availableParallelism, userInfo } from "node:os";
 import { assertTrustedIpcSender } from "./security";
 import { readExcelPreviewFile } from "./excel-preview-file";
@@ -50,6 +48,7 @@ import {
   type WindowPreferences,
 } from "./window-preferences";
 import { createWindowManager } from "./window-manager";
+import { createProcessorSession } from "./processor-session";
 
 type ExportFileRowsPayload = {
   categoryLabel: string;
@@ -123,8 +122,6 @@ const defaultWindowBackgroundColor = "#EEF3F8";
 const windowResizeSaveDelayMs = 300;
 const detectedProcessingThreads = availableParallelism();
 const maxConfiguredProcessingWorkers = Math.max(0, detectedProcessingThreads - 1);
-let processor: ChildProcessWithoutNullStreams | null = null;
-let processorActivity: "scan" | "start" | "merge" | "price-analyze" | "price-validate" | "price-run" | null = null;
 let activeTask: TaskHistoryRecord | null = null;
 let activeTaskEventSequence = 0;
 let activeTaskLastPersistedFiles = 0;
@@ -180,10 +177,13 @@ const windowManager = createWindowManager({
   resizeSaveDelayMs: windowResizeSaveDelayMs,
   trustedRendererLocation,
 });
-
-type ProcessorCommand = Record<string, unknown> & {
-  action: string;
-};
+const processorSession = createProcessorSession({
+  broadcastEvent: broadcastProcessorEvent,
+  cwd: resourceRootDir,
+  getExecutablePath: getProcessorExecutable,
+  onRunStopped: () => completeActiveTask("stopped", "批次已由用户停止"),
+  onStructuredEvent: trackProcessorEvent,
+});
 
 function requireTrustedIpc(event: Electron.IpcMainInvokeEvent): void {
   assertTrustedIpcSender(event, trustedRendererLocation);
@@ -822,89 +822,6 @@ function getProcessorExecutable(): string {
   return resolveLocalProcessorExecutable(rootDir, app.isPackaged, executableName);
 }
 
-function ensureProcessor(): ChildProcessWithoutNullStreams {
-  if (processor && !processor.killed) {
-    return processor;
-  }
-
-  const child = spawn(getProcessorExecutable(), [], {
-    cwd: resourceRootDir,
-    env: {
-      ...process.env,
-    },
-  });
-  processor = child;
-
-  createInterface({ input: child.stdout }).on("line", (line) => {
-    try {
-      const event = JSON.parse(line) as unknown;
-      trackProcessorEvent(event);
-      broadcastProcessorEvent(event);
-    } catch {
-      broadcastProcessorEvent({ type: "log", level: "info", message: line });
-    }
-  });
-
-  createInterface({ input: child.stderr }).on("line", (line) => {
-    broadcastProcessorEvent({ type: "log", level: "error", message: line });
-  });
-
-  child.on("exit", (code) => {
-    broadcastProcessorEvent({ type: "state", state: "exited", code });
-    if (processor === child) {
-      processor = null;
-      processorActivity = null;
-    }
-  });
-  child.on("error", (error) => {
-    broadcastProcessorEvent({ type: "error", message: `Rust 处理器启动失败: ${error.message}` });
-    if (processor === child) {
-      processor = null;
-      processorActivity = null;
-    }
-  });
-
-  return child;
-}
-
-function sendProcessorCommand(command: ProcessorCommand): void {
-  const child = ensureProcessor();
-  child.stdin.write(`${JSON.stringify(command)}\n`);
-}
-
-function stopProcessorProcess(): Promise<void> {
-  const child = processor;
-  const stoppedActivity = processorActivity;
-  if (!child || child.killed) {
-    broadcastProcessorEvent({ type: "state", state: "idle" });
-    return Promise.resolve();
-  }
-
-  return new Promise((resolveStop) => {
-    let finished = false;
-    const finish = (): void => {
-      if (finished) return;
-      finished = true;
-      processor = null;
-      processorActivity = null;
-      if (stoppedActivity === "start") {
-        broadcastProcessorEvent({ type: "done", stopped: true, summaryPath: null, outputFiles: [], failures: [] });
-      } else if (stoppedActivity === "price-run") {
-        broadcastProcessorEvent({ type: "price-done", mode: "run", stopped: true, files: [], failures: [] });
-        completeActiveTask("stopped", "批次已由用户停止");
-      } else if (stoppedActivity === "price-analyze") {
-        broadcastProcessorEvent({ type: "price-done", mode: "analysis", stopped: true, files: [] });
-      }
-      resolveStop();
-    };
-    child.once("exit", finish);
-    child.once("error", finish);
-    if (!child.kill()) {
-      finish();
-    }
-  });
-}
-
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   installContentSecurityPolicy();
@@ -1254,27 +1171,27 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("processor:scan", (event, payload: unknown) => {
     requireTrustedIpc(event);
-    processorActivity = "scan";
-    sendProcessorCommand({ ...requireRecord(payload, "扫描参数"), action: "scan" });
+    processorSession.send({ ...requireRecord(payload, "扫描参数"), action: "scan" }, "scan");
   });
   ipcMain.handle("processor:start", (event, payload: unknown) => {
     requireTrustedIpc(event);
-    processorActivity = "start";
-    sendProcessorCommand({
+    processorSession.send({
       ...requireRecord(payload, "处理参数"),
       archiveStandardFiles: appPreferences.archiveStandardFiles,
       action: "start",
-    });
+    }, "start");
   });
   ipcMain.handle("processor:merge-summaries", (event, payload: unknown) => {
     requireTrustedIpc(event);
-    processorActivity = "merge";
-    sendProcessorCommand({ ...requireRecord(payload, "合并参数"), action: "merge-summaries" });
+    processorSession.send({ ...requireRecord(payload, "合并参数"), action: "merge-summaries" }, "merge");
   });
   ipcMain.handle("processor:price-check-analyze", async (event, payload: unknown) => {
     requireTrustedIpc(event);
-    processorActivity = "price-analyze";
-    sendProcessorCommand({ ...(await validatePricePayload(payload)), headerTemplates: await readHeaderTemplates(), action: "price-check-analyze" });
+    processorSession.send({
+      ...(await validatePricePayload(payload)),
+      headerTemplates: await readHeaderTemplates(),
+      action: "price-check-analyze",
+    }, "price-analyze");
   });
   ipcMain.handle("processor:price-check-run", async (event, payload: unknown) => {
     requireTrustedIpc(event);
@@ -1389,15 +1306,14 @@ app.whenReady().then(async () => {
       };
       saveActiveTaskFile(file);
     }
-    processorActivity = "price-run";
     try {
-      sendProcessorCommand({
+      processorSession.send({
         ...validated,
         ...(batchOutputDir ? { outputDir: batchOutputDir } : {}),
         overwriteSourceFiles: appPreferences.overwriteSourceFiles,
         headerTemplates: await readHeaderTemplates(),
         action: "price-check-run",
-      });
+      }, "price-run");
     } catch (error) {
       completeActiveTask("failed", `批次提交失败：${String(error)}`);
       throw error;
@@ -1408,28 +1324,27 @@ app.whenReady().then(async () => {
     requireTrustedIpc(event);
     const input = requireRecord(payload, "字段映射试算参数");
     const validated = await validatePricePayload({ ...input, files: [input.inputPath] });
-    processorActivity = "price-validate";
-    sendProcessorCommand({
+    processorSession.send({
       ...input,
       inputPath: (validated.files as string[])[0],
       ...(input.rowEdit === undefined ? {} : { rowEdit: validatePriceRowEditPayload(input.rowEdit) }),
       action: "price-check-validate",
-    });
+    }, "price-validate");
   });
   ipcMain.handle("processor:pause", (event) => {
     requireTrustedIpc(event);
     appendActiveTaskEvent("warning", "batch", "用户暂停批次");
-    sendProcessorCommand({ action: "pause" });
+    processorSession.send({ action: "pause" });
   });
   ipcMain.handle("processor:resume", (event) => {
     requireTrustedIpc(event);
     appendActiveTaskEvent("info", "batch", "用户继续批次");
-    sendProcessorCommand({ action: "resume" });
+    processorSession.send({ action: "resume" });
   });
   ipcMain.handle("processor:stop", (event) => {
     requireTrustedIpc(event);
     appendActiveTaskEvent("warning", "batch", "用户请求停止批次");
-    return stopProcessorProcess();
+    return processorSession.stop();
   });
 
   ipcMain.handle("dialog:select-directory", async (event, purpose: "input" | "output" = "input", persist = true) => {
@@ -1493,9 +1408,7 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  if (processor && !processor.killed) {
-    processor.stdin.write(`${JSON.stringify({ action: "shutdown" })}\n`);
-  }
+  processorSession.shutdown();
   if (process.platform !== "darwin") {
     app.quit();
   }
