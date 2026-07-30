@@ -10,7 +10,7 @@
     "esModuleInterop": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/renderer/src/*"]
+      "@/*": ["frontend/src/*"]
     },
     "skipLibCheck": true,
     "noEmit": true,
@@ -18,9 +18,11 @@
   },
   "include": [
     "electron.vite.config.ts",
-    "src/main/**/*.ts",
-    "src/preload/**/*.ts",
-    "src/renderer/**/*.ts",
-    "src/renderer/**/*.tsx"
+    "backend/electron/**/*.ts",
+    "frontend/**/*.ts",
+    "frontend/**/*.tsx",
+    "shared/**/*.ts",
+    "test/**/*.ts",
+    "test/**/*.tsx"
   ]
 }

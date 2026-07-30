@@ -1,0 +1,662 @@
+/* 工作台仅调整信息层级，沿用现有主题色。 */
+
+.dashboard-metrics article {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-metrics article > div {
+  display: flex;
+  width: auto;
+  height: auto;
+  align-items: center;
+  gap: 9px;
+  border-radius: 0;
+  color: var(--cyber-muted);
+  background: transparent;
+}
+
+.dashboard-metric-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--cyber-primary);
+  background: color-mix(in srgb, var(--cyber-primary) 12%, transparent);
+}
+
+.dashboard-metric-icon svg { width: 16px; height: 16px; }
+
+.dashboard-metrics article > div span {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 30px;
+}
+
+.dashboard-metrics article > strong {
+  margin-top: auto;
+}
+
+.dashboard-metrics article.is-info { --dashboard-metric-tone: var(--cyber-status-info); }
+.dashboard-metrics article.is-confirm { --dashboard-metric-tone: var(--cyber-status-confirm); }
+.dashboard-metrics article.is-success { --dashboard-metric-tone: var(--cyber-status-success); }
+.dashboard-metrics article.is-error { --dashboard-metric-tone: var(--cyber-status-error); }
+.dashboard-metrics article[class*="is-"] > strong { color: var(--dashboard-metric-tone); }
+.dashboard-metrics article[class*="is-"] .dashboard-metric-icon {
+  color: var(--dashboard-metric-tone);
+  background: color-mix(in srgb, var(--dashboard-metric-tone) 12%, transparent);
+}
+
+.config-center-actions > button.is-info { --config-action-tone: var(--cyber-status-info); }
+.config-center-actions > button.is-primary { --config-action-tone: var(--cyber-primary); }
+.config-center-actions > button.is-warning { --config-action-tone: var(--cyber-status-confirm); }
+.config-center-actions > button.is-success { --config-action-tone: var(--cyber-status-success); }
+html.dark .config-center-actions > button[class*="is-"]:not(:disabled),
+.config-center-actions > button[class*="is-"]:not(:disabled) {
+  border-color: color-mix(in srgb, var(--config-action-tone) 42%, var(--cyber-border));
+  color: var(--config-action-tone);
+  background: color-mix(in srgb, var(--config-action-tone) 8%, var(--cyber-panel));
+  box-shadow: none;
+}
+html.dark .config-center-actions > button[class*="is-"]:hover:not(:disabled),
+.config-center-actions > button[class*="is-"]:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--config-action-tone) 64%, var(--cyber-border));
+  color: var(--config-action-tone);
+  background: color-mix(in srgb, var(--config-action-tone) 14%, var(--cyber-panel));
+}
+html.dark .config-center-actions > button.is-success:not(:disabled),
+.config-center-actions > button.is-success:not(:disabled) {
+  color: #ffffff;
+  background: var(--cyber-status-success);
+}
+.config-center-actions > button[class*="is-"]:disabled {
+  border-color: var(--cyber-border-soft);
+  color: var(--cyber-dim);
+  background: color-mix(in srgb, var(--cyber-panel-soft) 72%, var(--cyber-bg));
+  box-shadow: none;
+}
+
+.dashboard-card > header { margin-bottom: 12px; }
+.dashboard-card h2 { margin: 0; }
+.dashboard-recent-actions { display: flex; align-items: center; gap: 6px; }
+.dashboard-recent-actions > button { height: 32px; border-radius: 9px; padding-inline: 10px; }
+.dashboard-recent-actions > button svg { width: 15px; height: 15px; }
+.dashboard-shortcuts { grid-template-rows: auto repeat(2, minmax(0, 1fr)); }
+
+.dashboard-empty {
+  display: flex;
+  min-height: 112px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--cyber-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.dashboard-empty > svg {
+  width: 30px;
+  height: 30px;
+  margin-bottom: 4px;
+  color: var(--cyber-dim);
+}
+
+.dashboard-empty > strong {
+  color: var(--cyber-text);
+  font-size: 13px;
+}
+
+.dashboard-empty > span { color: var(--cyber-dim); }
+
+.dashboard-trend-empty {
+  min-height: 0;
+  border: 1px dashed var(--cyber-border-soft);
+  border-radius: 12px;
+  background: var(--cyber-panel-soft);
+}
+
+.confirm-dialog-backdrop {
+  position: fixed;
+  z-index: 500;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(28 25 22 / 38%);
+  backdrop-filter: blur(3px);
+}
+
+.confirm-dialog {
+  display: grid;
+  width: min(430px, 100%);
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 20px;
+  color: var(--card-foreground);
+  background: var(--card);
+  box-shadow: 0 24px 70px rgb(47 46 42 / 24%);
+}
+
+.confirm-dialog-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 14px;
+  color: #b86b1c;
+  background: color-mix(in srgb, #d88a2d 13%, var(--card));
+}
+
+.confirm-dialog.is-danger .confirm-dialog-icon {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 12%, var(--card));
+}
+
+.confirm-dialog-icon svg { width: 22px; height: 22px; stroke-width: 1.8; }
+.confirm-dialog-copy { min-width: 0; }
+.confirm-dialog-copy h2 { margin: 1px 0 7px; font-size: 18px; line-height: 1.3; }
+.confirm-dialog-copy p { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.65; }
+.confirm-dialog-actions { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: 9px; margin-top: 6px; }
+.confirm-dialog-actions button { min-width: 92px; height: 38px; border-radius: 10px; }
+
+html.dark .confirm-dialog-backdrop { background: rgb(0 0 0 / 52%); }
+html.dark .confirm-dialog { box-shadow: 0 26px 76px rgb(0 0 0 / 46%); }
+
+[data-sonner-toaster].cyber-toaster {
+  --width: 340px;
+  font-family: var(--font-ui);
+}
+
+[data-sonner-toast].cyber-toast {
+  min-height: 50px;
+  border: 1px solid var(--border) !important;
+  border-radius: 14px !important;
+  padding: 10px 38px 10px 13px !important;
+  color: var(--card-foreground) !important;
+  background: color-mix(in srgb, var(--card) 96%, var(--primary) 4%) !important;
+  box-shadow: 0 10px 28px rgb(47 46 42 / 12%) !important;
+}
+
+html.dark [data-sonner-toast].cyber-toast {
+  box-shadow: 0 12px 30px rgb(0 0 0 / 28%) !important;
+}
+
+.cyber-toast-title {
+  color: var(--card-foreground) !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1.45 !important;
+}
+
+.cyber-toast-icon {
+  width: 18px !important;
+  height: 18px !important;
+  margin-right: 2px !important;
+}
+
+.cyber-toast[data-type="success"] .cyber-toast-icon { color: #148a58 !important; }
+.cyber-toast[data-type="info"] .cyber-toast-icon { color: var(--primary) !important; }
+.cyber-toast[data-type="warning"] .cyber-toast-icon { color: #c47a17 !important; }
+.cyber-toast[data-type="error"] .cyber-toast-icon { color: var(--destructive) !important; }
+
+.cyber-toast-close {
+  top: 50% !important;
+  right: 9px !important;
+  left: auto !important;
+  width: 22px !important;
+  height: 22px !important;
+  border: 1px solid var(--border) !important;
+  color: var(--muted-foreground) !important;
+  background: var(--card) !important;
+  transform: translateY(-50%) !important;
+}
+
+/* 现代按钮系统：统一图标、文字、层级与明暗主题反馈。 */
+.cyber-app {
+  --button-primary: #b8563e;
+  --button-primary-hover: #a94b35;
+  --button-primary-foreground: var(--cyber-text);
+  --button-primary-surface: var(--cyber-panel);
+  --button-primary-surface-hover: var(--cyber-panel-soft);
+  --button-surface: var(--cyber-panel);
+  --button-surface-hover: color-mix(in srgb, var(--cyber-primary) 5%, var(--cyber-panel));
+  --button-border: var(--cyber-border);
+  --button-border-hover: color-mix(in srgb, var(--cyber-primary) 42%, var(--cyber-border));
+  --button-foreground: var(--cyber-text);
+  --button-muted: var(--cyber-muted);
+  --button-danger: #c94f55;
+  --button-danger-hover: #b73f46;
+  --button-danger-foreground: var(--cyber-text);
+  --button-danger-soft: var(--cyber-panel);
+  --button-shadow: none;
+  --button-primary-shadow: none;
+}
+
+html.dark .cyber-app {
+  --button-primary: #d98a71;
+  --button-primary-hover: #e49a82;
+  --button-primary-foreground: var(--cyber-text);
+  --button-primary-surface: var(--cyber-panel);
+  --button-primary-surface-hover: var(--cyber-panel-soft);
+  --button-surface: var(--cyber-panel);
+  --button-surface-hover: color-mix(in srgb, var(--cyber-primary) 8%, var(--cyber-panel));
+  --button-border: var(--cyber-border);
+  --button-border-hover: color-mix(in srgb, var(--cyber-primary) 54%, var(--cyber-border));
+  --button-foreground: #f2ede6;
+  --button-muted: #bbb3a9;
+  --button-danger: #e4777c;
+  --button-danger-hover: #ee898d;
+  --button-danger-foreground: var(--cyber-text);
+  --button-danger-soft: var(--cyber-panel);
+  --button-shadow: none;
+  --button-primary-shadow: none;
+}
+
+.ui-button {
+  height: 36px;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 0 13px;
+  color: var(--button-foreground);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: .01em;
+  box-shadow: none;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.ui-button svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  stroke-width: 1.9;
+}
+
+.ui-button[data-size="sm"] {
+  height: 32px;
+  border-radius: 9px;
+  padding-inline: 10px;
+  font-size: 11px;
+}
+
+.ui-button[data-size="icon"] {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+.ui-button[data-variant="default"] {
+  border-color: color-mix(in srgb, var(--button-primary) 28%, var(--button-border));
+  color: var(--button-primary-foreground);
+  background: var(--button-primary-surface);
+  box-shadow: none;
+}
+
+.ui-button[data-variant="outline"] {
+  border-color: var(--button-border);
+  color: var(--button-foreground);
+  background: var(--button-surface);
+  box-shadow: var(--button-shadow);
+}
+
+.ui-button[data-variant="ghost"] {
+  border-color: transparent;
+  color: var(--button-muted);
+  background: transparent;
+}
+
+.ui-button[data-variant="destructive"] {
+  border-color: color-mix(in srgb, var(--button-danger) 32%, var(--button-border));
+  color: var(--button-danger-foreground);
+  background: var(--button-danger-soft);
+  box-shadow: none;
+}
+
+.ui-button[data-variant="default"]:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--button-primary) 44%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--button-primary-surface-hover);
+  box-shadow: none;
+}
+
+.ui-button[data-variant="outline"]:hover:not(:disabled) {
+  border-color: var(--button-border-hover);
+  color: var(--button-foreground);
+  background: var(--button-surface-hover);
+  box-shadow: none;
+}
+
+.ui-button[data-variant="ghost"]:hover:not(:disabled) {
+  color: var(--button-foreground);
+  background: var(--button-surface-hover);
+}
+
+.ui-button[data-variant="destructive"]:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--button-danger) 48%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--cyber-panel-soft);
+}
+
+.ui-button:active:not(:disabled) {
+  box-shadow: none;
+}
+
+.ui-button:disabled {
+  border-color: var(--cyber-border-soft);
+  color: var(--cyber-dim);
+  background: color-mix(in srgb, var(--cyber-panel-soft) 66%, var(--cyber-bg));
+  box-shadow: none;
+  opacity: .62;
+}
+
+/* 配置工具栏只保留“保存”为主操作，避免多彩按钮互相争夺注意力。 */
+.config-center-actions > .ui-button[class*="is-"]:not(.is-success):not(.is-warning):not(:disabled) {
+  border-color: var(--button-border);
+  color: var(--button-foreground);
+  background: var(--button-surface);
+  box-shadow: var(--button-shadow);
+}
+
+.config-center-actions > .ui-button.is-warning:not(:disabled) {
+  border-color: color-mix(in srgb, var(--button-danger) 35%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--button-danger-soft);
+  box-shadow: none;
+}
+
+.config-center-actions > .ui-button.is-success:not(:disabled) {
+  border-color: color-mix(in srgb, var(--button-primary) 28%, var(--button-border));
+  color: var(--button-primary-foreground);
+  background: var(--button-primary-surface);
+  box-shadow: none;
+}
+
+.config-center-actions > .ui-button.is-success:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--button-primary) 44%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--button-primary-surface-hover);
+}
+
+html.dark .config-center-actions > button[class*="is-"]:not(:disabled),
+.config-center-actions > button[class*="is-"]:not(:disabled) {
+  color: var(--button-foreground);
+  background: var(--cyber-panel);
+}
+
+/* 文件处理主流程按钮与共享按钮使用同一形态，仅保留业务状态色。 */
+.cyber-action,
+html:not(.dark) .cyber-action,
+html.dark .cyber-action {
+  height: 36px;
+  gap: 7px;
+  border: 1px solid var(--button-border);
+  border-radius: 10px;
+  padding: 0 12px;
+  color: var(--button-foreground);
+  background: var(--button-surface);
+  box-shadow: var(--button-shadow);
+  font-family: var(--font-ui);
+  font-weight: 500;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.cyber-action svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  stroke-width: 1.9;
+}
+
+.cyber-action strong {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .01em;
+}
+
+.cyber-action:hover:not(:disabled),
+html:not(.dark) .cyber-action:hover:not(:disabled) {
+  filter: none;
+}
+
+.cyber-action:active:not(:disabled) {
+  box-shadow: none;
+}
+
+.cyber-action.is-start,
+html:not(.dark) .cyber-action.is-start,
+html.dark .cyber-action.is-start {
+  border-color: color-mix(in srgb, var(--button-primary) 28%, var(--button-border));
+  color: var(--button-primary-foreground);
+  background: var(--button-primary-surface);
+  box-shadow: none;
+}
+
+.cyber-action.is-start:hover:not(:disabled),
+html:not(.dark) .cyber-action.is-start:hover:not(:disabled),
+html.dark .cyber-action.is-start:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--button-primary) 44%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--button-primary-surface-hover);
+}
+
+.cyber-action.is-pause,
+html:not(.dark) .cyber-action.is-pause,
+html.dark .cyber-action.is-pause {
+  border-color: color-mix(in srgb, var(--cyber-status-info) 34%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--cyber-panel);
+  box-shadow: none;
+}
+
+.cyber-action.is-stop,
+html:not(.dark) .cyber-action.is-stop,
+html.dark .cyber-action.is-stop {
+  border-color: color-mix(in srgb, var(--button-danger) 35%, var(--button-border));
+  color: var(--button-foreground);
+  background: var(--cyber-panel);
+  box-shadow: none;
+}
+
+.cyber-action.is-reset,
+html:not(.dark) .cyber-action.is-reset,
+html.dark .cyber-action.is-reset {
+  border-color: var(--button-border);
+  color: var(--button-muted);
+  background: var(--button-surface);
+  box-shadow: none;
+}
+
+.cyber-action:disabled,
+html:not(.dark) .cyber-action:disabled,
+html.dark .cyber-action:disabled {
+  border-color: var(--cyber-border-soft);
+  color: var(--cyber-dim);
+  background: color-mix(in srgb, var(--cyber-panel-soft) 66%, var(--cyber-bg));
+  box-shadow: none;
+  opacity: .6;
+}
+
+.dashboard-shortcuts > button {
+  border: 1px solid transparent;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.dashboard-shortcuts > button:hover:not(:disabled) {
+  border-color: var(--button-border);
+  background: var(--button-surface-hover);
+}
+
+.template-row-actions button {
+  min-height: 28px;
+  border-radius: 8px;
+  padding: 0 8px;
+  font-size: 11px;
+  transition: color 140ms ease, background-color 140ms ease;
+}
+
+.template-row-actions button:hover:not(:disabled) {
+  background: var(--button-surface-hover);
+}
+
+/* 日志中心是高密度信息视图，控件应嵌入面板而不是呈现悬浮卡片。 */
+.history-page .date-picker-trigger,
+.history-page .ui-select-trigger,
+.history-page .ui-button[data-variant="outline"] {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--card) 96%, var(--muted-surface) 4%);
+  box-shadow: none;
+}
+
+.history-page .ui-button[data-variant="ghost"] {
+  box-shadow: none;
+}
+
+.history-page .ui-button:hover:not(:disabled) {
+  box-shadow: none;
+}
+
+.history-page .date-picker-trigger:hover,
+.history-page .ui-select-trigger:hover:not(:disabled),
+.history-page .ui-button[data-variant="outline"]:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 5%, var(--card));
+}
+
+.history-page .ui-button:active:not(:disabled) {
+  box-shadow: none;
+}
+
+.batch-list > button {
+  border-color: transparent;
+  border-radius: 8px;
+  transition: color 130ms ease, background-color 130ms ease, box-shadow 130ms ease;
+}
+
+.batch-list > button:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
+}
+
+.batch-list > button.is-selected {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 14%, var(--card));
+  box-shadow: none;
+}
+
+html.dark .batch-list > button:hover {
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+
+html.dark .batch-list > button.is-selected {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  background: color-mix(in srgb, var(--primary) 20%, var(--card));
+  box-shadow: none;
+}
+
+/* 批次右侧操作保持简洁，仅通过按钮边框区分主次。 */
+.cyber-batch-progress .cyber-progress-actions {
+  gap: 6px;
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action {
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  border-color: transparent;
+  border-radius: 8px;
+  color: var(--cyber-muted);
+  background: transparent;
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--cyber-text);
+  background: var(--cyber-panel);
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action.is-batch-next,
+html:not(.dark) .cyber-batch-progress .cyber-progress-actions .cyber-action.is-batch-next,
+html.dark .cyber-batch-progress .cyber-progress-actions .cyber-action.is-batch-next {
+  border-color: color-mix(in srgb, var(--button-primary) 38%, var(--cyber-border));
+  color: var(--button-primary-foreground);
+  background: var(--cyber-panel);
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action.is-batch-next:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--button-primary) 54%, var(--cyber-border));
+  color: var(--button-foreground);
+  background: var(--cyber-panel);
+}
+
+/* 内容区按钮保持位置稳定；侧栏导航继续保留自身的位移动画。 */
+.cyber-workspace button {
+  box-shadow: none !important;
+}
+
+.cyber-workspace button:hover:not(:disabled),
+.cyber-workspace button:active:not(:disabled) {
+  filter: none !important;
+  transform: none !important;
+}
+
+/* 默认禁止复制界面文案，仅开放业务表格与配置内容。 */
+.app-shell,
+.cyber-app {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.app-shell table,
+.cyber-app table,
+.excel-preview-header > span,
+.excel-preview-row > span:not(.excel-preview-row-number),
+.config-center-page input,
+.config-center-page textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cyber-app,
+  .cyber-sidebar,
+  .cyber-brand,
+  .cyber-nav,
+  .cyber-nav button,
+  .cyber-sidebar-tools,
+  .cyber-brand > div,
+  .cyber-nav span,
+  .cyber-workspace.is-files,
+  .cyber-upload-banner,
+  .cyber-batch-phase i,
+  .cyber-file-table tbody,
+  .cyber-empty-overlay,
+  .cyber-pagination,
+  .ui-button,
+  .cyber-action,
+  .dashboard-shortcuts > button {
+    transition: none;
+    animation: none;
+  }
+}

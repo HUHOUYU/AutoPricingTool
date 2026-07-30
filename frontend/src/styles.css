@@ -1,0 +1,11 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@import "./styles/foundation.css";
+@import "./styles/shell.css";
+@import "./styles/theme.css";
+@import "./styles/history-analytics.css";
+@import "./styles/pricing-workbench.css";
+@import "./styles/excel-preview.css";
+@import "./styles/layout.css";
+@import "./styles/controls.css";

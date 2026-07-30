@@ -22,8 +22,8 @@
     "check:processor": "powershell -ExecutionPolicy Bypass -File scripts/build_processor.ps1 -Check",
     "test:ui": "vitest run",
     "typecheck": "tsc --noEmit",
-    "format:check": "cargo fmt --manifest-path processor-rust/Cargo.toml --all -- --check",
-    "lint:processor": "cargo clippy --manifest-path processor-rust/Cargo.toml --all-targets --all-features --locked -- -D warnings",
+    "format:check": "cargo fmt --manifest-path backend/processor/Cargo.toml --all -- --check",
+    "lint:processor": "cargo clippy --manifest-path backend/processor/Cargo.toml --all-targets --all-features --locked -- -D warnings",
     "quality": "pnpm run format:check && pnpm run lint:processor && pnpm run typecheck && pnpm test && pnpm run build"
   },
   "build": {
@@ -70,7 +70,7 @@
         ]
       },
       {
-        "from": "processor-rust/target/release",
+        "from": "backend/processor/target/release",
         "to": "processor",
         "filter": [
           "auto-pricing-tool-processor.exe"

@@ -4,10 +4,21 @@ import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
 
 export default defineConfig({
-  main: {},
+  main: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: fileURLToPath(new URL("./backend/electron/main/index.ts", import.meta.url)),
+        },
+      },
+    },
+  },
   preload: {
     build: {
       rollupOptions: {
+        input: {
+          index: fileURLToPath(new URL("./backend/electron/preload/index.ts", import.meta.url)),
+        },
         output: {
           format: "cjs",
           entryFileNames: "[name].js",
@@ -16,9 +27,17 @@ export default defineConfig({
     },
   },
   renderer: {
+    root: fileURLToPath(new URL("./frontend", import.meta.url)),
+    build: {
+      rollupOptions: {
+        input: {
+          index: fileURLToPath(new URL("./frontend/index.html", import.meta.url)),
+        },
+      },
+    },
     resolve: {
       alias: {
-        "@": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
+        "@": fileURLToPath(new URL("./frontend/src", import.meta.url)),
       },
     },
     plugins: [react(), tailwindcss()],

@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $distDir = Join-Path $projectRoot "dist-electron"
 $portableExe = Join-Path $distDir "$ExeName.exe"
-$processorExe = Join-Path $projectRoot "processor-rust\target\release\auto-pricing-tool-processor.exe"
+$processorExe = Join-Path $projectRoot "backend\processor\target\release\auto-pricing-tool-processor.exe"
 $releaseDir = Join-Path $projectRoot "dist-release"
 
 function Remove-PathIfExists {

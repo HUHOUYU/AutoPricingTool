@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$processorRoot = Join-Path $projectRoot "processor-rust"
+$processorRoot = Join-Path $projectRoot "backend\processor"
 $vcvars = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
