@@ -2894,7 +2894,21 @@ fn pair_sku_qty_columns(
             if sku_column == qty_column {
                 continue;
             }
+            let crosses_sku = sku_columns.iter().any(|other_sku| {
+                *other_sku != sku_column
+                    && *other_sku > sku_column.min(qty_column)
+                    && *other_sku < sku_column.max(qty_column)
+            });
+            let priority = if !crosses_sku {
+                0
+            } else if qty_column < sku_column {
+                1
+            } else {
+                // 跨越 SKU 的兜底只允许向左查找。
+                continue;
+            };
             candidates.push((
+                priority,
                 sku_column.abs_diff(qty_column),
                 std::cmp::Reverse(sku_column.max(qty_column)),
                 std::cmp::Reverse(sku_column),
@@ -2903,11 +2917,11 @@ fn pair_sku_qty_columns(
             ));
         }
     }
-    candidates.sort_by_key(|candidate| (candidate.0, candidate.1, candidate.2));
+    candidates.sort_by_key(|candidate| (candidate.0, candidate.1, candidate.2, candidate.3));
 
     let mut pairs = Vec::new();
     let mut used_columns = HashSet::new();
-    for (_, _, _, sku_column, qty_column) in candidates {
+    for (_, _, _, _, sku_column, qty_column) in candidates {
         if used_columns.contains(&sku_column) || used_columns.contains(&qty_column) {
             continue;
         }
@@ -3760,11 +3774,18 @@ struct ResolvedOrderQuantity {
     business_order_number: String,
     raw_sku: String,
     matched_sku: String,
+    component_source: Option<CompoundQuantitySource>,
     quantity: Option<usize>,
     quantity_error: Option<String>,
     quantity_issue_context: Option<SkuQuantityIssueContext>,
     absorbed: bool,
     sku_pair_priority: usize,
+}
+
+#[derive(Debug, Clone)]
+struct CompoundQuantitySource {
+    previous_sku: String,
+    source_quantity: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3833,27 +3854,28 @@ fn quantity_source_columns(
     quantity_columns.sort_unstable();
     quantity_columns.dedup();
 
-    // 先取前一 SKU 右侧、主要 SKU 左侧的最近数量列；主要 SKU 是不可跨越的硬边界。
-    let right_quantity = quantity_columns
-        .iter()
-        .copied()
-        .filter(|column| *column > previous_sku && *column < main_sku)
-        .min();
     let left_sku_boundary = sku_columns
         .iter()
         .copied()
         .filter(|column| *column < previous_sku)
         .max();
-    let left_quantity = quantity_columns
+    let local_quantity = quantity_columns
         .iter()
         .copied()
         .filter(|column| {
-            *column < previous_sku && left_sku_boundary.is_none_or(|boundary| *column > boundary)
+            (*column > previous_sku && *column < main_sku)
+                || (*column < previous_sku
+                    && left_sku_boundary.is_none_or(|boundary| *column > boundary))
         })
+        .min_by_key(|column| (previous_sku.abs_diff(*column), std::cmp::Reverse(*column)));
+    let left_fallback = quantity_columns
+        .iter()
+        .copied()
+        .filter(|column| *column < previous_sku)
         .max();
-    let quantity = right_quantity
-        .or(left_quantity)
-        .ok_or_else(|| "前一个 SKU 两侧的限定区间内找不到对应数量列".to_string())?;
+    let quantity = local_quantity
+        .or(left_fallback)
+        .ok_or_else(|| "前一个 SKU 左侧找不到对应数量列".to_string())?;
     Ok(QuantitySourceColumns {
         main_sku,
         previous_sku: Some(previous_sku),
@@ -3931,6 +3953,7 @@ fn resolve_order_quantities(
                     main_sku: raw_sku.clone(),
                 })
         });
+        let mut component_source = None;
         let sku_quantity_result = if raw_sku.is_empty() {
             Err("主要 SKU 为空".to_string())
         } else {
@@ -3961,6 +3984,10 @@ fn resolve_order_quantities(
                     if previous_sku.is_empty() {
                         return Err("前一个 SKU 为空，SKU关系无法计算".to_string());
                     }
+                    component_source = Some(CompoundQuantitySource {
+                        previous_sku: previous_sku.clone(),
+                        source_quantity: quantity as usize,
+                    });
                     calculate_related_quantity(&raw_sku, &previous_sku, quantity as usize)
                         .map(|resolved_quantity| (normalize_sku(&raw_sku), resolved_quantity))
                 })
@@ -3975,6 +4002,7 @@ fn resolve_order_quantities(
             business_order_number,
             raw_sku,
             matched_sku,
+            component_source,
             quantity: sku_quantity_result
                 .as_ref()
                 .ok()
@@ -4069,21 +4097,80 @@ fn resolve_order_quantities(
         }
     }
     for indexes in groups.values() {
-        let total = indexes.iter().try_fold(0usize, |total, index| {
-            total.checked_add(resolved[*index].quantity.unwrap_or_default())
-        });
-        if let Some(total) = total {
-            for (position, index) in indexes.iter().enumerate() {
-                resolved[*index].quantity = Some(if position == 0 { total } else { 0 });
-            }
+        let main_sku = &resolved[indexes[0]].matched_sku;
+        let is_compound_component_group = parse_sku_expression(main_sku)
+            .is_ok_and(|expression| expression.components.len() > 1)
+            && indexes
+                .iter()
+                .all(|index| resolved[*index].component_source.is_some());
+        let total = if is_compound_component_group {
+            calculate_grouped_compound_quantity(main_sku, indexes, &resolved)
         } else {
-            for index in indexes {
-                resolved[*index].quantity = None;
-                resolved[*index].quantity_error = Some("数量合并溢出".to_string());
+            indexes
+                .iter()
+                .try_fold(0usize, |total, index| {
+                    total.checked_add(resolved[*index].quantity.unwrap_or_default())
+                })
+                .ok_or_else(|| "数量合并溢出".to_string())
+        };
+        match total {
+            Ok(total) => {
+                for (position, index) in indexes.iter().enumerate() {
+                    resolved[*index].quantity = Some(if position == 0 { total } else { 0 });
+                }
+            }
+            Err(error) => {
+                for index in indexes {
+                    resolved[*index].quantity = None;
+                    resolved[*index].quantity_error = Some(error.clone());
+                }
             }
         }
     }
     resolved
+}
+
+fn calculate_grouped_compound_quantity(
+    main_sku: &str,
+    indexes: &[usize],
+    resolved: &[ResolvedOrderQuantity],
+) -> Result<usize, String> {
+    let main = parse_sku_expression(main_sku)?;
+    let mut component_quantities = HashMap::<String, usize>::new();
+    for index in indexes {
+        let source = resolved[*index]
+            .component_source
+            .as_ref()
+            .ok_or_else(|| "复合 SKU 缺少组件数量来源".to_string())?;
+        let previous = parse_sku_expression(&source.previous_sku)?;
+        for (sku, multiplier) in previous.components {
+            if !main.components.contains_key(&sku) {
+                continue;
+            }
+            let contribution = source
+                .source_quantity
+                .checked_mul(multiplier)
+                .ok_or_else(|| "数量计算溢出".to_string())?;
+            let total = component_quantities.entry(sku).or_default();
+            *total = total
+                .checked_add(contribution)
+                .ok_or_else(|| "数量合并溢出".to_string())?;
+        }
+    }
+
+    let mut grouped_quantity = None;
+    for (sku, component_quantity) in component_quantities {
+        let required_quantity = main.components[&sku];
+        let candidate = component_quantity.div_ceil(required_quantity);
+        if grouped_quantity.is_some_and(|quantity| quantity != candidate) {
+            return Err(format!(
+                "SKU关系无法计算: 同订单内主要SKU {main_sku} 的组件数量比例冲突"
+            ));
+        }
+        grouped_quantity = Some(candidate);
+    }
+    grouped_quantity
+        .ok_or_else(|| format!("SKU关系无法计算: 同订单内主要SKU {main_sku} 没有可用组件数量"))
 }
 
 fn read_order_lines(
@@ -5415,6 +5502,42 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
     }
 
     #[test]
+    fn sku_quantity_pairing_falls_back_only_to_the_left_and_freezes_columns() {
+        let header = vec![
+            CellValue::string("Qty"),
+            CellValue::string("Qty"),
+            CellValue::string("SKU 1"),
+            CellValue::string("SKU 2"),
+            CellValue::string("SKU 3"),
+            CellValue::string("Qty"),
+        ];
+
+        let pairs = pair_sku_qty_columns(&header, &[2, 3, 4], &[0, 1, 5]);
+
+        assert_eq!(
+            pairs
+                .iter()
+                .map(|pair| (pair.sku_column, pair.qty_column))
+                .collect::<Vec<_>>(),
+            vec![(5, 6), (4, 1), (3, 2)]
+        );
+        let selected_columns = pairs
+            .iter()
+            .flat_map(|pair| [pair.sku_column, pair.qty_column])
+            .collect::<HashSet<_>>();
+        assert_eq!(selected_columns.len(), pairs.len() * 2);
+
+        let right_crossing = pair_sku_qty_columns(&header, &[0, 2], &[3]);
+        assert_eq!(
+            right_crossing
+                .iter()
+                .map(|pair| (pair.sku_column, pair.qty_column))
+                .collect::<Vec<_>>(),
+            vec![(3, 4)]
+        );
+    }
+
+    #[test]
     fn highest_sku_group_uses_quantity_before_sku_in_reference_layout() {
         let header = vec![
             CellValue::string("SKU"),
@@ -6248,6 +6371,70 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
     }
 
     #[test]
+    fn compound_sku_aggregates_components_before_calculating_package_quantity() {
+        let sheet = SheetData {
+            name: "order".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("前一 SKU"),
+                    CellValue::string("Qty"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("合并数量"),
+                ],
+                vec![
+                    CellValue::string("BEX1072"),
+                    CellValue::string("TC2601409"),
+                    CellValue::string("1"),
+                    CellValue::string("TC2601418+TC2601409*2"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("BEX1072"),
+                    CellValue::string("TC2601409"),
+                    CellValue::string("1"),
+                    CellValue::string("TC2601418+TC2601409*2"),
+                    CellValue::string("0"),
+                ],
+                vec![
+                    CellValue::string("BEX1072"),
+                    CellValue::string("TC2601418"),
+                    CellValue::string("1"),
+                    CellValue::string("TC2601418+TC2601409*2"),
+                    CellValue::string("0"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 3,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 5,
+                    merged_qty_column: 5,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+
+        let rows = test_build_writeback_rows(&sheet, &mapping, &HashMap::new());
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.quantity, row.quantity_mismatch))
+                .collect::<Vec<_>>(),
+            vec![(Some(1), false), (Some(0), false), (Some(0), false)]
+        );
+    }
+
+    #[test]
     fn writeback_compares_calculated_quantity_with_merged_quantity_after_sku() {
         let sheet = SheetData {
             name: "订单".to_string(),
@@ -6743,7 +6930,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
     }
 
     #[test]
-    fn quantity_lookup_cannot_cross_a_sku_in_either_direction() {
+    fn quantity_lookup_releases_candidate_freezes_for_the_selected_group() {
         let sheet = SheetData {
             name: "订单".to_string(),
             rows: vec![
@@ -6791,10 +6978,114 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
 
         let resolved = resolve_order_quantities(&sheet, &mapping, &Config::default());
 
+        assert_eq!(resolved[0].quantity, Some(7));
+        assert_eq!(resolved[0].quantity_error, None);
+    }
+
+    #[test]
+    fn quantity_lookup_uses_nearest_left_fallback_after_releasing_freezes() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("Qty"),
+                    CellValue::string("Qty"),
+                    CellValue::string("较早 SKU"),
+                    CellValue::string("前一 SKU"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("Qty"),
+                ],
+                vec![
+                    CellValue::string("8"),
+                    CellValue::string("7"),
+                    CellValue::string("OLD"),
+                    CellValue::string("MAIN"),
+                    CellValue::string("MAIN"),
+                    CellValue::string("9"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 3,
+                    qty_column: 2,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 1,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 5,
+                    qty_column: 6,
+                    merged_qty_column: 6,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+
+        let resolved = resolve_order_quantities(&sheet, &mapping, &Config::default());
+
+        assert_eq!(resolved[0].quantity, Some(7));
+        assert_eq!(resolved[0].quantity_error, None);
+    }
+
+    #[test]
+    fn quantity_lookup_never_crosses_the_main_sku_to_the_right() {
+        let sheet = SheetData {
+            name: "订单".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("订单号"),
+                    CellValue::string("较早 SKU"),
+                    CellValue::string("前一 SKU"),
+                    CellValue::string("主要 SKU"),
+                    CellValue::string("Qty"),
+                ],
+                vec![
+                    CellValue::string("ORDER-1"),
+                    CellValue::string("OLD"),
+                    CellValue::string("MAIN"),
+                    CellValue::string("MAIN"),
+                    CellValue::string("9"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            order_header_row: 1,
+            business_order_number_column: Some(1),
+            sku_qty_pairs: vec![
+                SkuQtyPair {
+                    sku_column: 2,
+                    qty_column: 5,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 3,
+                    qty_column: 5,
+                    ..SkuQtyPair::default()
+                },
+                SkuQtyPair {
+                    sku_column: 4,
+                    qty_column: 5,
+                    merged_qty_column: 5,
+                    ..SkuQtyPair::default()
+                },
+            ],
+            ..PriceCheckMapping::default()
+        };
+
+        let resolved = resolve_order_quantities(&sheet, &mapping, &Config::default());
+
         assert_eq!(resolved[0].quantity, None);
         assert_eq!(
             resolved[0].quantity_error.as_deref(),
-            Some("前一个 SKU 两侧的限定区间内找不到对应数量列")
+            Some("前一个 SKU 左侧找不到对应数量列")
         );
     }
 
