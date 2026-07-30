@@ -102,6 +102,7 @@ export type PriceCheckMapping = {
     skuColumn: number;
     qtyColumn: number;
     mergedQtyColumn: number;
+    directQuantity?: boolean;
     skuHeader: string;
     qtyHeader: string;
     mergedQtyHeader: string;

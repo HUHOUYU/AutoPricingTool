@@ -608,9 +608,12 @@ function mappingIsComplete(mapping: PriceCheckMapping | null | undefined): boole
       pair.qtyColumn > 0
       && pair.skuColumn > 0
       && pair.mergedQtyColumn > 0
-      // 顺序：原始数量 → SKU → 合并数量；中间可夹其他列
-      && pair.qtyColumn < pair.skuColumn
-      && pair.skuColumn < pair.mergedQtyColumn
+      && pair.qtyColumn !== pair.skuColumn
+      // 单组模式直接使用 SKU + Qty；多组模式保留原有三列顺序。
+      && (pair.directQuantity || (
+        pair.qtyColumn < pair.skuColumn
+        && pair.skuColumn < pair.mergedQtyColumn
+      ))
     )) &&
     mapping.pricingSkuColumn > 0 &&
     mapping.pricingCountryColumn > 0 &&
@@ -629,9 +632,18 @@ function applyMappingColumn(mapping: PriceCheckMapping, target: MappingFieldTarg
       : field === "qtyColumn"
         ? "qtyHeader"
         : "mergedQtyHeader";
+    const currentPair = mapping.skuQtyPairs[pairIndex];
+    const pairUpdate = currentPair?.directQuantity && field !== "skuColumn"
+      ? {
+          qtyColumn: column ?? 0,
+          mergedQtyColumn: column ?? 0,
+          qtyHeader: header,
+          mergedQtyHeader: header,
+        }
+      : { [field]: column ?? 0, [headerField]: header };
     return {
       ...mapping,
-      skuQtyPairs: mapping.skuQtyPairs.map((pair, index) => index === pairIndex ? { ...pair, [field]: column ?? 0, [headerField]: header } : pair),
+      skuQtyPairs: mapping.skuQtyPairs.map((pair, index) => index === pairIndex ? { ...pair, ...pairUpdate } : pair),
     };
   }
   const tierMatch = /^quantityTierColumns\.(\d+)\.column$/.exec(target);
@@ -728,11 +740,16 @@ function mappingColumnConflict(mapping: PriceCheckMapping, target: MappingFieldT
         ["countryChineseColumn", mapping.countryChineseColumn],
         ...singleShipmentEntries,
         ["orderPriceColumn", mapping.orderPriceColumn],
-        ...mapping.skuQtyPairs.flatMap((pair, index) => [
-          [`skuQtyPairs.${index}.skuColumn` as MappingFieldTarget, pair.skuColumn] as [MappingFieldTarget, number],
-          [`skuQtyPairs.${index}.qtyColumn` as MappingFieldTarget, pair.qtyColumn] as [MappingFieldTarget, number],
-          [`skuQtyPairs.${index}.mergedQtyColumn` as MappingFieldTarget, pair.mergedQtyColumn] as [MappingFieldTarget, number],
-        ]),
+        ...mapping.skuQtyPairs.flatMap((pair, index) => {
+          const entries: Array<[MappingFieldTarget, number]> = [
+            [`skuQtyPairs.${index}.skuColumn`, pair.skuColumn],
+            [`skuQtyPairs.${index}.qtyColumn`, pair.qtyColumn],
+          ];
+          if (!pair.directQuantity) {
+            entries.push([`skuQtyPairs.${index}.mergedQtyColumn`, pair.mergedQtyColumn]);
+          }
+          return entries;
+        }),
       ];
   const conflict = entries.find(([entryTarget, entryColumn]) => entryTarget !== target && entryColumn === column);
   return conflict ? mappingTargetLabel(conflict[0]) : null;
@@ -2416,8 +2433,18 @@ export function App(): React.JSX.Element {
     commitMapping(detailPath, applyMappingColumn(detailMapping, target, column, header));
     const pairMatch = column === null ? null : /^skuQtyPairs\.(\d+)\.(qtyColumn|skuColumn)$/.exec(target);
     if (pairMatch && fromPreview) {
-      const nextField = pairMatch[2] === "qtyColumn" ? "skuColumn" : "mergedQtyColumn";
-      setActiveMappingTarget(`skuQtyPairs.${Number(pairMatch[1])}.${nextField}`);
+      const pairIndex = Number(pairMatch[1]);
+      const pair = detailMapping.skuQtyPairs[pairIndex];
+      const nextField = pairMatch[2] === "skuColumn" && pair?.directQuantity
+        ? "qtyColumn"
+        : pairMatch[2] === "qtyColumn"
+          ? "skuColumn"
+          : "mergedQtyColumn";
+      setActiveMappingTarget(
+        pair?.directQuantity && pairMatch[2] === "qtyColumn"
+          ? null
+          : `skuQtyPairs.${pairIndex}.${nextField}`,
+      );
     } else {
       setActiveMappingTarget(null);
     }
@@ -3475,7 +3502,7 @@ export function App(): React.JSX.Element {
                                 <label>订单 Sheet<Select value={currentMapping?.orderSheet ?? ""} onValueChange={(value) => updateMapping(path, value, currentMapping?.pricingSheet ?? "")}><SelectTrigger aria-label="订单 Sheet"><SelectValue /></SelectTrigger><SelectContent>{analysis.orderSheetCandidates.map((candidate) => <SelectItem value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.validOrderRows ?? 0} 行</SelectItem>)}</SelectContent></Select></label>
                                 <label>核价 Sheet<Select value={currentMapping?.pricingSheet ?? ""} onValueChange={(value) => updateMapping(path, currentMapping?.orderSheet ?? "", value)}><SelectTrigger aria-label="核价 Sheet"><SelectValue /></SelectTrigger><SelectContent>{analysis.pricingSheetCandidates.map((candidate) => <SelectItem value={candidate.sheetName} key={candidate.sheetName}>{candidate.sheetName} · {candidate.validPriceRows ?? 0} 行</SelectItem>)}</SelectContent></Select></label>
                               </div>
-                              {currentMapping ? <div className="mapping-line"><span>表头：订单第 {currentMapping.orderHeaderRow} 行 / 核价第 {currentMapping.pricingHeaderRow} 行</span><span>订单号：{columnLabel(currentMapping.businessOrderNumberColumn)}</span><span>国家：{columnLabel(currentMapping.countryCodeColumn)} + {columnLabel(currentMapping.countryEnglishColumn)} + {columnLabel(currentMapping.countryChineseColumn)}</span><span>数量/SKU/合并数量：{currentMapping.skuQtyPairs.map((pair) => pair.qtyColumn + "/" + pair.skuColumn + "/" + pair.mergedQtyColumn).join("、") || "未识别"}</span><span>数量档位：{currentMapping.quantityTierColumns.map((tier) => tier.quantity).join("、") || "未识别"}</span></div> : null}
+                              {currentMapping ? <div className="mapping-line"><span>表头：订单第 {currentMapping.orderHeaderRow} 行 / 核价第 {currentMapping.pricingHeaderRow} 行</span><span>订单号：{columnLabel(currentMapping.businessOrderNumberColumn)}</span><span>国家：{columnLabel(currentMapping.countryCodeColumn)} + {columnLabel(currentMapping.countryEnglishColumn)} + {columnLabel(currentMapping.countryChineseColumn)}</span><span>SKU/数量：{currentMapping.skuQtyPairs.map((pair) => pair.directQuantity ? `${pair.skuColumn}/${pair.qtyColumn}` : `${pair.qtyColumn}/${pair.skuColumn}/${pair.mergedQtyColumn}`).join("、") || "未识别"}</span><span>数量档位：{currentMapping.quantityTierColumns.map((tier) => tier.quantity).join("、") || "未识别"}</span></div> : null}
                               {analysis.issues.length > 0 ? <ul className="detail-issues">{analysis.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}
                             </>
                           ) : <div className="detail-empty">尚未分析此文件</div>}

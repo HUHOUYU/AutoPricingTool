@@ -216,7 +216,10 @@ export function MappingEditor({
           {mapping.skuQtyPairs.map((pair, index) => <div className="mapping-repeat-row is-sku-quantity" key={index}>
             <b>SKU/数量 {index + 1}</b>
             <FieldSelect label={`SKU ${index + 1}`} value={pair.skuColumn || null} options={orderOptions} target={`skuQtyPairs.${index}.skuColumn`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange(`skuQtyPairs.${index}.skuColumn`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
-            <FieldSelect label={`数量 ${index + 1}`} value={pair.mergedQtyColumn || null} options={orderOptions} target={`skuQtyPairs.${index}.mergedQtyColumn`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => onColumnChange(`skuQtyPairs.${index}.mergedQtyColumn`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0))} />
+            <FieldSelect label={`数量 ${index + 1}`} value={(pair.directQuantity ? pair.qtyColumn : pair.mergedQtyColumn) || null} options={orderOptions} target={`skuQtyPairs.${index}.${pair.directQuantity ? "qtyColumn" : "mergedQtyColumn"}`} activeTarget={activeTarget} onActiveTargetChange={onActiveTargetChange} onChange={(column) => {
+              const field = pair.directQuantity ? "qtyColumn" : "mergedQtyColumn";
+              onColumnChange(`skuQtyPairs.${index}.${field}`, column, headerText(orderSheet, mapping.orderHeaderRow, column ?? 0));
+            }} />
           </div>)}
         </div>
       </details>

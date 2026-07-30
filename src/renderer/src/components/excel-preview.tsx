@@ -189,6 +189,7 @@ function formatPreviewNumber(value: number | null | undefined): string {
 
 function normalizeSkuForSearch(value: string): string {
   const normalized = value.trim().replaceAll(/\s/g, "").toLocaleUpperCase();
+  if (normalized.includes("+")) return normalized;
   const multiplierMatch = /^(.*)\*(\d+)$/.exec(normalized);
   return multiplierMatch && multiplierMatch[1] && Number(multiplierMatch[2]) > 0
     ? multiplierMatch[1]
@@ -1109,7 +1110,9 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                               : ""
                           : "";
                         const isWritebackQuantityColumn = derived && writebackColumnIndex === 2;
-                        const sourceQuantity = isWritebackQuantityColumn && highestPrioritySkuQtyPair
+                        const sourceQuantity = isWritebackQuantityColumn
+                          && highestPrioritySkuQtyPair
+                          && !highestPrioritySkuQtyPair.directQuantity
                           ? parsePreviewQuantity(row[highestPrioritySkuQtyPair.mergedQtyColumn - activeSheet.startColumn - 1] ?? "")
                           : null;
                         const writebackQuantity = writebackBySourceRow.get(absoluteRow)?.quantity;
