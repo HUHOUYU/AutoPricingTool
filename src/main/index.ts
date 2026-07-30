@@ -1713,6 +1713,7 @@ app.whenReady().then(async () => {
       sendProcessorCommand({
         ...validated,
         ...(batchOutputDir ? { outputDir: batchOutputDir } : {}),
+        overwriteSourceFiles: appPreferences.overwriteSourceFiles,
         headerTemplates: await readHeaderTemplates(),
         action: "price-check-run",
       });

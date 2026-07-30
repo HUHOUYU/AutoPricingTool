@@ -336,6 +336,17 @@ export function ConfigCenterPage({
                 ><i /></button>
               </div>
               <div className="config-switch-row">
+                <span><strong>源文件覆盖</strong><small>目标文件生成成功后，将同一核价结果覆盖到源文件</small></span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="源文件覆盖"
+                  aria-checked={preferences?.overwriteSourceFiles ?? false}
+                  className="config-switch"
+                  onClick={() => void savePreferences({ overwriteSourceFiles: !(preferences?.overwriteSourceFiles ?? false) })}
+                ><i /></button>
+              </div>
+              <div className="config-switch-row">
                 <span><strong>记住窗口大小</strong><small>开启后记录当前宽高，下次启动时自动恢复</small></span>
                 <button
                   type="button"

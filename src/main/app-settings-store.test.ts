@@ -47,6 +47,7 @@ describe("AppSettingsStore", () => {
     expect(JSON.parse(await readFile(preferencesPath, "utf8"))).toMatchObject({
       continuousIssueReviewEnabled: true,
       autoRevealManualResult: false,
+      overwriteSourceFiles: false,
     });
     expect(JSON.parse(await readFile(statePath, "utf8"))).toMatchObject({
       activeBusinessConfigPath: "C:\\rules\\business.json",
@@ -58,7 +59,7 @@ describe("AppSettingsStore", () => {
 
   it("does not interpret legacy snake-case runtime fields", () => {
     expect(normalizeAppPreferences({ continuous_issue_review_enabled: true }))
-      .toMatchObject({ continuousIssueReviewEnabled: false });
+      .toMatchObject({ continuousIssueReviewEnabled: false, overwriteSourceFiles: false });
     expect(normalizeAppState(
       { recent_output_dir: "C:\\legacy" },
       "C:\\defaults\\extract_rules.json",
@@ -84,6 +85,8 @@ describe("AppSettingsStore", () => {
 
   it("rejects invalid preference and state updates", () => {
     expect(() => validateAppPreferencesUpdate({ continuousIssueReviewEnabled: "yes" }))
+      .toThrow("必须是布尔值");
+    expect(() => validateAppPreferencesUpdate({ overwriteSourceFiles: "yes" }))
       .toThrow("必须是布尔值");
     expect(() => validateAppStateUpdate({ recentOutputDirectory: 42 }))
       .toThrow("必须是有效路径字符串");

@@ -5,6 +5,7 @@ export type AppPreferences = {
   archiveStandardFiles: boolean;
   autoRevealManualResult: boolean;
   continuousIssueReviewEnabled: boolean;
+  overwriteSourceFiles: boolean;
   rememberWindowSize: boolean;
 };
 
@@ -25,6 +26,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   archiveStandardFiles: false,
   autoRevealManualResult: false,
   continuousIssueReviewEnabled: false,
+  overwriteSourceFiles: false,
   rememberWindowSize: false,
 };
 

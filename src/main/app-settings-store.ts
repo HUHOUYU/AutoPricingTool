@@ -34,6 +34,7 @@ export function normalizeAppPreferences(value: unknown): AppPreferences {
     archiveStandardFiles: input.archiveStandardFiles === true,
     autoRevealManualResult: input.autoRevealManualResult === true,
     continuousIssueReviewEnabled: input.continuousIssueReviewEnabled === true,
+    overwriteSourceFiles: input.overwriteSourceFiles === true,
     rememberWindowSize: input.rememberWindowSize === true,
   };
 }
@@ -58,6 +59,7 @@ export function validateAppPreferencesUpdate(value: unknown): AppPreferencesUpda
     "archiveStandardFiles",
     "autoRevealManualResult",
     "continuousIssueReviewEnabled",
+    "overwriteSourceFiles",
     "rememberWindowSize",
   ] as const) {
     if (input[key] === undefined) continue;

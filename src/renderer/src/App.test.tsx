@@ -108,6 +108,7 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
       archiveStandardFiles: false,
       autoRevealManualResult: false,
       continuousIssueReviewEnabled: false,
+      overwriteSourceFiles: false,
       rememberWindowSize: false,
     })),
     setAppPreferences: vi.fn(async (preferences) => ({
@@ -115,6 +116,7 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
       archiveStandardFiles: false,
       autoRevealManualResult: false,
       continuousIssueReviewEnabled: false,
+      overwriteSourceFiles: false,
       rememberWindowSize: false,
       ...preferences,
     })),
@@ -738,6 +740,7 @@ describe("AutoPricingTool cyber workstation", () => {
       archiveStandardFiles: false,
       autoRevealManualResult: true,
       continuousIssueReviewEnabled: false,
+      overwriteSourceFiles: false,
       rememberWindowSize: false,
     }));
     installAPI(api);
@@ -845,6 +848,7 @@ describe("AutoPricingTool cyber workstation", () => {
       archiveStandardFiles: false,
       autoRevealManualResult: true,
       continuousIssueReviewEnabled: false,
+      overwriteSourceFiles: false,
       rememberWindowSize: false,
     }));
     api.listExcelFiles = vi.fn(async () => ({
@@ -924,6 +928,7 @@ describe("AutoPricingTool cyber workstation", () => {
       archiveStandardFiles: false,
       autoRevealManualResult: true,
       continuousIssueReviewEnabled: true,
+      overwriteSourceFiles: false,
       rememberWindowSize: false,
     }));
     api.listExcelFiles = vi.fn(async () => ({
@@ -994,6 +999,7 @@ describe("AutoPricingTool cyber workstation", () => {
       archiveStandardFiles: false,
       autoRevealManualResult: false,
       continuousIssueReviewEnabled: true,
+      overwriteSourceFiles: false,
       rememberWindowSize: false,
     }));
     api.listExcelFiles = vi.fn(async () => ({
@@ -1045,6 +1051,7 @@ describe("AutoPricingTool cyber workstation", () => {
       archiveStandardFiles: false,
       autoRevealManualResult: false,
       continuousIssueReviewEnabled: true,
+      overwriteSourceFiles: false,
       rememberWindowSize: false,
     }));
     api.listExcelFiles = vi.fn(async () => ({
@@ -2305,6 +2312,10 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(continuousReviewSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(continuousReviewSwitch);
     await waitFor(() => expect(continuousReviewSwitch).toHaveAttribute("aria-checked", "true"));
+    const overwriteSourceSwitch = screen.getByRole("switch", { name: "源文件覆盖" });
+    expect(overwriteSourceSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(overwriteSourceSwitch);
+    await waitFor(() => expect(overwriteSourceSwitch).toHaveAttribute("aria-checked", "true"));
     const singleShipmentSwitch = screen.getByRole("switch", { name: "启用单独发货价格匹配" });
     const recipientNameField = screen.getByRole("checkbox", { name: "收件人姓名" });
     const phoneField = screen.getByRole("checkbox", { name: "电话" });
@@ -2325,6 +2336,7 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(source.value).not.toContain('"runtime"');
     expect(api.setAppPreferences).toHaveBeenCalledWith({ autoRevealManualResult: true });
     expect(api.setAppPreferences).toHaveBeenCalledWith({ continuousIssueReviewEnabled: true });
+    expect(api.setAppPreferences).toHaveBeenCalledWith({ overwriteSourceFiles: true });
     expect(source.value).toContain('"single_shipment_matching_enabled": true');
     expect(source.value).toContain('"single_shipment_match_fields"');
     expect(source.value).not.toContain('"postal_code"');

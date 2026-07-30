@@ -161,6 +161,16 @@ pub(crate) fn write_price_result(
     replace_output_file(&temporary_path, output_path, &backup_path)
 }
 
+pub(crate) fn overwrite_source_with_result(output_path: &Path, source_path: &Path) -> Result<()> {
+    fs::copy(output_path, source_path).with_context(|| {
+        format!(
+            "目标文件已生成，但覆盖源文件失败: {}",
+            source_path.display()
+        )
+    })?;
+    Ok(())
+}
+
 fn existing_total_row(
     worksheet: &umya_spreadsheet::Worksheet,
     header_row: usize,

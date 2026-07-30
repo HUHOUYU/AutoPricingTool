@@ -568,6 +568,10 @@ pub(crate) fn run_price_check(command: &Value, state: &RuntimeState) -> Result<(
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
+    let overwrite_source_files = command
+        .get("overwriteSourceFiles")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mappings = command_mappings(command)?;
     let header_templates = command_header_templates(command);
     let mut file_results = Vec::new();
@@ -610,9 +614,13 @@ pub(crate) fn run_price_check(command: &Value, state: &RuntimeState) -> Result<(
             continue;
         };
 
+        let output_options = PriceOutputOptions {
+            directory: &output_dir,
+            overwrite_source_files,
+        };
         match process_price_file(
             path,
-            &output_dir,
+            output_options,
             &run_mapping.mapping,
             &run_mapping.writeback_rows,
             &run_mapping.cell_edits,
@@ -4278,7 +4286,7 @@ fn build_writeback_rows(
 
 fn process_price_file(
     input_path: &Path,
-    output_dir: &Path,
+    output_options: PriceOutputOptions<'_>,
     mapping: &PriceCheckMapping,
     writeback_overrides: &[PricePreviewWritebackRow],
     cell_edits: &[PriceCellEdit],
@@ -4385,7 +4393,7 @@ fn process_price_file(
         }
     }
     let total_rows = rows.len();
-    let output_path = output_path_for(input_path, output_dir);
+    let output_path = output_path_for(input_path, output_options.directory);
     let mut writeback_rows = build_writeback_rows(
         order_sheet,
         mapping,
@@ -4416,8 +4424,17 @@ fn process_price_file(
         &writeback_rows,
         cell_edits,
     )?;
+    if output_options.overwrite_source_files {
+        crate::pricing_writer::overwrite_source_with_result(&output_path, input_path)?;
+    }
     report.output_path = output_path.display().to_string();
     Ok(report)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PriceOutputOptions<'a> {
+    directory: &'a Path,
+    overwrite_source_files: bool,
 }
 
 fn apply_cell_edits(workbook: &mut WorkbookData, edits: &[PriceCellEdit]) -> Result<()> {
