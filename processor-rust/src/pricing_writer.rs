@@ -593,6 +593,22 @@ mod tests {
     }
 
     #[test]
+    fn overwrites_source_by_copying_the_generated_result() -> Result<()> {
+        let source_path = unique_path("overwrite-source", "xlsx");
+        let output_path = unique_path("overwrite-output", "xlsx");
+        fs::write(&source_path, b"original")?;
+        fs::write(&output_path, b"generated-result")?;
+
+        overwrite_source_with_result(&output_path, &source_path)?;
+
+        assert_eq!(fs::read(&source_path)?, b"generated-result");
+        assert_eq!(fs::read(&output_path)?, b"generated-result");
+        fs::remove_file(source_path)?;
+        fs::remove_file(output_path)?;
+        Ok(())
+    }
+
+    #[test]
     fn rejects_legacy_formats_without_creating_output() {
         for extension in LEGACY_EXCEL_EXTENSIONS {
             let source_path = unique_path("legacy-source", extension);
