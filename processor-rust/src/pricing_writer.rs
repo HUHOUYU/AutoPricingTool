@@ -9,6 +9,9 @@ const WRITEBACK_COLUMN_COUNT: u32 = WRITEBACK_HEADERS.len() as u32;
 const WRITEBACK_BACKGROUND_COLOR: &str = "D8EEE0";
 const WRITEBACK_ALERT_BACKGROUND_COLOR: &str = "FFC7CE";
 const WRITEBACK_FONT_COLOR: &str = "FF000000";
+const WRITEBACK_MIN_COLUMN_WIDTHS: [f64; 3] = [15.0, 15.0, 12.0];
+const WRITEBACK_MAX_COLUMN_WIDTH: f64 = 32.0;
+const WRITEBACK_COLUMN_PADDING: f64 = 2.0;
 const TOTAL_ROW_LABELS: [&str; 3] = ["total", "合计", "总计"];
 const SUPPORTED_WRITEBACK_EXTENSIONS: [&str; 2] = ["xlsx", "xlsm"];
 const LEGACY_EXCEL_EXTENSIONS: [&str; 2] = ["xls", "xlsb"];
@@ -149,6 +152,7 @@ pub(crate) fn write_price_result(
             apply_writeback_value_style(worksheet, column, total_row, WRITEBACK_BACKGROUND_COLOR);
         }
     }
+    fit_writeback_column_widths(worksheet, insert_column);
 
     let temporary_path = sibling_work_path(output_path, "tmp");
     let backup_path = sibling_work_path(output_path, "bak");
@@ -264,6 +268,37 @@ fn apply_writeback_value_style(
         .font_mut()
         .color_mut()
         .set_argb_str(WRITEBACK_FONT_COLOR);
+}
+
+fn fit_writeback_column_widths(worksheet: &mut umya_spreadsheet::Worksheet, first_column: u32) {
+    let highest_row = worksheet.highest_row();
+    for (offset, minimum_width) in WRITEBACK_MIN_COLUMN_WIDTHS.iter().enumerate() {
+        let column = first_column + offset as u32;
+        let content_width = (1..=highest_row)
+            .map(|row| excel_text_width(&worksheet.value((column, row))))
+            .max()
+            .unwrap_or_default() as f64;
+        let width = (content_width + WRITEBACK_COLUMN_PADDING)
+            .max(*minimum_width)
+            .min(WRITEBACK_MAX_COLUMN_WIDTH);
+        worksheet
+            .column_dimension_by_number_mut(column)
+            .set_width(width)
+            .set_best_fit(false)
+            .set_auto_width(false);
+    }
+}
+
+fn excel_text_width(value: &str) -> usize {
+    value
+        .lines()
+        .map(|line| {
+            line.chars()
+                .map(|character| if character.is_ascii() { 1 } else { 2 })
+                .sum()
+        })
+        .max()
+        .unwrap_or_default()
 }
 
 fn copy_column_layout(
@@ -519,6 +554,15 @@ mod tests {
         assert_eq!(order.value("D7"), "20");
         assert_eq!(order.value("E7"), "-2");
         assert_eq!(order.value("F7"), "3");
+        for (column, minimum_width) in (4..=6).zip(WRITEBACK_MIN_COLUMN_WIDTHS) {
+            assert!(
+                order
+                    .column_dimension_by_number(column)
+                    .expect("writeback column dimension")
+                    .width()
+                    >= minimum_width
+            );
+        }
         assert_eq!(order.highest_row(), 7);
         assert_eq!(order.value("G2"), "Name-1");
         assert_eq!(output.sheet_by_name("核价")?.value("A1"), "已编辑核价表头");
@@ -585,6 +629,41 @@ mod tests {
         assert_eq!(
             pricing.cell("A3").expect("cross-sheet formula").formula(),
             "'订单'!G2"
+        );
+
+        fs::remove_file(source_path)?;
+        fs::remove_file(output_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn writeback_column_width_expands_for_long_numeric_content() -> Result<()> {
+        let source_path = unique_path("writeback-width-source", "xlsx");
+        let output_path = unique_path("writeback-width-output", "xlsx");
+        create_source_workbook(&source_path)?;
+
+        write_price_result(
+            &source_path,
+            &output_path,
+            "订单",
+            writeback_layout(3),
+            &[PriceWritebackRow {
+                source_row: 2,
+                pricing_price: Some(123_456_789_012_345.0),
+                matched: true,
+                ..PriceWritebackRow::default()
+            }],
+            &[],
+        )?;
+
+        let output = umya_spreadsheet::reader::xlsx::read(&output_path)?;
+        let order = output.sheet_by_name("订单")?;
+        assert!(
+            order
+                .column_dimension_by_number(4)
+                .expect("pricing column dimension")
+                .width()
+                > WRITEBACK_MIN_COLUMN_WIDTHS[0]
         );
 
         fs::remove_file(source_path)?;
