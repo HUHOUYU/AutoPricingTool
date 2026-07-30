@@ -5,7 +5,7 @@ import { access, appendFile, copyFile, mkdir, readFile, readdir, rm, stat, write
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { availableParallelism, userInfo } from "node:os";
-import { assertTrustedIpcSender, isTrustedRendererUrl } from "./security";
+import { assertTrustedIpcSender } from "./security";
 import { readExcelPreviewFile } from "./excel-preview-file";
 import { resolveLocalProcessorExecutable } from "./processor-path";
 import { TaskHistoryStore, TASK_HISTORY_SCHEMA_VERSION } from "./task-history-store";
@@ -47,12 +47,9 @@ import { resolveBundledDefaultConfigPath } from "./resource-paths";
 import { createConfigDocumentService } from "./config-document-service";
 import { samePath } from "./path-utils";
 import {
-  initialWindowSize,
-  MIN_WINDOW_SIZE,
-  setRememberedWindowSize,
   type WindowPreferences,
-  type WindowSize,
 } from "./window-preferences";
+import { createWindowManager } from "./window-manager";
 
 type ExportFileRowsPayload = {
   categoryLabel: string;
@@ -162,6 +159,27 @@ const {
   saveDocumentAs: saveConfigDocumentAs,
   validate: validateConfigContent,
 } = configDocuments;
+const windowManager = createWindowManager({
+  appIconPath,
+  backgroundColor: defaultWindowBackgroundColor,
+  getPreferences: currentWindowPreferences,
+  isRememberSizeEnabled: () => appPreferences.rememberWindowSize,
+  onRememberSizeChange: async (rememberSize, next) => {
+    [appPreferences, appState] = await Promise.all([
+      appSettingsStore.updatePreferences({ rememberWindowSize: rememberSize }),
+      appSettingsStore.updateState({
+        ...(next.width !== undefined ? { windowWidth: next.width } : {}),
+        ...(next.height !== undefined ? { windowHeight: next.height } : {}),
+      }),
+    ]);
+  },
+  persistWindowSize: async ({ width, height }) => {
+    appState = await appSettingsStore.updateState({ windowWidth: width, windowHeight: height });
+  },
+  preloadPath: join(__dirname, "../preload/index.js"),
+  resizeSaveDelayMs: windowResizeSaveDelayMs,
+  trustedRendererLocation,
+});
 
 type ProcessorCommand = Record<string, unknown> & {
   action: string;
@@ -584,66 +602,6 @@ async function nextAvailableCopyPath(directory: string, fileName: string): Promi
   return candidate;
 }
 
-function createWindow(): void {
-  const initialSize = initialWindowSize(currentWindowPreferences());
-  const mainWindow = new BrowserWindow({
-    width: initialSize.width,
-    height: initialSize.height,
-    minWidth: MIN_WINDOW_SIZE.width,
-    minHeight: MIN_WINDOW_SIZE.height,
-    title: "Excel 订单批量核价工具",
-    backgroundColor: defaultWindowBackgroundColor,
-    show: false,
-    frame: false,
-    icon: appIconPath,
-    webPreferences: {
-      preload: join(__dirname, "../preload/index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  let resizeSaveTimer: NodeJS.Timeout | undefined;
-  let pendingWindowSize: WindowSize | undefined;
-  mainWindow.on("resize", () => {
-    if (!appPreferences.rememberWindowSize || mainWindow.isMaximized() || mainWindow.isMinimized() || mainWindow.isFullScreen()) return;
-    const [width, height] = mainWindow.getSize();
-    pendingWindowSize = { width, height };
-    if (resizeSaveTimer) clearTimeout(resizeSaveTimer);
-    resizeSaveTimer = setTimeout(() => {
-      if (!pendingWindowSize) return;
-      const next = setRememberedWindowSize(currentWindowPreferences(), true, pendingWindowSize);
-      pendingWindowSize = undefined;
-      void appSettingsStore.updateState({
-        ...(next.width !== undefined ? { windowWidth: next.width } : {}),
-        ...(next.height !== undefined ? { windowHeight: next.height } : {}),
-      }).then((state) => { appState = state; }).catch(() => undefined);
-    }, windowResizeSaveDelayMs);
-  });
-  mainWindow.on("closed", () => {
-    if (resizeSaveTimer) clearTimeout(resizeSaveTimer);
-    if (appPreferences.rememberWindowSize && pendingWindowSize) {
-      const next = setRememberedWindowSize(currentWindowPreferences(), true, pendingWindowSize);
-      void appSettingsStore.updateState({
-        ...(next.width !== undefined ? { windowWidth: next.width } : {}),
-        ...(next.height !== undefined ? { windowHeight: next.height } : {}),
-      }).then((state) => { appState = state; }).catch(() => undefined);
-    }
-  });
-  mainWindow.once("ready-to-show", () => mainWindow.show());
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (!isTrustedRendererUrl(url, trustedRendererLocation)) {
-      event.preventDefault();
-    }
-  });
-  if (devServerUrl) {
-    void mainWindow.loadURL(devServerUrl);
-  } else {
-    void mainWindow.loadFile(rendererHtmlPath);
-  }
-}
-
 function broadcastProcessorEvent(event: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send("processor:event", event);
@@ -984,38 +942,24 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("window:minimize", (event) => {
     requireTrustedIpc(event);
-    BrowserWindow.fromWebContents(event.sender)?.minimize();
+    windowManager.minimize(event.sender);
   });
   ipcMain.handle("window:toggle-maximize", (event) => {
     requireTrustedIpc(event);
-    const window = BrowserWindow.fromWebContents(event.sender);
-    if (!window) return;
-    if (window.isMaximized()) window.unmaximize();
-    else window.maximize();
+    windowManager.toggleMaximize(event.sender);
   });
   ipcMain.handle("window:close", (event) => {
     requireTrustedIpc(event);
-    BrowserWindow.fromWebContents(event.sender)?.close();
+    windowManager.close(event.sender);
   });
   ipcMain.handle("window:get-preferences", (event) => {
     requireTrustedIpc(event);
-    return currentWindowPreferences();
+    return windowManager.getPreferences();
   });
   ipcMain.handle("window:set-remember-size", async (event, rememberSize: unknown) => {
     requireTrustedIpc(event);
     if (typeof rememberSize !== "boolean") throw new TypeError("记住窗口大小选项必须是布尔值");
-    const targetWindow = BrowserWindow.fromWebContents(event.sender);
-    const fallbackSize = initialWindowSize(currentWindowPreferences());
-    const [width, height] = targetWindow?.getSize() ?? [fallbackSize.width, fallbackSize.height];
-    const next = setRememberedWindowSize(currentWindowPreferences(), rememberSize, { width, height });
-    [appPreferences, appState] = await Promise.all([
-      appSettingsStore.updatePreferences({ rememberWindowSize: rememberSize }),
-      appSettingsStore.updateState({
-        ...(next.width !== undefined ? { windowWidth: next.width } : {}),
-        ...(next.height !== undefined ? { windowHeight: next.height } : {}),
-      }),
-    ]);
-    return currentWindowPreferences();
+    return windowManager.setRememberSize(event.sender, rememberSize);
   });
   ipcMain.handle("config:get-document", (event, candidatePath?: unknown) => {
     requireTrustedIpc(event);
@@ -1539,11 +1483,11 @@ app.whenReady().then(async () => {
     return selectedDocument.path;
   });
 
-  createWindow();
+  windowManager.createWindow();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      windowManager.createWindow();
     }
   });
 });
