@@ -6,12 +6,13 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      "@": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
+      "@": fileURLToPath(new URL("./frontend/src", import.meta.url)),
     },
   },
   test: {
     environment: "jsdom",
-    setupFiles: ["./src/renderer/src/test/setup.ts"],
+    include: ["test/**/*.{test,spec}.{ts,tsx}"],
+    setupFiles: ["./test/frontend/setup.ts"],
     globals: true,
   },
 });
