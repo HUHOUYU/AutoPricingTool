@@ -19,6 +19,7 @@ struct Candidate {
     column: usize,
     score: f64,
     pattern_hits: usize,
+    exact_header: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -226,6 +227,11 @@ fn candidates_for_field(
         }
         let alias_score =
             header_alias_score_prepared(&normalized_header, &rule.normalized_header_aliases);
+        let exact_header = !normalized_header.is_empty()
+            && rule
+                .normalized_header_aliases
+                .iter()
+                .any(|alias| alias == &normalized_header);
         let samples = column_samples(
             sheet,
             column,
@@ -284,13 +290,18 @@ fn candidates_for_field(
                 column,
                 score,
                 pattern_hits: value_pattern_hits,
+                exact_header,
             });
         }
     }
     candidates.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        b.exact_header
+            .cmp(&a.exact_header)
+            .then_with(|| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then(b.pattern_hits.cmp(&a.pattern_hits))
     });
     candidates
@@ -858,6 +869,7 @@ fn candidates_from_hints(
                     column: *column,
                     score: 0.0,
                     pattern_hits: 0,
+                    exact_header: false,
                 },
             );
         }
@@ -1080,6 +1092,11 @@ fn multi_field_candidates(
             }
             let alias_score =
                 header_alias_score_prepared(&normalized_header, &rule.normalized_header_aliases);
+            let exact_header = !normalized_header.is_empty()
+                && rule
+                    .normalized_header_aliases
+                    .iter()
+                    .any(|alias| alias == &normalized_header);
             let samples = column_samples(
                 sheet,
                 column,
@@ -1128,12 +1145,16 @@ fn multi_field_candidates(
                 column,
                 score,
                 pattern_hits: value_pattern_hits,
+                exact_header,
             };
             candidates_by_column
                 .entry(column)
                 .and_modify(|current| {
-                    if candidate.score > current.score
-                        || (candidate.score == current.score
+                    if (candidate.exact_header && !current.exact_header)
+                        || (candidate.exact_header == current.exact_header
+                            && candidate.score > current.score)
+                        || (candidate.exact_header == current.exact_header
+                            && candidate.score == current.score
                             && candidate.pattern_hits > current.pattern_hits)
                     {
                         *current = candidate.clone();
@@ -1143,7 +1164,20 @@ fn multi_field_candidates(
         }
     }
 
-    candidates_by_column.into_values().collect()
+    let mut candidates = candidates_by_column.into_values().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        right
+            .exact_header
+            .cmp(&left.exact_header)
+            .then_with(|| {
+                right
+                    .score
+                    .partial_cmp(&left.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then(left.column.cmp(&right.column))
+    });
+    candidates
 }
 
 fn is_right_column(candidate: &Candidate, base_column: usize) -> bool {
@@ -2366,6 +2400,46 @@ mod tests {
             header_alias_score_prepared("lineitem sku", &contains_first)
                 > header_alias_score_prepared("lineitem sku", &contains_second)
         );
+    }
+
+    #[test]
+    fn field_candidates_prioritize_exact_headers_over_content_scores() {
+        let config = Config::default();
+        let value_pattern = Regex::new("^MATCH$").unwrap();
+        for (field_name, exact_header) in [
+            ("order_number", "Order number-PY"),
+            ("sku_detail", "SKU-PY"),
+            ("qty_detail", "Qty-PY"),
+            ("country_code", "Country-PY"),
+        ] {
+            let partial_header = exact_header.trim_end_matches("-PY");
+            let rule = FieldRule {
+                header_aliases: vec![exact_header.to_string()],
+                value_patterns: vec!["^MATCH$".to_string()],
+                normalized_header_aliases: vec![normalize_header(exact_header)],
+                compiled_value_patterns: vec![value_pattern.clone()],
+                ..FieldRule::default()
+            };
+            let sheet = SheetData {
+                name: "order".to_string(),
+                rows: vec![
+                    vec![
+                        CellValue::string(partial_header),
+                        CellValue::string(exact_header),
+                    ],
+                    vec![CellValue::string("MATCH"), CellValue::string("MATCH")],
+                    vec![CellValue::string("MATCH"), CellValue::string("NO_MATCH")],
+                ],
+            };
+
+            assert_eq!(
+                candidates_for_field(&sheet, field_name, &rule, 1, &config, &HashMap::new(),)
+                    .first()
+                    .map(|candidate| candidate.column),
+                Some(2),
+                "{exact_header} should prefer the exact header"
+            );
+        }
     }
 
     #[test]

@@ -2704,17 +2704,31 @@ fn configured_matching_columns(
         .iter()
         .enumerate()
         .filter_map(|(column, cell)| {
-            let header_score = configured_header_score(&cell.text(), rule, fallback_aliases);
+            let header = cell.text();
+            let header_score = configured_header_score(&header, rule, fallback_aliases);
             if header_score <= 0 {
                 return None;
             }
             let score = header_score
                 + field_sample_adjustment(sheet, header_idx, column, rule, ORDER_HEADER_SCAN_ROWS);
-            (score > 0).then_some((score, column))
+            (score > 0).then_some((
+                configured_header_is_exact(&header, rule, fallback_aliases),
+                score,
+                column,
+            ))
         })
         .collect::<Vec<_>>();
-    candidates.sort_by_key(|(score, column)| (std::cmp::Reverse(*score), *column));
-    candidates.into_iter().map(|(_, column)| column).collect()
+    candidates.sort_by_key(|(is_exact, score, column)| {
+        (
+            std::cmp::Reverse(*is_exact),
+            std::cmp::Reverse(*score),
+            *column,
+        )
+    });
+    candidates
+        .into_iter()
+        .map(|(_, _, column)| column)
+        .collect()
 }
 
 fn configured_exact_header_columns(
@@ -2722,27 +2736,33 @@ fn configured_exact_header_columns(
     rule: Option<&FieldRule>,
     fallback_aliases: &[&str],
 ) -> Vec<usize> {
-    let aliases = rule
-        .filter(|rule| !rule.header_aliases.is_empty())
-        .map(|rule| {
-            rule.header_aliases
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| fallback_aliases.to_vec());
     header
         .iter()
         .enumerate()
         .filter_map(|(column, cell)| {
-            let normalized = normalize_header(&cell.text());
-            (!normalized.is_empty()
-                && aliases
-                    .iter()
-                    .any(|alias| normalize_header(alias) == normalized))
-            .then_some(column)
+            configured_header_is_exact(&cell.text(), rule, fallback_aliases).then_some(column)
         })
         .collect()
+}
+
+fn configured_header_is_exact(
+    value: &str,
+    rule: Option<&FieldRule>,
+    fallback_aliases: &[&str],
+) -> bool {
+    let normalized = normalize_header(value);
+    if normalized.is_empty() {
+        return false;
+    }
+    if let Some(rule) = rule.filter(|rule| !rule.header_aliases.is_empty()) {
+        rule.header_aliases
+            .iter()
+            .any(|alias| normalize_header(alias) == normalized)
+    } else {
+        fallback_aliases
+            .iter()
+            .any(|alias| normalize_header(alias) == normalized)
+    }
 }
 
 fn configured_best_column(
@@ -4965,6 +4985,39 @@ mod tests {
             configured_best_column(&sheet, 0, Some(&rule), SKU_ALIASES),
             Some(1)
         );
+    }
+
+    #[test]
+    fn exact_header_beats_partial_header_with_stronger_content_match_for_all_fields() {
+        let value_pattern = Regex::new("^MATCH$").unwrap();
+        for exact_header in ["Order number-PY", "SKU-PY", "Qty-PY", "Country-PY"] {
+            let partial_header = exact_header.trim_end_matches("-PY");
+            let rule = FieldRule {
+                header_aliases: vec![exact_header.to_string()],
+                value_patterns: vec!["^MATCH$".to_string()],
+                compiled_value_patterns: vec![value_pattern.clone()],
+                ..FieldRule::default()
+            };
+            let sheet = SheetData {
+                name: "order".to_string(),
+                rows: vec![
+                    vec![
+                        CellValue::string(partial_header),
+                        CellValue::string(exact_header),
+                    ],
+                    vec![CellValue::string("MATCH"), CellValue::string("NO_MATCH")],
+                    vec![CellValue::string("MATCH"), CellValue::string("NO_MATCH")],
+                ],
+            };
+
+            assert_eq!(
+                configured_matching_columns(&sheet, 0, Some(&rule), &[])
+                    .first()
+                    .copied(),
+                Some(1),
+                "{exact_header} should prefer the exact header"
+            );
+        }
     }
 
     #[test]
