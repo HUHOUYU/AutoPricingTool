@@ -1,6 +1,9 @@
 use crate::pricing::{PriceCellEdit, PriceWritebackRow};
 use anyhow::{Context, Result, anyhow};
+use regex::Regex;
+use std::collections::HashMap;
 use std::fs;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +18,12 @@ const WRITEBACK_COLUMN_PADDING: f64 = 2.0;
 const TOTAL_ROW_LABELS: [&str; 3] = ["total", "合计", "总计"];
 const SUPPORTED_WRITEBACK_EXTENSIONS: [&str; 2] = ["xlsx", "xlsm"];
 const LEGACY_EXCEL_EXTENSIONS: [&str; 2] = ["xls", "xlsb"];
+
+#[derive(Debug, Clone)]
+struct ArrayFormulaMetadata {
+    cell_reference: String,
+    range_reference: String,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PriceWritebackLayout {
@@ -153,12 +162,17 @@ pub(crate) fn write_price_result(
         }
     }
     fit_writeback_column_widths(worksheet, insert_column);
+    let array_formulas = collect_array_formula_metadata(&workbook);
 
     let temporary_path = sibling_work_path(output_path, "tmp");
     let backup_path = sibling_work_path(output_path, "bak");
     let write_result = umya_spreadsheet::writer::xlsx::write(&workbook, &temporary_path)
         .with_context(|| format!("写入临时结果文件失败: {}", temporary_path.display()));
     if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(error);
+    }
+    if let Err(error) = restore_array_formula_metadata(&temporary_path, &array_formulas) {
         let _ = fs::remove_file(&temporary_path);
         return Err(error);
     }
@@ -301,6 +315,146 @@ fn excel_text_width(value: &str) -> usize {
         .unwrap_or_default()
 }
 
+fn collect_array_formula_metadata(
+    workbook: &umya_spreadsheet::Workbook,
+) -> HashMap<String, Vec<ArrayFormulaMetadata>> {
+    workbook
+        .sheet_collection()
+        .iter()
+        .enumerate()
+        .filter_map(|(sheet_index, worksheet)| {
+            let formulas = worksheet
+                .cells()
+                .into_iter()
+                .filter_map(|cell| {
+                    let formula = cell.formula_obj()?;
+                    (formula.formula_type() == &umya_spreadsheet::CellFormulaValues::Array).then(
+                        || {
+                            let cell_reference = cell.coordinate().to_string();
+                            ArrayFormulaMetadata {
+                                range_reference: adjusted_array_formula_reference(
+                                    &cell_reference,
+                                    formula.reference(),
+                                ),
+                                cell_reference,
+                            }
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            (!formulas.is_empty()).then_some((
+                format!("xl/worksheets/sheet{}.xml", sheet_index + 1),
+                formulas,
+            ))
+        })
+        .collect()
+}
+
+fn adjusted_array_formula_reference(cell_reference: &str, original_reference: &str) -> String {
+    let Some((original_start, original_end)) = original_reference.split_once(':') else {
+        return cell_reference.to_string();
+    };
+    let (Some(original_column), Some(original_row), _, _) =
+        umya_spreadsheet::helper::coordinate::index_from_coordinate(original_start)
+    else {
+        return original_reference.to_string();
+    };
+    let (Some(end_column), Some(end_row), _, _) =
+        umya_spreadsheet::helper::coordinate::index_from_coordinate(original_end)
+    else {
+        return original_reference.to_string();
+    };
+    let (Some(current_column), Some(current_row), _, _) =
+        umya_spreadsheet::helper::coordinate::index_from_coordinate(cell_reference)
+    else {
+        return original_reference.to_string();
+    };
+    let Some(column_span) = end_column.checked_sub(original_column) else {
+        return original_reference.to_string();
+    };
+    let Some(row_span) = end_row.checked_sub(original_row) else {
+        return original_reference.to_string();
+    };
+    let Some(shifted_end_column) = current_column.checked_add(column_span) else {
+        return original_reference.to_string();
+    };
+    let Some(shifted_end_row) = current_row.checked_add(row_span) else {
+        return original_reference.to_string();
+    };
+    format!(
+        "{}:{}",
+        cell_reference,
+        umya_spreadsheet::helper::coordinate::coordinate_from_index(
+            shifted_end_column,
+            shifted_end_row
+        )
+    )
+}
+
+fn restore_array_formula_metadata(
+    workbook_path: &Path,
+    formulas_by_entry: &HashMap<String, Vec<ArrayFormulaMetadata>>,
+) -> Result<()> {
+    if formulas_by_entry.is_empty() {
+        return Ok(());
+    }
+
+    let workbook_bytes = fs::read(workbook_path)?;
+    let mut input = zip::ZipArchive::new(Cursor::new(workbook_bytes))?;
+    let rewritten_path = sibling_work_path(workbook_path, "array-formulas");
+    let rewritten_file = fs::File::create(&rewritten_path)?;
+    let mut writer = zip::ZipWriter::new(rewritten_file);
+
+    let rewrite_result = (|| -> Result<()> {
+        for index in 0..input.len() {
+            let mut entry = input.by_index(index)?;
+            let entry_name = entry.name().to_string();
+            let Some(formulas) = formulas_by_entry.get(&entry_name) else {
+                writer.raw_copy_file(entry)?;
+                continue;
+            };
+
+            let compression = entry.compression();
+            let mut xml = String::new();
+            entry.read_to_string(&mut xml)?;
+            for formula in formulas {
+                let pattern = Regex::new(&format!(
+                    r#"(?s)(<c\b[^>]*\br="{}"[^>]*>.*?<f)(?:\s[^>]*)?>"#,
+                    regex::escape(&formula.cell_reference)
+                ))?;
+                if pattern.find_iter(&xml).count() != 1 {
+                    return Err(anyhow!(
+                        "恢复数组公式失败: {entry_name}!{}",
+                        formula.cell_reference
+                    ));
+                }
+                xml = pattern
+                    .replacen(
+                        &xml,
+                        1,
+                        format!("${{1}} t=\"array\" ref=\"{}\">", formula.range_reference),
+                    )
+                    .into_owned();
+            }
+
+            writer.start_file(
+                entry_name,
+                zip::write::SimpleFileOptions::default().compression_method(compression),
+            )?;
+            writer.write_all(xml.as_bytes())?;
+        }
+        writer.finish()?;
+        Ok(())
+    })();
+
+    if let Err(error) = rewrite_result {
+        let _ = fs::remove_file(&rewritten_path);
+        return Err(error).context("保留原工作簿数组公式失败");
+    }
+    let backup_path = sibling_work_path(workbook_path, "array-backup");
+    replace_output_file(&rewritten_path, workbook_path, &backup_path)
+}
+
 fn copy_column_layout(
     worksheet: &mut umya_spreadsheet::Worksheet,
     source_column: u32,
@@ -437,7 +591,7 @@ mod tests {
                 order.write_string(row, 3, format!("Name-{row}"))?;
                 order.write_string(row, 4, format!("Address-{row}"))?;
             }
-            order.write_formula(4, 3, "=C2+C3")?;
+            order.write_array_formula(4, 3, 4, 3, "=C2+C3")?;
             order.merge_range(5, 3, 5, 4, "merged", &Format::new())?;
             order.write_string(6, 1, "Total")?;
             order.write_number(6, 2, 30.0)?;
@@ -567,6 +721,15 @@ mod tests {
         assert_eq!(order.value("G2"), "Name-1");
         assert_eq!(output.sheet_by_name("核价")?.value("A1"), "已编辑核价表头");
         assert_eq!(order.cell("G5").expect("formula cell").formula(), "C2+C3");
+        let formula = order
+            .cell("G5")
+            .and_then(|cell| cell.formula_obj())
+            .expect("array formula metadata");
+        assert_eq!(
+            formula.formula_type(),
+            &umya_spreadsheet::CellFormulaValues::Array
+        );
+        assert_eq!(formula.reference(), "G5");
         assert!(
             order
                 .merge_cells()
