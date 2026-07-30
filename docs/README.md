@@ -98,14 +98,14 @@ pnpm run dist:win
 AutoPricingTool/
   config/extract_rules.json     # 开发态默认可写配置
   resources/defaults/           # 打包时随程序发布的不可变默认配置
-  src/main/app-settings-store.ts # 本机偏好与运行状态持久化
-  processor-rust/src/pricing.rs # 核价核心
-  processor-rust/src/pricing_writer.rs # 原工作簿写回
-  src/main/                     # Electron 主进程
-  src/main/task-history-store.ts # 批次历史与统计聚合
-  src/preload/
-  src/shared/task-history.ts    # 主进程/预加载/渲染器共享类型与异常分类
-  src/renderer/                 # UI
+  backend/electron/main/app-settings-store.ts # 本机偏好与运行状态持久化
+  backend/processor/src/pricing.rs # 核价核心
+  backend/processor/src/pricing_writer.rs # 原工作簿写回
+  backend/electron/main/                     # Electron 主进程
+  backend/electron/main/task-history-store.ts # 批次历史与统计聚合
+  backend/electron/preload/
+  shared/task-history.ts    # 主进程/预加载/渲染器共享类型与异常分类
+  frontend/                 # UI
   docs/                         # 本文档
 ```
 
