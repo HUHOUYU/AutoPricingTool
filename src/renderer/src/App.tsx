@@ -566,7 +566,10 @@ function statusForFile(
   if (result?.status === "failed") return "error";
   if (result?.status === "completed") return manuallyConfirmed || (result.exceptionRows ?? 0) === 0 ? "success" : "warning";
   if (isBusy && activePath === path) return "running";
-  if (analysis) return isAnalysisError(analysis) || analysis.automationDecision.status === "error" ? "error" : "ready";
+  if (analysis) {
+    if (isAnalysisError(analysis) || analysis.automationDecision.status === "error") return "error";
+    return analysis.automationDecision.status === "confirm" ? "ready" : "pending";
+  }
   return "pending";
 }
 
@@ -2550,7 +2553,7 @@ export function App(): React.JSX.Element {
     }, RESULT_REVEAL_HIGHLIGHT_MS);
   }, [autoRevealManualResult, fileStatusByPath, files, manualIssueReviewResolution, pageSize, setActiveTab]);
 
-  // 批次从运行中结束时：自动切到有结果的 Tab，单文件待确认则打开详情
+  // 批次从运行中结束时：自动切到有结果的 Tab，仅单个真实待确认文件打开详情
   useEffect(() => {
     if (isTaskActive) {
       batchTaskWasActiveRef.current = true;
@@ -2563,11 +2566,11 @@ export function App(): React.JSX.Element {
     const nextTab = pickBestResultTab(tabCounts);
     if (nextTab) setActiveTab(nextTab);
 
-    if (tabCounts.confirm === 1) {
-      const confirmPath = files.find((path) => tabForStatus(fileStatusByPath[path]) === "confirm");
-      if (confirmPath) openDetailDrawer(confirmPath);
-    }
-  }, [batchStarted, fileStatusByPath, files, isTaskActive, setActiveTab, tabCounts]);
+    const confirmPaths = files.filter((path) =>
+      analyses[path]?.automationDecision.status === "confirm"
+      && tabForStatus(fileStatusByPath[path]) === "confirm");
+    if (confirmPaths.length === 1) openDetailDrawer(confirmPaths[0]!);
+  }, [analyses, batchStarted, fileStatusByPath, files, isTaskActive, setActiveTab, tabCounts]);
 
   const batchNextAction = useMemo(() => {
     if (isTaskActive || !batchStarted) return null;

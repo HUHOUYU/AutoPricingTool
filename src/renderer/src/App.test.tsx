@@ -754,12 +754,14 @@ describe("AutoPricingTool cyber workstation", () => {
       api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
     });
     await waitFor(() => expect(api.runPriceCheck).toHaveBeenCalledWith(expect.objectContaining({ files: ["C:\\orders\\order.xlsx"], outputDir: "C:\\output" })));
+    expect(screen.queryByRole("dialog", { name: "文件处理详情" })).not.toBeInTheDocument();
     await act(async () => {
       api.emit({ type: "price-progress", phase: "run", current: 1, total: 1, path: "C:\\orders\\order.xlsx" });
       api.emit({ type: "price-progress", phase: "rows", current: 1, total: 14, path: "C:\\orders\\order.xlsx" });
       api.emit({ type: "price-file-result", path: "C:\\orders\\order.xlsx", status: "completed", totalRows: 14, matchedRows: 14, exceptionRows: 0 });
       api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ totalRows: 14, matchedRows: 14, exceptionRows: 0 }] });
     });
+    expect(screen.queryByRole("dialog", { name: "文件处理详情" })).not.toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "本批已完成 100%" })).toHaveAttribute("aria-valuenow", "100");
     // 批次结束后自动切到有结果的 Tab（本例全部成功）
     expect(useUIStore.getState().activeTab).toBe("success");
@@ -772,6 +774,32 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(api.selectExcelFiles).not.toHaveBeenCalled();
     expect(api.finishTaskBatch).not.toHaveBeenCalled();
+  });
+
+  it("automatically opens the detail drawer for one true confirmation file", async () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    dropFiles([new File(["xlsx"], "confirm.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("confirm.xlsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
+    const analysis = createAnalysis("C:\\orders\\confirm.xlsx");
+    analysis.requiresConfirmation = true;
+    analysis.automationDecision = {
+      ...analysis.automationDecision,
+      status: "confirm",
+      reasons: ["需要确认映射"],
+    };
+
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: analysis });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+
+    const detailDialog = await screen.findByRole("dialog", { name: "文件处理详情" });
+    expect(within(detailDialog).getByText("confirm.xlsx")).toBeInTheDocument();
+    expect(api.runPriceCheck).not.toHaveBeenCalled();
   });
 
   it("asks for and persists an output directory before importing a dropped workbook", async () => {
