@@ -92,7 +92,7 @@ export function BatchFileToolbar({
             {fileTabs.map((tab) => (
               <button
                 type="button"
-                className={activeTab === tab.key ? "is-active" : ""}
+                className={`is-${tab.key}${activeTab === tab.key ? " is-active" : ""}`}
                 key={tab.key}
                 onClick={() => onTabChange(tab.key)}
               >

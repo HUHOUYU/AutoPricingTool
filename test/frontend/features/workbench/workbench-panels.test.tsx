@@ -41,6 +41,8 @@ describe("workbench panels", () => {
 
     expect(onBeginBatchNameEdit).toHaveBeenCalledTimes(1);
     expect(onTabChange).toHaveBeenCalledWith("confirm");
+    expect(screen.getByRole("button", { name: /异常/ })).toHaveClass("is-error");
+    expect(screen.getByRole("button", { name: /完成/ })).toHaveClass("is-success");
   });
 
   it("renders progress details and routes pagination changes", () => {
