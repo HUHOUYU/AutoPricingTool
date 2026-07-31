@@ -2004,7 +2004,7 @@ describe("AutoPricingTool cyber workstation", () => {
     analysis.orderSheetCandidates[0].skuQtyPairs = skuPairs;
     analysis.writebackRows = [
       { sourceRow: 2, pricingPrice: 10, priceDifference: 1.5, quantity: 2 },
-      { sourceRow: 3, pricingPrice: 8, priceDifference: -2, quantity: 0 },
+      { sourceRow: 3, pricingPrice: 8, priceDifference: -2, quantity: 0, quantityMismatch: true },
       {
         sourceRow: 4,
         pricingPrice: 9.5,
@@ -2015,6 +2015,7 @@ describe("AutoPricingTool cyber workstation", () => {
     ];
     analysis.requiresConfirmation = true;
     analysis.automationDecision = { ...analysis.automationDecision, status: "confirm", reasons: ["需要确认映射"] };
+    const warningToast = vi.spyOn(toast, "warning");
     await act(async () => {
       api.emit({ type: "price-analysis", file: analysis });
       api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
@@ -2040,6 +2041,27 @@ describe("AutoPricingTool cyber workstation", () => {
     const positiveDifferenceCell = screen.getByText("1.5", { selector: ".is-positive-difference" });
     expect(positiveDifferenceCell).toBeInTheDocument();
     expect(screen.getByText("-2", { selector: ".is-negative-difference" })).toBeInTheDocument();
+    expect(await screen.findByRole("status", { name: "写回结果提醒" })).toHaveTextContent(
+      "发现 2 行写回结果需要关注：金额差为正 1 行、金额差为负 1 行、数量不一致 1 行",
+    );
+    await waitFor(() => expect(warningToast).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      api.emit({
+        type: "price-validation",
+        inputPath: "C:\\orders\\order.xlsx",
+        requestVersion: 0,
+        evaluatedRows: 4,
+        matchedRows: 3,
+        coverage: 0.75,
+        matchedOrderRows: [2, 3],
+        writebackRows: analysis.writebackRows,
+        unmatchedRows: [],
+        errors: [],
+        warnings: [],
+      });
+    });
+    expect(warningToast).toHaveBeenCalledTimes(1);
+    warningToast.mockRestore();
     screen.getAllByText("0", { selector: ".is-writeback-column" }).forEach((cell) => {
       expect(cell).not.toHaveClass("is-positive-difference", "is-negative-difference");
     });

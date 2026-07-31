@@ -1,4 +1,5 @@
-import { RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw } from "lucide-react";
+import { useMemo } from "react";
 import { IssueDetailsDialog } from "@/components/ui/issue-details-dialog";
 import {
   DecisionReason,
@@ -17,12 +18,14 @@ import type {
   PricePreviewWritebackRow,
   PriceUnmatchedIssue,
 } from "@shared/desktop-api";
+import { summarizeWritebackAlerts } from "@/features/pricing/writeback-status";
 
 type IssueStatusOverviewProps = {
   analysis: PriceAnalysisFile | undefined;
   hasMapping: boolean;
   issueDetailsRequest: IssueDetailsRequest | null;
   quantityIssues: PricePreviewWritebackRow[];
+  writebackRows: PricePreviewWritebackRow[];
   result: FileResult | undefined;
   unmatchedIssues: PriceUnmatchedIssue[];
   validation: MappingValidationState;
@@ -37,6 +40,7 @@ export function IssueStatusOverview({
   hasMapping,
   issueDetailsRequest,
   quantityIssues,
+  writebackRows,
   result,
   unmatchedIssues,
   validation,
@@ -84,6 +88,10 @@ export function IssueStatusOverview({
   const selectedIssueDetails = issueDetailsRequest?.kind === "quantity"
     ? quantityIssueDetails(quantityIssues)
     : unmatchedIssueDetails(unmatchedIssues);
+  const writebackAlertSummary = useMemo(
+    () => summarizeWritebackAlerts(writebackRows),
+    [writebackRows],
+  );
 
   return (
     <section className="issue-status-section" aria-label="状态概览">
@@ -121,6 +129,13 @@ export function IssueStatusOverview({
           <span className={(result.exceptionRows ?? 0) > 0 ? "is-alert" : undefined}>
             <b>{result.exceptionRows ?? 0}</b><em>异常</em>
           </span>
+        </div>
+      ) : null}
+
+      {writebackAlertSummary.message ? (
+        <div className="issue-status-writeback-alert" role="status" aria-label="写回结果提醒">
+          <AlertTriangle />
+          <span>{writebackAlertSummary.message}</span>
         </div>
       ) : null}
 

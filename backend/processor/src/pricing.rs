@@ -504,6 +504,8 @@ pub(crate) struct PricePreviewWritebackRow {
     pricing_price: Option<f64>,
     price_difference: Option<f64>,
     quantity: Option<usize>,
+    #[serde(default)]
+    quantity_mismatch: bool,
     quantity_error: Option<String>,
     quantity_issue_context: Option<SkuQuantityIssueContext>,
     #[serde(default)]
@@ -619,6 +621,28 @@ fn highest_priority_sku_qty_pair(mapping: &PriceCheckMapping) -> Option<(usize, 
         .iter()
         .enumerate()
         .max_by_key(|(_, pair)| (pair.merged_qty_column, pair.sku_column))
+}
+
+fn quantity_mismatch_for_row(
+    sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    source_row: usize,
+    quantity: Option<usize>,
+) -> bool {
+    let Some((_, pair)) = highest_priority_sku_qty_pair(mapping) else {
+        return false;
+    };
+    if pair.direct_quantity {
+        return false;
+    }
+    let merged_quantity = sheet
+        .rows
+        .get(source_row.saturating_sub(1))
+        .and_then(|row| row.get(pair.merged_qty_column.saturating_sub(1)))
+        .and_then(parse_number)
+        .filter(|value| *value >= 0.0 && value.fract() == 0.0)
+        .map(|value| value as usize);
+    quantity.is_some_and(|value| merged_quantity != Some(value))
 }
 
 #[derive(Debug, Clone)]

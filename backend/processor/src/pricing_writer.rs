@@ -10,8 +10,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const WRITEBACK_HEADERS: [&str; 3] = ["核价[财务]", "金额差", "数量"];
 const WRITEBACK_COLUMN_COUNT: u32 = WRITEBACK_HEADERS.len() as u32;
 const WRITEBACK_BACKGROUND_COLOR: &str = "D8EEE0";
+const WRITEBACK_NEGATIVE_BACKGROUND_COLOR: &str = "A9D6B5";
 const WRITEBACK_ALERT_BACKGROUND_COLOR: &str = "FFC7CE";
 const WRITEBACK_FONT_COLOR: &str = "FF000000";
+const WRITEBACK_NEGATIVE_FONT_COLOR: &str = "FF14532D";
+const WRITEBACK_ALERT_FONT_COLOR: &str = "FF842029";
 const WRITEBACK_MIN_COLUMN_WIDTHS: [f64; 3] = [15.0, 15.0, 12.0];
 const WRITEBACK_MAX_COLUMN_WIDTH: f64 = 32.0;
 const WRITEBACK_COLUMN_PADDING: f64 = 2.0;
@@ -96,6 +99,7 @@ pub(crate) fn write_price_result(
             column,
             u32::try_from(layout.header_row)?,
             WRITEBACK_BACKGROUND_COLOR,
+            WRITEBACK_FONT_COLOR,
         );
     }
     for row in rows {
@@ -109,21 +113,29 @@ pub(crate) fn write_price_result(
                 insert_column,
                 row_number,
                 WRITEBACK_BACKGROUND_COLOR,
+                WRITEBACK_FONT_COLOR,
             );
         }
         if let Some(value) = row.price_difference {
             worksheet
                 .cell_mut((insert_column + 1, row_number))
                 .set_value_number(value);
+            let (background_color, font_color) = if value > 0.0 {
+                (WRITEBACK_ALERT_BACKGROUND_COLOR, WRITEBACK_ALERT_FONT_COLOR)
+            } else if value < 0.0 {
+                (
+                    WRITEBACK_NEGATIVE_BACKGROUND_COLOR,
+                    WRITEBACK_NEGATIVE_FONT_COLOR,
+                )
+            } else {
+                (WRITEBACK_BACKGROUND_COLOR, WRITEBACK_FONT_COLOR)
+            };
             apply_writeback_value_style(
                 worksheet,
                 insert_column + 1,
                 row_number,
-                if value > 0.0 {
-                    WRITEBACK_ALERT_BACKGROUND_COLOR
-                } else {
-                    WRITEBACK_BACKGROUND_COLOR
-                },
+                background_color,
+                font_color,
             );
         }
         if let Some(quantity) = row.quantity {
@@ -138,6 +150,11 @@ pub(crate) fn write_price_result(
                     WRITEBACK_ALERT_BACKGROUND_COLOR
                 } else {
                     WRITEBACK_BACKGROUND_COLOR
+                },
+                if row.quantity_mismatch {
+                    WRITEBACK_ALERT_FONT_COLOR
+                } else {
+                    WRITEBACK_FONT_COLOR
                 },
             );
         }
@@ -158,7 +175,13 @@ pub(crate) fn write_price_result(
             worksheet
                 .cell_mut((column, total_row))
                 .set_value_number(value);
-            apply_writeback_value_style(worksheet, column, total_row, WRITEBACK_BACKGROUND_COLOR);
+            apply_writeback_value_style(
+                worksheet,
+                column,
+                total_row,
+                WRITEBACK_BACKGROUND_COLOR,
+                WRITEBACK_FONT_COLOR,
+            );
         }
     }
     fit_writeback_column_widths(worksheet, insert_column);
@@ -275,13 +298,11 @@ fn apply_writeback_value_style(
     column: u32,
     row: u32,
     background_color: &str,
+    font_color: &str,
 ) {
     let style = worksheet.style_mut((column, row));
     style.set_background_color(background_color);
-    style
-        .font_mut()
-        .color_mut()
-        .set_argb_str(WRITEBACK_FONT_COLOR);
+    style.font_mut().color_mut().set_argb_str(font_color);
 }
 
 fn fit_writeback_column_widths(worksheet: &mut umya_spreadsheet::Worksheet, first_column: u32) {

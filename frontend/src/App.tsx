@@ -30,6 +30,7 @@ import {
   excelColumnLetter,
   quantityIssueMessage,
 } from "@/features/pricing/issues";
+import { summarizeWritebackAlerts } from "@/features/pricing/writeback-status";
 import { useDetailDrawerLayout } from "@/features/workbench/hooks/use-detail-drawer-layout";
 import { useBatchNextAction } from "@/features/workbench/hooks/use-batch-next-action";
 import { useBatchFileActions } from "@/features/workbench/hooks/use-batch-file-actions";
@@ -129,12 +130,23 @@ export function App(): React.JSX.Element {
   const userTabLockedRef = useRef(false);
   const batchTaskWasActiveRef = useRef(false);
   const batchNameEditedRef = useRef(false);
+  const writebackAlertNoticeKeysRef = useRef<Set<string>>(new Set());
   const batchLayout = activePage !== "files" ? null : batchStarted ? "locked" : files.length > 0 ? "ready" : "empty";
   const workspaceRef = useBatchLayoutAnimation(batchLayout);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  useEffect(() => {
+    if (!detailPath || pricingDetailState.validation.status !== "ready") return;
+    const summary = summarizeWritebackAlerts(pricingDetailState.writebackRows);
+    if (!summary.message) return;
+    const noticeKey = `${detailPath}\u0000${summary.signature}`;
+    if (writebackAlertNoticeKeysRef.current.has(noticeKey)) return;
+    writebackAlertNoticeKeysRef.current.add(noticeKey);
+    toast.warning(summary.message);
+  }, [detailPath, pricingDetailState.validation.status, pricingDetailState.writebackRows]);
 
   const appendLog = useCallback((message: string, level: LogEntry["level"] = "info"): void => {
     setLogs((current) => [
@@ -215,6 +227,7 @@ export function App(): React.JSX.Element {
       setDetailPath(null);
       setPageIndex(0);
       if (replaceBatch) {
+        writebackAlertNoticeKeysRef.current.clear();
         setLogs([]);
         userTabLockedRef.current = false;
         batchTaskWasActiveRef.current = false;

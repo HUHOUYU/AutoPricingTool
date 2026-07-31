@@ -195,7 +195,7 @@ mod tests {
                 .iter()
                 .any(|range| range.range() == "G6:H6")
         );
-        for cell in ["D1", "E1", "F1", "D2", "E3", "F3"] {
+        for cell in ["D1", "E1", "F1", "D2", "F3"] {
             assert_eq!(
                 order
                     .style(cell)
@@ -205,6 +205,14 @@ mod tests {
                 "FFD8EEE0"
             );
         }
+        assert_eq!(
+            order
+                .style("E3")
+                .background_color()
+                .expect("negative difference background")
+                .argb_str(),
+            "FFA9D6B5"
+        );
         for cell in ["D4", "E4", "F4"] {
             assert!(
                 order.style(cell).background_color().is_none(),
@@ -221,7 +229,7 @@ mod tests {
                 "FFFFC7CE"
             );
         }
-        for cell in ["D1", "E2", "E3", "F2", "F3"] {
+        for cell in ["D1", "F3"] {
             assert_eq!(
                 order
                     .style(cell)
@@ -230,6 +238,26 @@ mod tests {
                     .color()
                     .argb_str(),
                 "FF000000"
+            );
+        }
+        assert_eq!(
+            order
+                .style("E3")
+                .font()
+                .expect("negative difference font")
+                .color()
+                .argb_str(),
+            "FF14532D"
+        );
+        for cell in ["E2", "F2"] {
+            assert_eq!(
+                order
+                    .style(cell)
+                    .font()
+                    .expect("alert font")
+                    .color()
+                    .argb_str(),
+                "FF842029"
             );
         }
         assert_eq!(

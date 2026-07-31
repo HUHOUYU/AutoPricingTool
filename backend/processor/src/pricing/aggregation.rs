@@ -129,7 +129,7 @@ pub(super) fn build_writeback_rows(
     candidates: &HashMap<usize, MatchedRowCandidate>,
     resolved_quantities: &[ResolvedOrderQuantity],
 ) -> Vec<PriceWritebackRow> {
-    let Some((_, pair)) = highest_priority_sku_qty_pair(mapping) else {
+    let Some(_) = highest_priority_sku_qty_pair(mapping) else {
         return Vec::new();
     };
     let tax_column_index = order_tax_column_index(sheet, mapping);
@@ -141,14 +141,6 @@ pub(super) fn build_writeback_rows(
         let source_row = resolved.source_row;
         let candidate = candidates.get(&source_row);
         let quantity = resolved.quantity;
-        let merged_quantity = (!pair.direct_quantity)
-            .then(|| {
-                row.get(pair.merged_qty_column.saturating_sub(1))
-                    .and_then(parse_number)
-                    .filter(|value| *value >= 0.0 && value.fract() == 0.0)
-                    .map(|value| value as usize)
-            })
-            .flatten();
         let original_price = mapping
             .order_price_column
             .and_then(|column| row.get(column.saturating_sub(1)))
@@ -165,8 +157,7 @@ pub(super) fn build_writeback_rows(
             }),
             quantity,
             quantity_error: resolved.quantity_error.clone(),
-            quantity_mismatch: !pair.direct_quantity
-                && quantity.is_some_and(|quantity| merged_quantity != Some(quantity)),
+            quantity_mismatch: quantity_mismatch_for_row(sheet, mapping, source_row, quantity),
         });
     }
     rows

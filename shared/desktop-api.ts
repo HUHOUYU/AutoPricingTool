@@ -218,6 +218,7 @@ export type PricePreviewWritebackRow = {
   pricingPrice?: number | null;
   priceDifference?: number | null;
   quantity: number | null;
+  quantityMismatch?: boolean;
   quantityError?: string | null;
   quantityIssueContext?: {
     previousSkuColumn: number;

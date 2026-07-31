@@ -1,4 +1,14 @@
 /* 仅 Sheet tab / 未匹配 / 加载全部 用通用 tab 按钮样式，避免污染搜索区小按钮 */
+.excel-preview-panel {
+  --writeback-negative-background: #a9d6b5;
+  --writeback-negative-foreground: #14532d;
+}
+
+html.dark .excel-preview-panel {
+  --writeback-negative-background: #356b49;
+  --writeback-negative-foreground: #e1f7e7;
+}
+
 .excel-preview-tabs > button[role="tab"],
 .excel-preview-tabs > .excel-preview-unmatched-switch,
 .excel-preview-tabs .excel-preview-load-all {
@@ -266,8 +276,11 @@
 .excel-preview-row > span.is-writeback-column.has-writeback-value { color: #000; background: #d8eee0; }
 .excel-preview-row > span.is-writeback-column.is-header-cell { color: #000; background: #d8eee0; }
 .excel-preview-row > span.is-writeback-column.is-positive-difference,
-.excel-preview-row > span.is-writeback-column.is-mismatched-quantity { color: #000; background: #ffc7ce; }
-.excel-preview-row > span.is-writeback-column.is-negative-difference { color: #000; background: #d8eee0; }
+.excel-preview-row > span.is-writeback-column.is-mismatched-quantity { color: #842029; background: #ffc7ce; }
+.excel-preview-row > span.is-writeback-column.is-negative-difference {
+  color: var(--writeback-negative-foreground);
+  background: var(--writeback-negative-background);
+}
 .excel-preview-row > span.is-writeback-column.is-original-sku-quantity,
 .excel-preview-row > span.is-pinned-column.is-writeback-column.is-original-sku-quantity {
   color: #4f2a00;
@@ -324,7 +337,11 @@ html.dark .excel-preview-row > span.is-editing-cell input {
 .excel-preview-header > span.is-pinned-column.is-writeback-column,
 .excel-preview-row > span.is-pinned-column.is-writeback-column.has-writeback-value { background: #d8eee0; }
 .excel-preview-row > span.is-pinned-column.is-writeback-column.is-positive-difference,
-.excel-preview-row > span.is-pinned-column.is-writeback-column.is-mismatched-quantity { background: #ffc7ce; }
+.excel-preview-row > span.is-pinned-column.is-writeback-column.is-mismatched-quantity { color: #842029; background: #ffc7ce; }
+.excel-preview-row > span.is-pinned-column.is-writeback-column.is-negative-difference {
+  color: var(--writeback-negative-foreground);
+  background: var(--writeback-negative-background);
+}
 .excel-preview-row > span.is-pinned-column.is-writeback-column.is-original-sku-quantity {
   color: #4f2a00;
   background: #ffd59a;
@@ -344,6 +361,11 @@ html.dark .excel-preview-row > span.is-pinned-column.is-writeback-column.is-posi
 html.dark .excel-preview-row > span.is-pinned-column.is-writeback-column.is-mismatched-quantity {
   color: #ffd9d6;
   background: #563033;
+}
+html.dark .excel-preview-row > span.is-writeback-column.is-negative-difference,
+html.dark .excel-preview-row > span.is-pinned-column.is-writeback-column.is-negative-difference {
+  color: var(--writeback-negative-foreground);
+  background: var(--writeback-negative-background);
 }
 html.dark .excel-preview-row > span.is-writeback-column.is-original-sku-quantity,
 html.dark .excel-preview-row > span.is-pinned-column.is-writeback-column.is-original-sku-quantity {
@@ -447,6 +469,10 @@ html.dark .excel-preview-legend i.is-writeback {
   background: #294538;
 }
 .excel-preview-legend i.is-alert { background: #ffc7ce; border: 1px solid color-mix(in srgb, #e07080 50%, transparent); }
+.excel-preview-legend i.is-negative-difference {
+  background: var(--writeback-negative-background);
+  border: 1px solid color-mix(in srgb, var(--writeback-negative-foreground) 55%, transparent);
+}
 .excel-preview-legend i.is-original-sku-quantity {
   background: #ffd59a;
   border: 1px solid color-mix(in srgb, #d88a23 55%, transparent);

@@ -39,6 +39,7 @@ pub(super) fn recalculate_price_row(
         pricing_price: None,
         price_difference: None,
         quantity: None,
+        quantity_mismatch: false,
         quantity_error: None,
         quantity_issue_context: None,
         used_original_sku_quantity: row_edit.use_original_sku_quantity,
@@ -82,6 +83,12 @@ pub(super) fn recalculate_price_row(
         pricing_price: None,
         price_difference: None,
         quantity: effective_quantity,
+        quantity_mismatch: quantity_mismatch_for_row(
+            order_sheet,
+            mapping,
+            row_edit.source_row,
+            effective_quantity,
+        ),
         quantity_error: None,
         quantity_issue_context: None,
         used_original_sku_quantity: row_edit.use_original_sku_quantity
@@ -515,6 +522,7 @@ pub(super) fn calculate_preview_writeback_rows(
             pricing_price: row.pricing_price,
             price_difference: row.price_difference,
             quantity: row.quantity,
+            quantity_mismatch: row.quantity_mismatch,
             quantity_error: row.quantity_error,
             quantity_issue_context: quantity_issue_contexts.get(&row.source_row).cloned(),
             used_original_sku_quantity: fallback_succeeded,

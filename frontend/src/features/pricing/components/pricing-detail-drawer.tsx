@@ -219,6 +219,7 @@ export function PricingDetailDrawer({
                       hasMapping={mapping !== null}
                       issueDetailsRequest={issueDetailsRequest}
                       quantityIssues={quantityIssues}
+                      writebackRows={writebackRows}
                       result={result}
                       unmatchedIssues={unmatchedIssues}
                       validation={validation}

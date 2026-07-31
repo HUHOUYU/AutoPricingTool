@@ -955,8 +955,9 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                         const duplicateMappedClass = isDuplicateOrderCell
                           ? mappedColumnClass(mapping, activeSheet.name, absoluteColumn, singleShipmentMatchingEnabled)
                           : "";
+                        const writeback = writebackBySourceRow.get(absoluteRow);
                         const priceDifference = derived && writebackColumnIndex === 1
-                          ? writebackBySourceRow.get(absoluteRow)?.priceDifference
+                          ? writeback?.priceDifference
                           : null;
                         const differenceClass = !isHeaderRow && typeof priceDifference === "number"
                           ? priceDifference > 0
@@ -971,22 +972,25 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           && !highestPrioritySkuQtyPair.directQuantity
                           ? parsePreviewQuantity(row[highestPrioritySkuQtyPair.mergedQtyColumn - activeSheet.startColumn - 1] ?? "")
                           : null;
-                        const writebackQuantity = writebackBySourceRow.get(absoluteRow)?.quantity;
+                        const writebackQuantity = writeback?.quantity;
                         const writebackQuantityError = isWritebackQuantityColumn
-                          ? writebackBySourceRow.get(absoluteRow)?.quantityError
+                          ? writeback?.quantityError
                           : null;
-                        const quantityMismatchClass = isWritebackQuantityColumn
-                          && sourceQuantity !== null
-                          && typeof writebackQuantity === "number"
-                          && sourceQuantity !== writebackQuantity
+                        const quantityMismatch = isWritebackQuantityColumn
+                          && (writeback?.quantityMismatch ?? (
+                            sourceQuantity !== null
+                            && typeof writebackQuantity === "number"
+                            && sourceQuantity !== writebackQuantity
+                          ));
+                        const quantityMismatchClass = quantityMismatch
                           ? " is-mismatched-quantity"
                           : "";
                         const writebackValueClass = derived && cell.trim() !== ""
                           ? " has-writeback-value"
                           : "";
                         const originalSkuQuantityClass = derived
-                          && writebackBySourceRow.get(absoluteRow)?.usedOriginalSkuQuantity
-                          && writebackBySourceRow.get(absoluteRow)?.pricingPrice != null
+                          && writeback?.usedOriginalSkuQuantity
+                          && writeback?.pricingPrice != null
                           ? " is-original-sku-quantity"
                           : "";
                         const editableWritebackCell = derived && !isHeaderRow && !isWritebackTotalRow && writebackBySourceRow.has(absoluteRow);
@@ -1004,7 +1008,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           style={{ ...pinnedColumnStyle(columnIndex), ...(!derived && isHeaderRow ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
                           title={isEditingCell
                             ? undefined
-                            : writebackBySourceRow.get(absoluteRow)?.usedOriginalSkuQuantity
+                            : writeback?.usedOriginalSkuQuantity
                               ? `使用最高评分 SKU 组原始值：${cell}`
                               : writebackQuantityError ?? (isHeaderRow && !derived ? headerCellDisplay : cell)}
                           onMouseEnter={() => selectingColumn && !derived && setHoveredColumn(absoluteColumn)}
@@ -1068,6 +1072,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
             <span><i className="is-mapped" />常规匹配字段</span>
             {showsWritebackColumns ? <span><i className="is-writeback" />写回结果</span> : null}
             {showsWritebackColumns ? <span><i className="is-alert" />金额差/数量异常</span> : null}
+            {showsWritebackColumns ? <span><i className="is-negative-difference" />金额差为负</span> : null}
             {showsWritebackColumns ? <span><i className="is-original-sku-quantity" />原始 SKU/数量</span> : null}
             {mapping && activeSheet.name === mapping.orderSheet ? <span><i className="is-matched-row" />已匹配行号</span> : null}
             {mapping && activeSheet.name === mapping.orderSheet && unmatchedOrderRows.length > 0 ? <span><i className="is-unmatched-row" />未匹配定位行</span> : null}
