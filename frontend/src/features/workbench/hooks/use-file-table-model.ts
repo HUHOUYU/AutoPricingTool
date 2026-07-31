@@ -31,6 +31,7 @@ type UseFileTableModelOptions = {
 
 const initialPinnedColumns: Record<FileTab, string[]> = {
   pending: [],
+  queued: [],
   confirm: [],
   error: [],
   success: [],
@@ -70,6 +71,18 @@ export function useFileTableModel({
         { id: "importMode", header: "导入方式", size: 220, accessorFn: (path) => importModes[path] ?? "file" },
         { id: "status", header: "处理阶段", size: 240, accessorFn: (path) => fileStatusByPath[path] },
         { id: "createdAt", header: "导入时间", size: 300, accessorFn: (path) => importedAt[path] ?? "" },
+        actionColumn,
+      ];
+    }
+    if (activeTab === "queued") {
+      return [
+        selectColumn,
+        indexColumn,
+        fileColumn,
+        orderColumn,
+        pricingColumn,
+        coverageColumn,
+        { id: "status", header: "处理阶段", size: 140, accessorFn: (path) => fileStatusByPath[path] },
         actionColumn,
       ];
     }

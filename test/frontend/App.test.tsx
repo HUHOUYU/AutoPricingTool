@@ -468,7 +468,8 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(container.querySelector(".cyber-workspace")).toHaveClass("has-ready-batch");
     expect(screen.getByRole("button", { name: "开始处理" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "重置本批" })).toBeEnabled();
-    expect(screen.getByLabelText("文件状态统计").querySelectorAll("button")).toHaveLength(4);
+    expect(screen.getByLabelText("文件状态统计").querySelectorAll("button")).toHaveLength(5);
+    expect(screen.getByRole("button", { name: "待核价0" })).toBeInTheDocument();
 
     dropFiles([new File(["xlsx"], "second.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
     expect(await screen.findByText("已导入 2 个文件")).toBeInTheDocument();
@@ -774,6 +775,17 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(api.selectExcelFiles).not.toHaveBeenCalled();
     expect(api.finishTaskBatch).not.toHaveBeenCalled();
+
+    dropFiles([new File(["xlsx"], "second.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    expect(await screen.findByText("second.xlsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: createAnalysis("C:\\orders\\second.xlsx") });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+    await waitFor(() => expect(api.runPriceCheck).toHaveBeenLastCalledWith(
+      expect.objectContaining({ files: ["C:\\orders\\second.xlsx"], outputDir: "C:\\output" }),
+    ));
   });
 
   it("automatically opens the detail drawer for one true confirmation file", async () => {
@@ -2136,7 +2148,7 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(await screen.findByRole("button", { name: "打开结果文件" })).toBeInTheDocument();
   });
 
-  it("pauses, resumes, stops, and exposes four status tabs", async () => {
+  it("pauses, resumes, stops, and exposes five status tabs", async () => {
     const api = createDesktopAPI();
     installAPI(api);
     render(<App />);
@@ -2151,7 +2163,7 @@ describe("AutoPricingTool cyber workstation", () => {
     await waitFor(() => expect(api.resumeProcessing).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: "停止任务" }));
     await waitFor(() => expect(api.stopProcessing).toHaveBeenCalledTimes(1));
-    expect(document.querySelectorAll(".cyber-tabs button")).toHaveLength(4);
+    expect(document.querySelectorAll(".cyber-tabs button")).toHaveLength(5);
   });
 
   it("keeps the current batch while switching between dashboard and file processing", async () => {

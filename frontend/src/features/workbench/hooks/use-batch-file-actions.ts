@@ -243,6 +243,7 @@ export function useBatchFileActions({
         activePath,
         isAnalyzing || isRunning,
         confirmedPathsRef.current.has(path),
+        isRunning,
       );
       return tabForStatus(status) === activeTab;
     });

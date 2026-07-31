@@ -75,6 +75,7 @@ export function useProcessingCommands({
     setProgress,
     setMappingValidations,
     setMatchedOrderRowsBySheet,
+    setAnalysisCompletedToken,
   } = session;
 
   const analyzeFiles = useCallback(async (
@@ -84,6 +85,7 @@ export function useProcessingCommands({
   ): Promise<void> => {
     const api = getDesktopAPI();
     if (!api || targetFiles.length === 0 || isAnalyzing || isRunning) return;
+    setAnalysisCompletedToken(0);
     setBatchStarted(true);
     setIsAnalyzing(true);
     setActiveTab("pending");

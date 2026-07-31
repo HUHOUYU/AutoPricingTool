@@ -11,6 +11,7 @@ type UseFileListViewOptions = {
   results: Record<string, FileResult>;
   activePath: string;
   busy: boolean;
+  pricing: boolean;
   confirmedPaths: ReadonlySet<string>;
   activeTab: FileTab;
   pageIndex: number;
@@ -23,6 +24,7 @@ export function useFileListView({
   results,
   activePath,
   busy,
+  pricing,
   confirmedPaths,
   activeTab,
   pageIndex,
@@ -48,10 +50,11 @@ export function useFileListView({
             activePath,
             busy,
             confirmedPaths.has(path),
+            pricing,
           ),
         ]),
       ),
-    [activePath, analyses, busy, confirmedPaths, files, results],
+    [activePath, analyses, busy, confirmedPaths, files, pricing, results],
   );
 
   const progressDots = useMemo<ProgressDot[]>(
@@ -66,7 +69,7 @@ export function useFileListView({
           counts[dot.status] += 1;
           return counts;
         },
-        { pending: 0, running: 0, ready: 0, success: 0, warning: 0, error: 0 },
+        { pending: 0, queued: 0, running: 0, pricing: 0, ready: 0, success: 0, warning: 0, error: 0 },
       ),
     [progressDots],
   );
@@ -78,7 +81,7 @@ export function useFileListView({
           counts[tabForStatus(dot.status)] += 1;
           return counts;
         },
-        { pending: 0, confirm: 0, error: 0, success: 0 },
+        { pending: 0, queued: 0, confirm: 0, error: 0, success: 0 },
       ),
     [progressDots],
   );

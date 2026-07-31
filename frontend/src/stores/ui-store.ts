@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type FileTab = "pending" | "confirm" | "error" | "success";
+export type FileTab = "pending" | "queued" | "confirm" | "error" | "success";
 export type ThemeMode = "light" | "dark";
 export type WorkbenchPage = "workbench" | "files" | "config" | "rules" | "templates" | "logs" | "analytics";
 

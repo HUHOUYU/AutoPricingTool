@@ -35,7 +35,7 @@ export type LogEntry = {
   level: "info" | "success" | "warning" | "error";
 };
 
-export type FileStatus = "pending" | "running" | "ready" | "success" | "warning" | "error";
+export type FileStatus = "pending" | "queued" | "running" | "pricing" | "ready" | "success" | "warning" | "error";
 export type DotStatus = FileStatus;
 export type IssueReviewTab = Extract<FileTab, "confirm" | "error">;
 
@@ -60,7 +60,9 @@ export type ProgressDot = {
 
 export const statusMeta: Record<FileStatus, { label: string; tone: FileStatus }> = {
   pending: { label: "待分析", tone: "pending" },
+  queued: { label: "待核价", tone: "pending" },
   running: { label: "处理中", tone: "running" },
+  pricing: { label: "核价中", tone: "running" },
   ready: { label: "待确认", tone: "ready" },
   success: { label: "完成", tone: "success" },
   warning: { label: "异常", tone: "warning" },
@@ -69,7 +71,9 @@ export const statusMeta: Record<FileStatus, { label: string; tone: FileStatus }>
 
 export const dotStatusLabels: Record<DotStatus, string> = {
   pending: "待分析",
+  queued: "待核价",
   running: "处理中",
+  pricing: "核价中",
   ready: "待确认",
   success: "完成",
   warning: "警告",
@@ -78,6 +82,7 @@ export const dotStatusLabels: Record<DotStatus, string> = {
 
 export const fileTabs: Array<{ key: FileTab; label: string }> = [
   { key: "pending", label: "待分析" },
+  { key: "queued", label: "待核价" },
   { key: "confirm", label: "待确认" },
   { key: "error", label: "异常" },
   { key: "success", label: "完成" },

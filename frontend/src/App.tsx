@@ -365,6 +365,7 @@ export function App(): React.JSX.Element {
     results,
     activePath,
     busy: isAnalyzing || isRunning,
+    pricing: isRunning,
     confirmedPaths: confirmedPathsRef.current,
     activeTab,
     pageIndex,
@@ -416,6 +417,8 @@ export function App(): React.JSX.Element {
           ? `分析完成 · ${tabCounts.confirm} 个文件待确认`
           : tabCounts.error > 0
             ? `分析完成 · ${tabCounts.error} 个异常`
+            : tabCounts.queued > 0
+              ? `分析完成 · ${tabCounts.queued} 个文件待核价`
             : tabCounts.success > 0
               ? "本批已完成"
               : Object.keys(analyses).length > 0
@@ -554,7 +557,7 @@ export function App(): React.JSX.Element {
         isPaused={isPaused}
         isTaskActive={isTaskActive}
         nextAction={batchNextAction}
-        pendingReviewCount={tabCounts.confirm + tabCounts.error + tabCounts.pending}
+        pendingReviewCount={tabCounts.confirm + tabCounts.error + tabCounts.queued + tabCounts.pending}
         showNext={showNext}
         showReset={showReset}
         onFinishBatch={() => setNextBatchConfirmOpen(true)}
@@ -733,7 +736,7 @@ export function App(): React.JSX.Element {
         <ConfirmDialog
           open={nextBatchConfirmOpen}
           title="结束当前批次？"
-          description={`当前仍有 ${tabCounts.confirm} 个待确认、${tabCounts.error} 个异常、${tabCounts.pending} 个未完成文件。结束后，所有没有有效核价结果的文件将复制到当前批次结果目录的“未处理”文件夹，原始文件保持不变。`}
+          description={`当前仍有 ${tabCounts.queued} 个待核价、${tabCounts.confirm} 个待确认、${tabCounts.error} 个异常、${tabCounts.pending} 个待分析文件。结束后，所有没有有效核价结果的文件将复制到当前批次结果目录的“未处理”文件夹，原始文件保持不变。`}
           confirmLabel="结束并归档"
           onCancel={() => setNextBatchConfirmOpen(false)}
           onConfirm={() => {

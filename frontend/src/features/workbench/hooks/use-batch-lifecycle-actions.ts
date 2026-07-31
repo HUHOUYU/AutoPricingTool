@@ -59,6 +59,7 @@ export function useBatchLifecycleActions({
     confirmedPathsRef,
     manualIssueReviewRef,
     setManualIssueReviewResolution,
+    autoRunRequestedRef,
     autoRunTargetPathsRef,
     mappingValidationVersionsRef,
     priceRowValidationVersionsRef,
@@ -79,6 +80,7 @@ export function useBatchLifecycleActions({
     setActivePath,
     setExpandedPath,
     setProgress,
+    setAnalysisCompletedToken,
   } = session;
 
   const resetTask = useCallback(async (): Promise<void> => {
@@ -127,12 +129,15 @@ export function useBatchLifecycleActions({
     resultsRef.current = {};
     manualIssueReviewRef.current = null;
     setManualIssueReviewResolution(null);
+    autoRunRequestedRef.current = false;
     autoRunTargetPathsRef.current = [];
+    setAnalysisCompletedToken(0);
     setProgress({ current: 0, total: 0, phase: "", path: "" });
     onResetBatchView();
   }, [
     activeMappingValidationRef,
     analysesRef,
+    autoRunRequestedRef,
     autoRunTargetPathsRef,
     batchIdRef,
     batchNameEditedRef,

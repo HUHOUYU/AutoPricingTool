@@ -25,20 +25,25 @@ function createAnalysis(status: "eligible" | "confirm" | "error" = "eligible"): 
 describe("workbench status", () => {
   it("maps processing statuses to tabs", () => {
     expect(tabForStatus("running")).toBe("pending");
+    expect(tabForStatus("queued")).toBe("queued");
+    expect(tabForStatus("pricing")).toBe("queued");
     expect(tabForStatus("ready")).toBe("confirm");
     expect(tabForStatus("warning")).toBe("error");
     expect(tabForStatus("success")).toBe("success");
   });
 
   it("selects the highest-priority non-empty result tab", () => {
-    expect(pickBestResultTab({ pending: 4, confirm: 2, error: 3, success: 1 })).toBe("confirm");
-    expect(pickBestResultTab({ pending: 0, confirm: 0, error: 3, success: 1 })).toBe("error");
-    expect(pickBestResultTab({ pending: 0, confirm: 0, error: 0, success: 0 })).toBeNull();
+    expect(pickBestResultTab({ pending: 4, queued: 5, confirm: 2, error: 3, success: 1 })).toBe("confirm");
+    expect(pickBestResultTab({ pending: 0, queued: 5, confirm: 0, error: 3, success: 1 })).toBe("error");
+    expect(pickBestResultTab({ pending: 0, queued: 5, confirm: 0, error: 0, success: 1 })).toBe("queued");
+    expect(pickBestResultTab({ pending: 0, queued: 0, confirm: 0, error: 0, success: 0 })).toBeNull();
   });
 
   it("distinguishes analysis, running, warning, and confirmed results", () => {
     const analysis = createAnalysis("confirm");
     expect(statusForFile(analysis.inputPath, analysis, undefined, "", false, false)).toBe("ready");
+    expect(statusForFile(analysis.inputPath, createAnalysis("eligible"), undefined, "", false, false)).toBe("queued");
+    expect(statusForFile(analysis.inputPath, createAnalysis("eligible"), undefined, analysis.inputPath, true, false, true)).toBe("pricing");
     expect(statusForFile(analysis.inputPath, undefined, undefined, analysis.inputPath, true, false)).toBe("running");
     expect(statusForFile(analysis.inputPath, analysis, {
       path: analysis.inputPath,

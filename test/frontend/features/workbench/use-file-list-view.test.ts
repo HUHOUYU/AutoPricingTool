@@ -27,6 +27,7 @@ describe("useFileListView", () => {
         results,
         activePath: files[1],
         busy: true,
+        pricing: false,
         confirmedPaths: new Set(),
         activeTab: "pending",
         pageIndex: 1,
@@ -42,13 +43,15 @@ describe("useFileListView", () => {
     });
     expect(result.current.progressDotCounts).toEqual({
       pending: 1,
+      queued: 0,
       running: 1,
+      pricing: 0,
       ready: 0,
       success: 1,
       warning: 0,
       error: 1,
     });
-    expect(result.current.tabCounts).toEqual({ pending: 2, confirm: 0, error: 1, success: 1 });
+    expect(result.current.tabCounts).toEqual({ pending: 2, queued: 0, confirm: 0, error: 1, success: 1 });
     expect(result.current.visibleFiles).toEqual(files.slice(0, 2));
     expect(result.current.pageCount).toBe(2);
     expect(result.current.pagedFiles).toEqual([files[1]]);

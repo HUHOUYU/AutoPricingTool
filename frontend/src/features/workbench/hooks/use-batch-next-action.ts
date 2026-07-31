@@ -53,9 +53,9 @@ export function useBatchNextAction({
         onClick: onOpenErrors,
       };
     }
-    if (tabCounts.pending > 0) {
+    if (tabCounts.queued > 0 || tabCounts.pending > 0) {
       return {
-        label: "继续未完成",
+        label: tabCounts.pending > 0 ? "继续未完成" : "继续核价",
         icon: Play,
         className: BATCH_NEXT_ACTION_CLASS,
         onClick: () => {
