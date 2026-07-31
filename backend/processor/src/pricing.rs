@@ -65,21 +65,23 @@ use header_scoring::{
     normalize_header, order_field_rule, pricing_field_rule, quantity_one_price_rule,
 };
 use mapping_scoring::{match_header_template, sheet_cell_text, sku_qty_field_score};
+#[cfg(test)]
+use mapping_validation::validate_price_mapping;
 use mapping_validation::{
     calculate_preview_writeback_rows, evaluate_matches, recalculate_price_row,
-    unmatched_price_issues, validate_price_mapping,
+    unmatched_price_issues, validate_price_mapping_with_overrides,
 };
 #[cfg(test)]
 use order_candidate::infer_order_candidate;
 use order_candidate::infer_order_candidate_with_config;
-use order_reader::read_order_lines;
+use order_reader::{read_order_lines, read_order_lines_with_overrides};
 use price_index::build_price_index;
 use pricing_candidate::infer_pricing_candidate_with_config;
 #[cfg(test)]
 use pricing_candidate::{best_pricing_country_column, infer_pricing_candidate};
-use quantity_rules::resolve_order_quantities;
 #[cfg(test)]
 use quantity_rules::{quantity_source_columns, resolve_direct_sku_quantity};
+use quantity_rules::{resolve_order_quantities, resolve_order_quantities_with_overrides};
 use single_shipment::{
     exact_header_columns, resolve_single_shipment_fields, single_shipment_matching_status,
     single_shipment_matching_unavailable, single_shipment_orders,
@@ -504,6 +506,8 @@ pub(crate) struct PricePreviewWritebackRow {
     quantity: Option<usize>,
     quantity_error: Option<String>,
     quantity_issue_context: Option<SkuQuantityIssueContext>,
+    #[serde(default)]
+    used_original_sku_quantity: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -520,6 +524,8 @@ pub(crate) struct SkuQuantityIssueContext {
 struct PriceRowEdit {
     source_row: usize,
     quantity: Option<usize>,
+    #[serde(default)]
+    use_original_sku_quantity: bool,
 }
 
 #[derive(Debug)]

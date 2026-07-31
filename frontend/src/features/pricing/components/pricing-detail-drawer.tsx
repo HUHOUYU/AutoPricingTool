@@ -36,6 +36,7 @@ type PricingDetailDrawerProps = {
   mappingActions: MappingDetailActions;
   onClose: () => void;
   onRevalidate: () => void;
+  onUseOriginalSkuQuantity: () => void;
   onCommitMapping: (mapping: PriceCheckMapping) => void;
   onUpdateMapping: (orderSheet: string, pricingSheet: string) => void;
   onConfirm: () => void;
@@ -51,6 +52,7 @@ export function PricingDetailDrawer({
   mappingActions,
   onClose,
   onRevalidate,
+  onUseOriginalSkuQuantity,
   onCommitMapping,
   onUpdateMapping,
   onConfirm,
@@ -222,6 +224,7 @@ export function PricingDetailDrawer({
                       validation={validation}
                       onCloseIssueDetails={closeIssueDetails}
                       onOpenUnmatchedDetails={openUnmatchedDetails}
+                      onUseOriginalSkuQuantity={() => onUseOriginalSkuQuantity()}
                       onRevalidate={onRevalidate}
                     />
                     {analysis && mapping ? (

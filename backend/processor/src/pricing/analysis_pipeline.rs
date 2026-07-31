@@ -256,6 +256,7 @@ pub(super) fn analyze_path_with_templates(
                     &index,
                     &lines,
                     &resolved_quantities,
+                    &[],
                 ),
                 unmatched_price_issues(&index, mapping, &lines),
             ))

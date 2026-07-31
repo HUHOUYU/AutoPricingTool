@@ -166,6 +166,7 @@ export function App(): React.JSX.Element {
   const {
     sendMappingValidation,
     revalidateMapping,
+    useOriginalSkuQuantity,
     commitMapping,
     updateMapping,
   } = useMappingValidationActions({
@@ -602,6 +603,9 @@ export function App(): React.JSX.Element {
           onClose={() => setDetailPath(null)}
           onRevalidate={() => {
             if (detailPath) revalidateMapping(detailPath);
+          }}
+          onUseOriginalSkuQuantity={() => {
+            if (detailPath) useOriginalSkuQuantity(detailPath, pricingDetailState.quantityIssues);
           }}
           onCommitMapping={(mapping) => {
             if (detailPath) commitMapping(detailPath, mapping);

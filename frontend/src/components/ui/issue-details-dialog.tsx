@@ -14,6 +14,8 @@ type IssueDetailsDialogProps = {
   summary: string;
   issues: IssueDetail[];
   selectedSourceRow?: number | null;
+  actionLabel?: string;
+  onAction?: () => void;
   onClose: () => void;
 };
 
@@ -81,6 +83,8 @@ export function IssueDetailsDialog({
   summary,
   issues,
   selectedSourceRow,
+  actionLabel,
+  onAction,
   onClose,
 }: IssueDetailsDialogProps): React.JSX.Element | null {
   const titleId = useId();
@@ -134,6 +138,16 @@ export function IssueDetailsDialog({
             <h2 id={titleId}>{title}</h2>
             <p id={summaryId}>{summary}</p>
           </div>
+          {actionLabel && onAction ? (
+            <Button
+              type="button"
+              size="sm"
+              className="issue-details-dialog-action"
+              onClick={onAction}
+            >
+              {actionLabel}
+            </Button>
+          ) : null}
           <button
             ref={closeRef}
             type="button"

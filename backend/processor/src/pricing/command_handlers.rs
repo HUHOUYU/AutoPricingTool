@@ -184,6 +184,13 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
         .transpose()
         .map_err(|error| anyhow!("单元格编辑格式错误: {error}"))?
         .unwrap_or_default();
+    let writeback_rows: Vec<PricePreviewWritebackRow> = command
+        .get("writebackRows")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| anyhow!("核价写回策略格式错误: {error}"))?
+        .unwrap_or_default();
     let config = load_config(&config_path(command))?;
     if let Some(row_edit) = command.get("rowEdit") {
         let row_edit: PriceRowEdit = serde_json::from_value(row_edit.clone())
@@ -215,7 +222,13 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
         }
         return Ok(());
     }
-    let result = validate_price_mapping(Path::new(input_path), &mapping, &cell_edits, &config);
+    let result = validate_price_mapping_with_overrides(
+        Path::new(input_path),
+        &mapping,
+        &cell_edits,
+        &writeback_rows,
+        &config,
+    );
     match result {
         Ok(validation) => emit(json!({
             "type": "price-validation",

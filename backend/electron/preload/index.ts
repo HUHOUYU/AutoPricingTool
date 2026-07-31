@@ -14,6 +14,7 @@ import type {
   PriceCheckMapping,
   PriceCheckRunPayload,
   PricePreviewCellEdit,
+  PricePreviewWritebackRow,
   ProcessingCapacity,
   ProcessorEvent,
   RuntimeLogRow,
@@ -69,9 +70,9 @@ const desktopAPI: DesktopAPI = {
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   analyzePriceFiles: (payload: { files: string[]; configPath?: string }): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-analyze", payload),
-  validatePriceMapping: (payload: { inputPath: string; mapping: PriceCheckMapping; requestVersion: number; cellEdits?: PricePreviewCellEdit[]; configPath?: string }): Promise<void> =>
+  validatePriceMapping: (payload: { inputPath: string; mapping: PriceCheckMapping; requestVersion: number; writebackRows?: PricePreviewWritebackRow[]; cellEdits?: PricePreviewCellEdit[]; configPath?: string }): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-validate", payload),
-  recalculatePriceRow: (payload: { inputPath: string; mapping: PriceCheckMapping; requestVersion: number; rowEdit: { sourceRow: number; quantity: number | null }; cellEdits?: PricePreviewCellEdit[]; configPath?: string }): Promise<void> =>
+  recalculatePriceRow: (payload: { inputPath: string; mapping: PriceCheckMapping; requestVersion: number; rowEdit: { sourceRow: number; quantity: number | null; useOriginalSkuQuantity?: boolean }; cellEdits?: PricePreviewCellEdit[]; configPath?: string }): Promise<void> =>
     ipcRenderer.invoke("processor:price-check-validate", payload),
   runPriceCheck: (payload: PriceCheckRunPayload): Promise<{ batchId: string }> =>
     ipcRenderer.invoke("processor:price-check-run", payload),

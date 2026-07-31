@@ -122,6 +122,25 @@ export function useProcessorEvents({
         const currentVersion = mappingValidationVersionsRef.current[event.inputPath] ?? 0;
         if (event.requestVersion === currentVersion) {
           setMappingValidations((current) => ({ ...current, [event.inputPath]: { status: "ready", result: event } }));
+          const fallbackRows = new Set(
+            (writebackEditsRef.current[event.inputPath] ?? [])
+              .filter((row) => row.usedOriginalSkuQuantity)
+              .map((row) => row.sourceRow),
+          );
+          if (fallbackRows.size > 0) {
+            const validatedRows = new Map(
+              (event.writebackRows ?? []).map((row) => [row.sourceRow, row]),
+            );
+            const currentRows = writebackEditsRef.current[event.inputPath] ?? [];
+            const nextRows = currentRows.map((row) => (
+              fallbackRows.has(row.sourceRow)
+                ? validatedRows.get(row.sourceRow) ?? row
+                : row
+            ));
+            const next = { ...writebackEditsRef.current, [event.inputPath]: nextRows };
+            writebackEditsRef.current = next;
+            setWritebackEdits(next);
+          }
           const orderSheet = mappingsRef.current[event.inputPath]?.orderSheet;
           if (orderSheet && event.errors.length === 0 && event.matchedOrderRows) {
             setMatchedOrderRowsBySheet((current) => ({

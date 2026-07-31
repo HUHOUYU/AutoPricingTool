@@ -1722,7 +1722,13 @@ describe("AutoPricingTool cyber workstation", () => {
       matchedRows: 1,
       coverage: 1,
       matchedOrderRows: [2],
-      writebackRows: [{ sourceRow: 2, pricingPrice: 12.5, priceDifference: 3, quantity: 2 }],
+      writebackRows: [{
+        sourceRow: 2,
+        pricingPrice: 12.5,
+        priceDifference: 3,
+        quantity: 2,
+        usedOriginalSkuQuantity: true,
+      }],
       errors: [],
       warnings: [],
     }));
@@ -1739,6 +1745,7 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(previewDataRow).toHaveTextContent("2");
     expect(previewDataRow?.querySelectorAll(".is-writeback-column")).toHaveLength(3);
     expect(previewDataRow?.querySelectorAll(".is-writeback-column")[2]).toHaveClass("is-mismatched-quantity");
+    expect(previewDataRow?.querySelectorAll(".is-original-sku-quantity")).toHaveLength(3);
     await act(async () => api.emit({
       type: "price-validation",
       inputPath: request.inputPath,

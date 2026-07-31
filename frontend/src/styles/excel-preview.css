@@ -268,6 +268,11 @@
 .excel-preview-row > span.is-writeback-column.is-positive-difference,
 .excel-preview-row > span.is-writeback-column.is-mismatched-quantity { color: #000; background: #ffc7ce; }
 .excel-preview-row > span.is-writeback-column.is-negative-difference { color: #000; background: #d8eee0; }
+.excel-preview-row > span.is-writeback-column.is-original-sku-quantity,
+.excel-preview-row > span.is-pinned-column.is-writeback-column.is-original-sku-quantity {
+  color: #4f2a00;
+  background: #ffd59a;
+}
 .excel-preview-row > span.is-editable-writeback {
   cursor: text;
   user-select: none;
@@ -320,6 +325,10 @@ html.dark .excel-preview-row > span.is-editing-cell input {
 .excel-preview-row > span.is-pinned-column.is-writeback-column.has-writeback-value { background: #d8eee0; }
 .excel-preview-row > span.is-pinned-column.is-writeback-column.is-positive-difference,
 .excel-preview-row > span.is-pinned-column.is-writeback-column.is-mismatched-quantity { background: #ffc7ce; }
+.excel-preview-row > span.is-pinned-column.is-writeback-column.is-original-sku-quantity {
+  color: #4f2a00;
+  background: #ffd59a;
+}
 html.dark .excel-preview-header > span.is-writeback-column,
 html.dark .excel-preview-row > span.is-writeback-column.has-writeback-value,
 html.dark .excel-preview-row > span.is-writeback-column.is-header-cell,
@@ -335,6 +344,11 @@ html.dark .excel-preview-row > span.is-pinned-column.is-writeback-column.is-posi
 html.dark .excel-preview-row > span.is-pinned-column.is-writeback-column.is-mismatched-quantity {
   color: #ffd9d6;
   background: #563033;
+}
+html.dark .excel-preview-row > span.is-writeback-column.is-original-sku-quantity,
+html.dark .excel-preview-row > span.is-pinned-column.is-writeback-column.is-original-sku-quantity {
+  color: #ffe7c2;
+  background: #71440f;
 }
 html.dark .excel-preview-row.excel-preview-total-row > span.is-writeback-column {
   color: #e7f5ec;
@@ -433,6 +447,10 @@ html.dark .excel-preview-legend i.is-writeback {
   background: #294538;
 }
 .excel-preview-legend i.is-alert { background: #ffc7ce; border: 1px solid color-mix(in srgb, #e07080 50%, transparent); }
+.excel-preview-legend i.is-original-sku-quantity {
+  background: #ffd59a;
+  border: 1px solid color-mix(in srgb, #d88a23 55%, transparent);
+}
 .excel-preview-legend i.is-matched-row { background: #d8eee0; border: 1px solid color-mix(in srgb, #2f9d6a 45%, transparent); border-radius: 999px; }
 .excel-preview-legend i.is-unmatched-row { background: color-mix(in srgb, var(--cyber-amber) 42%, var(--cyber-panel)); border: 1px solid color-mix(in srgb, var(--cyber-amber) 55%, transparent); border-radius: 999px; }
 

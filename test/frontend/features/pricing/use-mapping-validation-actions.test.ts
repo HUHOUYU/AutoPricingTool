@@ -63,9 +63,41 @@ describe("useMappingValidationActions", () => {
       inputPath,
       mapping,
       requestVersion: 1,
+      writebackRows: [],
       cellEdits: [],
       configPath: "C:\\config.json",
     });
     expect(result.current.session.mappingValidations[inputPath]?.status).toBe("validating");
+  });
+
+  it("revalidates all fallback rows with the original-value strategy", () => {
+    const validatePriceMapping = vi.fn(async () => undefined);
+    window.desktopAPI = {
+      validatePriceMapping,
+    } as unknown as DesktopAPI;
+    const { result } = renderHook(() => {
+      const session = useProcessorSession();
+      return {
+        session,
+        actions: useMappingValidationActions({ session, configPath: "" }),
+      };
+    });
+    act(() => {
+      result.current.session.mappingsRef.current[inputPath] = mapping;
+      result.current.actions.useOriginalSkuQuantity(inputPath, [
+        { sourceRow: 3, quantity: null, quantityError: "SKU关系无法计算" },
+        { sourceRow: 4, quantity: null, quantityError: "SKU关系无法计算" },
+      ]);
+    });
+
+    expect(validatePriceMapping).toHaveBeenCalledWith(expect.objectContaining({
+      inputPath,
+      mapping,
+      requestVersion: 1,
+      writebackRows: [
+        expect.objectContaining({ sourceRow: 3, usedOriginalSkuQuantity: true }),
+        expect.objectContaining({ sourceRow: 4, usedOriginalSkuQuantity: true }),
+      ],
+    }));
   });
 });

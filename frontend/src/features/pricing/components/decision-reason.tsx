@@ -46,11 +46,13 @@ export function ValidationMessage({
   quantityIssues,
   unmatchedIssues,
   onOpenUnmatchedDetails,
+  onUseOriginalSkuQuantity,
 }: {
   message: string;
   quantityIssues: PricePreviewWritebackRow[];
   unmatchedIssues: PriceUnmatchedIssue[];
   onOpenUnmatchedDetails: (summary: string) => void;
+  onUseOriginalSkuQuantity: (rows: PricePreviewWritebackRow[]) => void;
 }): React.JSX.Element {
   const [dialogOpen, setDialogOpen] = useState(false);
   const hasQuantityDetails = message.includes("数量无法计算") && quantityIssues.length > 0;
@@ -85,6 +87,11 @@ export function ValidationMessage({
         title="数量计算问题"
         summary={message}
         issues={detailIssues}
+        actionLabel="使用原始 SKU 和数量"
+        onAction={() => {
+          onUseOriginalSkuQuantity(quantityIssues);
+          setDialogOpen(false);
+        }}
         onClose={() => setDialogOpen(false)}
       />
     </div>
@@ -99,6 +106,7 @@ export function DecisionReason({
   quantityIssues,
   unmatchedIssues,
   onOpenUnmatchedDetails,
+  onUseOriginalSkuQuantity,
 }: {
   reason: string;
   bestScore?: number | null;
@@ -107,6 +115,7 @@ export function DecisionReason({
   quantityIssues: PricePreviewWritebackRow[];
   unmatchedIssues: PriceUnmatchedIssue[];
   onOpenUnmatchedDetails: (summary: string) => void;
+  onUseOriginalSkuQuantity: (rows: PricePreviewWritebackRow[]) => void;
 }): React.JSX.Element {
   const comparison = /^(.*?)(?:：|:)\s*最优\s*\[(.*?)\]\s*[；;]\s*次优\s*\[(.*?)\]\s*$/
     .exec(reason);
@@ -118,6 +127,7 @@ export function DecisionReason({
           quantityIssues={quantityIssues}
           unmatchedIssues={unmatchedIssues}
           onOpenUnmatchedDetails={onOpenUnmatchedDetails}
+          onUseOriginalSkuQuantity={onUseOriginalSkuQuantity}
         />
       </li>
     );

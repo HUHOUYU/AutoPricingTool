@@ -232,7 +232,11 @@ async function validatePricePayload(value: unknown): Promise<Record<string, unkn
   };
 }
 
-function validatePriceRowEditPayload(value: unknown): { sourceRow: number; quantity: number | null } {
+function validatePriceRowEditPayload(value: unknown): {
+  sourceRow: number;
+  quantity: number | null;
+  useOriginalSkuQuantity?: boolean;
+} {
   const input = requireRecord(value, "单行核价参数");
   if (!Number.isSafeInteger(input.sourceRow) || Number(input.sourceRow) < 1) {
     throw new TypeError("单行核价 sourceRow 必须是大于 0 的整数");
@@ -240,9 +244,16 @@ function validatePriceRowEditPayload(value: unknown): { sourceRow: number; quant
   if (input.quantity !== null && (!Number.isSafeInteger(input.quantity) || Number(input.quantity) < 0)) {
     throw new TypeError("单行核价 quantity 必须是非负整数或 null");
   }
+  if (
+    input.useOriginalSkuQuantity !== undefined
+    && typeof input.useOriginalSkuQuantity !== "boolean"
+  ) {
+    throw new TypeError("单行核价 useOriginalSkuQuantity 必须是布尔值");
+  }
   return {
     sourceRow: Number(input.sourceRow),
     quantity: input.quantity === null ? null : Number(input.quantity),
+    ...(input.useOriginalSkuQuantity === true ? { useOriginalSkuQuantity: true } : {}),
   };
 }
 

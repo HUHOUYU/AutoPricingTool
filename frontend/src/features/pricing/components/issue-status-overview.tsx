@@ -28,6 +28,7 @@ type IssueStatusOverviewProps = {
   validation: MappingValidationState;
   onCloseIssueDetails: () => void;
   onOpenUnmatchedDetails: (summary: string) => void;
+  onUseOriginalSkuQuantity: (rows: PricePreviewWritebackRow[]) => void;
   onRevalidate: () => void;
 };
 
@@ -41,6 +42,7 @@ export function IssueStatusOverview({
   validation,
   onCloseIssueDetails,
   onOpenUnmatchedDetails,
+  onUseOriginalSkuQuantity,
   onRevalidate,
 }: IssueStatusOverviewProps): React.JSX.Element {
   const liveValidation = validation.result;
@@ -132,6 +134,7 @@ export function IssueStatusOverview({
               quantityIssues={quantityIssues}
               unmatchedIssues={unmatchedIssues}
               onOpenUnmatchedDetails={onOpenUnmatchedDetails}
+              onUseOriginalSkuQuantity={onUseOriginalSkuQuantity}
               key={message}
             />
           ))}
@@ -149,6 +152,7 @@ export function IssueStatusOverview({
               quantityIssues={quantityIssues}
               unmatchedIssues={unmatchedIssues}
               onOpenUnmatchedDetails={onOpenUnmatchedDetails}
+              onUseOriginalSkuQuantity={onUseOriginalSkuQuantity}
               key={reason}
             />
           ))}
@@ -165,6 +169,15 @@ export function IssueStatusOverview({
         summary={issueDetailsRequest?.summary ?? ""}
         issues={selectedIssueDetails}
         selectedSourceRow={issueDetailsRequest?.sourceRow}
+        actionLabel={issueDetailsRequest?.kind === "quantity"
+          ? "使用原始 SKU 和数量"
+          : undefined}
+        onAction={issueDetailsRequest?.kind === "quantity"
+          ? () => {
+              onUseOriginalSkuQuantity(quantityIssues);
+              onCloseIssueDetails();
+            }
+          : undefined}
         onClose={onCloseIssueDetails}
       />
     </section>

@@ -121,6 +121,15 @@ pub(super) fn resolve_order_quantities(
     mapping: &PriceCheckMapping,
     config: &Config,
 ) -> Vec<ResolvedOrderQuantity> {
+    resolve_order_quantities_with_overrides(sheet, mapping, config, &[])
+}
+
+pub(super) fn resolve_order_quantities_with_overrides(
+    sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    config: &Config,
+    overrides: &[PricePreviewWritebackRow],
+) -> Vec<ResolvedOrderQuantity> {
     let source_columns = quantity_source_columns(sheet, mapping, config);
     let sku_pair_priority = highest_priority_sku_qty_pair(mapping)
         .map(|(priority, _)| priority)
@@ -220,6 +229,53 @@ pub(super) fn resolve_order_quantities(
             absorbed: false,
             sku_pair_priority,
         });
+    }
+
+    let original_value_rows = overrides
+        .iter()
+        .filter(|row| row.used_original_sku_quantity)
+        .map(|row| row.source_row)
+        .collect::<HashSet<_>>();
+    if let Some((priority, pair)) = highest_priority_sku_qty_pair(mapping) {
+        let quantity_column = if pair.direct_quantity {
+            pair.qty_column
+        } else {
+            pair.merged_qty_column
+        };
+        for item in &mut resolved {
+            if !original_value_rows.contains(&item.source_row) {
+                continue;
+            }
+            let Some(row) = sheet.rows.get(item.source_row.saturating_sub(1)) else {
+                continue;
+            };
+            let raw_sku = cell_text(row, Some(pair.sku_column));
+            let quantity = row
+                .get(quantity_column.saturating_sub(1))
+                .and_then(parse_number)
+                .filter(|value| *value >= 0.0 && value.fract() == 0.0)
+                .map(|value| value as usize);
+            item.raw_sku = raw_sku.clone();
+            item.matched_sku = normalize_sku(&raw_sku);
+            item.component_source = None;
+            item.quantity = quantity;
+            item.quantity_error = if raw_sku.trim().is_empty() {
+                Some(format!(
+                    "最高评分 SKU 组的 {} 列 SKU 为空",
+                    excel_column_label(pair.sku_column)
+                ))
+            } else if quantity.is_none() {
+                Some(format!(
+                    "最高评分 SKU 组的 {} 列没有可用非负整数数量",
+                    excel_column_label(quantity_column)
+                ))
+            } else {
+                None
+            };
+            item.quantity_issue_context = None;
+            item.absorbed = false;
+            item.sku_pair_priority = priority;
+        }
     }
 
     // 吸收严格按订单隔离，且仅处理原金额明确为 0 的独立 SKU 行。

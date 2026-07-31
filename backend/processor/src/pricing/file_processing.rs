@@ -26,7 +26,7 @@ pub(super) fn process_price_file(
         .find(|sheet| sheet.name == mapping.pricing_sheet)
         .ok_or_else(|| anyhow!("找不到核价 Sheet: {}", mapping.pricing_sheet))?;
     let (lines, mut exceptions, resolved_quantities) =
-        read_order_lines(order_sheet, mapping, config);
+        read_order_lines_with_overrides(order_sheet, mapping, config, writeback_overrides);
     for exception in &mut exceptions {
         exception.file_path = input_path.display().to_string();
     }

@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import type { PriceCheckMapping } from "@shared/desktop-api";
+import type { PriceCheckMapping, PricePreviewWritebackRow } from "@shared/desktop-api";
 import { buildMapping } from "../mapping";
 import { getDesktopAPI } from "@/features/workbench/file-utils";
 import type { ProcessorSession } from "@/features/workbench/hooks/use-processor-session";
@@ -57,6 +57,7 @@ export function useMappingValidationActions({
       inputPath: path,
       mapping,
       requestVersion: version,
+      writebackRows: writebackEditsRef.current[path] ?? [],
       cellEdits: cellEditsRef.current[path] ?? [],
       configPath: configPath || undefined,
     }).catch((error: unknown) => {
@@ -84,6 +85,7 @@ export function useMappingValidationActions({
     configPath,
     mappingValidationInFlightRef,
     pendingMappingValidationRef,
+    writebackEditsRef,
   ]);
 
   const queueMappingValidation = useCallback((path: string, mapping: PriceCheckMapping): void => {
@@ -120,6 +122,26 @@ export function useMappingValidationActions({
     sendMappingValidation,
   ]);
 
+  const useOriginalSkuQuantity = useCallback((
+    path: string,
+    rows: PricePreviewWritebackRow[],
+  ): void => {
+    if (rows.length === 0) return;
+    const fallbackRows = new Map(rows.map((row) => [
+      row.sourceRow,
+      { ...row, usedOriginalSkuQuantity: true },
+    ]));
+    const currentRows = writebackEditsRef.current[path] ?? [];
+    const nextRows = [
+      ...currentRows.filter((row) => !fallbackRows.has(row.sourceRow)),
+      ...fallbackRows.values(),
+    ].sort((left, right) => left.sourceRow - right.sourceRow);
+    const next = { ...writebackEditsRef.current, [path]: nextRows };
+    writebackEditsRef.current = next;
+    setWritebackEdits(next);
+    revalidateMapping(path);
+  }, [revalidateMapping, writebackEditsRef]);
+
   const commitMapping = useCallback((path: string, mapping: PriceCheckMapping): void => {
     const nextWritebackEdits = { ...writebackEditsRef.current };
     delete nextWritebackEdits[path];
@@ -149,6 +171,7 @@ export function useMappingValidationActions({
   return {
     sendMappingValidation,
     revalidateMapping,
+    useOriginalSkuQuantity,
     commitMapping,
     updateMapping,
   };

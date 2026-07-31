@@ -34,7 +34,25 @@ pub(super) fn recalculate_price_row(
         .rows
         .get(row_edit.source_row.saturating_sub(1))
         .ok_or_else(|| anyhow!("第 {} 行超出订单 Sheet 范围", row_edit.source_row))?;
-    let mut resolved_quantities = resolve_order_quantities(order_sheet, mapping, config);
+    let fallback_override = PricePreviewWritebackRow {
+        source_row: row_edit.source_row,
+        pricing_price: None,
+        price_difference: None,
+        quantity: None,
+        quantity_error: None,
+        quantity_issue_context: None,
+        used_original_sku_quantity: row_edit.use_original_sku_quantity,
+    };
+    let mut resolved_quantities = if row_edit.use_original_sku_quantity {
+        resolve_order_quantities_with_overrides(
+            order_sheet,
+            mapping,
+            config,
+            std::slice::from_ref(&fallback_override),
+        )
+    } else {
+        resolve_order_quantities(order_sheet, mapping, config)
+    };
     let target_index = resolved_quantities
         .iter()
         .position(|resolved| resolved.source_row == row_edit.source_row)
@@ -46,24 +64,44 @@ pub(super) fn recalculate_price_row(
         })?;
     {
         let target = &mut resolved_quantities[target_index];
-        target.quantity = row_edit.quantity;
-        target.quantity_error = None;
-        target.quantity_issue_context = None;
-        target.absorbed = false;
+        if !row_edit.use_original_sku_quantity {
+            target.quantity = row_edit.quantity;
+            target.quantity_error = None;
+            target.quantity_issue_context = None;
+            target.absorbed = false;
+        }
     }
     let target = &resolved_quantities[target_index];
+    let effective_quantity = if row_edit.use_original_sku_quantity {
+        target.quantity
+    } else {
+        row_edit.quantity
+    };
     let base_row = PricePreviewWritebackRow {
         source_row: row_edit.source_row,
         pricing_price: None,
         price_difference: None,
-        quantity: row_edit.quantity,
+        quantity: effective_quantity,
         quantity_error: None,
         quantity_issue_context: None,
+        used_original_sku_quantity: row_edit.use_original_sku_quantity
+            && target.quantity_error.is_none(),
     };
-    let Some(quantity) = row_edit.quantity else {
+    if let Some(error) = &target.quantity_error {
+        return Ok(PriceRowRecalculation {
+            row: PricePreviewWritebackRow {
+                quantity_error: Some(error.clone()),
+                used_original_sku_quantity: false,
+                ..base_row
+            },
+            error: Some(error.clone()),
+        });
+    }
+    let Some(quantity) = effective_quantity else {
         return Ok(PriceRowRecalculation {
             row: PricePreviewWritebackRow {
                 quantity_error: Some("数量为空，无法重新核价".to_string()),
+                used_original_sku_quantity: false,
                 ..base_row
             },
             error: Some("数量为空，无法重新核价".to_string()),
@@ -121,10 +159,21 @@ pub(super) fn recalculate_price_row(
     })
 }
 
+#[cfg(test)]
 pub(super) fn validate_price_mapping(
     path: &Path,
     mapping: &PriceCheckMapping,
     cell_edits: &[PriceCellEdit],
+    config: &Config,
+) -> std::result::Result<MappingValidationResult, Vec<String>> {
+    validate_price_mapping_with_overrides(path, mapping, cell_edits, &[], config)
+}
+
+pub(super) fn validate_price_mapping_with_overrides(
+    path: &Path,
+    mapping: &PriceCheckMapping,
+    cell_edits: &[PriceCellEdit],
+    writeback_overrides: &[PricePreviewWritebackRow],
     config: &Config,
 ) -> std::result::Result<MappingValidationResult, Vec<String>> {
     let mut workbook = read_workbook_for_processing(path, config)
@@ -309,7 +358,7 @@ pub(super) fn validate_price_mapping(
 
     let index = build_price_index(pricing_sheet, mapping, &config.pricing);
     let (lines, quantity_exceptions, resolved_quantities) =
-        read_order_lines(order_sheet, mapping, config);
+        read_order_lines_with_overrides(order_sheet, mapping, config, writeback_overrides);
     let evaluated_rows = lines.len();
     let (matched_rows, matched_order_rows) = evaluate_matches(&index, &lines);
     let unmatched_rows = unmatched_price_issues(&index, mapping, &lines);
@@ -319,6 +368,7 @@ pub(super) fn validate_price_mapping(
         &index,
         &lines,
         &resolved_quantities,
+        writeback_overrides,
     );
     let coverage = ratio(matched_rows, evaluated_rows);
     let mut warnings = Vec::new();
@@ -420,6 +470,7 @@ pub(super) fn calculate_preview_writeback_rows(
     index: &PriceIndex,
     lines: &[OrderLine],
     resolved_quantities: &[ResolvedOrderQuantity],
+    writeback_overrides: &[PricePreviewWritebackRow],
 ) -> Vec<PricePreviewWritebackRow> {
     let quantity_issue_contexts = resolved_quantities
         .iter()
@@ -431,6 +482,11 @@ pub(super) fn calculate_preview_writeback_rows(
         })
         .collect::<HashMap<_, _>>();
     let mut matched_candidates = HashMap::new();
+    let original_value_rows = writeback_overrides
+        .iter()
+        .filter(|row| row.used_original_sku_quantity)
+        .map(|row| row.source_row)
+        .collect::<HashSet<_>>();
     for item in aggregate_lines(lines) {
         let lookup = index.lookup_routes_with_single_shipment_preference(
             &item.country_routes,
@@ -451,13 +507,18 @@ pub(super) fn calculate_preview_writeback_rows(
         resolved_quantities,
     )
     .into_iter()
-    .map(|row| PricePreviewWritebackRow {
-        source_row: row.source_row,
-        pricing_price: row.pricing_price,
-        price_difference: row.price_difference,
-        quantity: row.quantity,
-        quantity_error: row.quantity_error,
-        quantity_issue_context: quantity_issue_contexts.get(&row.source_row).cloned(),
+    .map(|row| {
+        let fallback_succeeded =
+            original_value_rows.contains(&row.source_row) && row.quantity_error.is_none();
+        PricePreviewWritebackRow {
+            source_row: row.source_row,
+            pricing_price: row.pricing_price,
+            price_difference: row.price_difference,
+            quantity: row.quantity,
+            quantity_error: row.quantity_error,
+            quantity_issue_context: quantity_issue_contexts.get(&row.source_row).cloned(),
+            used_original_sku_quantity: fallback_succeeded,
+        }
     })
     .collect()
 }

@@ -225,6 +225,7 @@ export type PricePreviewWritebackRow = {
     mainSkuColumn: number;
     mainSku: string;
   } | null;
+  usedOriginalSkuQuantity?: boolean;
 };
 
 export type PricePreviewCellEdit = {
@@ -339,6 +340,7 @@ export type DesktopAPI = {
     inputPath: string;
     mapping: PriceCheckMapping;
     requestVersion: number;
+    writebackRows?: PricePreviewWritebackRow[];
     cellEdits?: PricePreviewCellEdit[];
     configPath?: string;
   }) => Promise<void>;
@@ -346,7 +348,11 @@ export type DesktopAPI = {
     inputPath: string;
     mapping: PriceCheckMapping;
     requestVersion: number;
-    rowEdit: { sourceRow: number; quantity: number | null };
+    rowEdit: {
+      sourceRow: number;
+      quantity: number | null;
+      useOriginalSkuQuantity?: boolean;
+    };
     cellEdits?: PricePreviewCellEdit[];
     configPath?: string;
   }) => Promise<void>;

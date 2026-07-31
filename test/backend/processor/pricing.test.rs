@@ -2885,6 +2885,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 quantity: Some(4),
                 quantity_error: None,
                 quantity_issue_context: None,
+                used_original_sku_quantity: false,
             }],
         );
 
@@ -3508,6 +3509,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 quantity: Some(1),
                 quantity_error: None,
                 quantity_issue_context: None,
+                used_original_sku_quantity: false,
             }]
         );
         // 顺序错误：SKU 在原始数量左侧
@@ -3570,7 +3572,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             {
                 order.write_string(0, column as u16, *value)?;
             }
-            for (column, value) in ["A-1", "US", "GOOD-1", "1", "GOOD-1", "1", "9", "1"]
+            for (column, value) in ["A-1", "US", "LEFT-1", "1", "GOOD-1", "2", "9", "1"]
                 .iter()
                 .enumerate()
             {
@@ -3634,6 +3636,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             &PriceRowEdit {
                 source_row: 2,
                 quantity: Some(2),
+                use_original_sku_quantity: false,
             },
         )?;
 
@@ -3646,9 +3649,35 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 quantity: Some(2),
                 quantity_error: None,
                 quantity_issue_context: None,
+                used_original_sku_quantity: false,
             }
         );
         assert_eq!(result.error, None);
+
+        let fallback = recalculate_price_row(
+            &path,
+            &mapping,
+            &[],
+            &Config::default(),
+            &PriceRowEdit {
+                source_row: 2,
+                quantity: None,
+                use_original_sku_quantity: true,
+            },
+        )?;
+        assert_eq!(
+            fallback.row,
+            PricePreviewWritebackRow {
+                source_row: 2,
+                pricing_price: Some(13.0),
+                price_difference: Some(4.0),
+                quantity: Some(2),
+                quantity_error: None,
+                quantity_issue_context: None,
+                used_original_sku_quantity: true,
+            }
+        );
+        assert_eq!(fallback.error, None);
         std::fs::remove_file(path)?;
         Ok(())
     }

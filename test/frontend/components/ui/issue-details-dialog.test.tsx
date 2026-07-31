@@ -81,4 +81,22 @@ describe("IssueDetailsDialog", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "滚动到表头" }));
     expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: "smooth" });
   });
+
+  it("runs the optional original-value action", () => {
+    const onAction = vi.fn();
+    render(
+      <IssueDetailsDialog
+        open
+        title="数量计算问题"
+        summary="1 行数量无法计算，需要确认"
+        issues={[{ label: "第 2 行", message: "SKU 关系无法计算" }]}
+        actionLabel="使用原始 SKU 和数量"
+        onAction={onAction}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "使用原始 SKU 和数量" }));
+    expect(onAction).toHaveBeenCalledTimes(1);
+  });
 });

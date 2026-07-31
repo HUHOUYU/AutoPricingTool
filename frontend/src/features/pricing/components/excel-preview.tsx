@@ -984,6 +984,11 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                         const writebackValueClass = derived && cell.trim() !== ""
                           ? " has-writeback-value"
                           : "";
+                        const originalSkuQuantityClass = derived
+                          && writebackBySourceRow.get(absoluteRow)?.usedOriginalSkuQuantity
+                          && writebackBySourceRow.get(absoluteRow)?.pricingPrice != null
+                          ? " is-original-sku-quantity"
+                          : "";
                         const editableWritebackCell = derived && !isHeaderRow && !isWritebackTotalRow && writebackBySourceRow.has(absoluteRow);
                         const mappedClass = derived ? "" : mappedColumnClass(mapping, activeSheet.name, absoluteColumn, singleShipmentMatchingEnabled);
                         const isEditing = editingWritebackCell?.sourceRow === absoluteRow
@@ -995,11 +1000,13 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
                           && selectedCell.column === absoluteColumn;
                         const headerCellDisplay = isHeaderRow && !derived && !cell.trim() ? "空表头" : cell;
                         return <span
-                          className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedClass : duplicateMappedClass}${editableWritebackCell ? " is-editable-writeback" : ""}${isEditingCell ? " is-editing-cell" : ""}${isSelectedCell ? " is-selected-cell" : ""}${writebackValueClass}${differenceClass}${quantityMismatchClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${isHeaderRow && !derived && !cell.trim() ? " is-empty-header" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
+                          className={`${derived ? "is-writeback-column" : isHeaderRow ? mappedClass : duplicateMappedClass}${editableWritebackCell ? " is-editable-writeback" : ""}${isEditingCell ? " is-editing-cell" : ""}${isSelectedCell ? " is-selected-cell" : ""}${writebackValueClass}${differenceClass}${quantityMismatchClass}${originalSkuQuantityClass}${isDuplicateOrderCell ? " is-duplicate-order" : ""}${activeColumn === absoluteColumn ? " is-active-column" : ""}${isHeaderRow ? " is-header-cell" : ""}${isHeaderRow && !derived && !cell.trim() ? " is-empty-header" : ""}${hoveredColumn === absoluteColumn ? " is-hover-column" : ""}${selectingColumn && !derived ? " is-selectable-column" : ""}${pinnedColumnIndexes.includes(columnIndex) ? " is-pinned-column" : ""}${activeSearchMatch?.rowIndex === virtualRow.index && activeSearchMatch.columnIndex === columnIndex ? " is-search-match" : ""}`}
                           style={{ ...pinnedColumnStyle(columnIndex), ...(!derived && isHeaderRow ? skuPairStyle(mapping, activeSheet.name, absoluteColumn) : undefined) }}
                           title={isEditingCell
                             ? undefined
-                            : writebackQuantityError ?? (isHeaderRow && !derived ? headerCellDisplay : cell)}
+                            : writebackBySourceRow.get(absoluteRow)?.usedOriginalSkuQuantity
+                              ? `使用最高评分 SKU 组原始值：${cell}`
+                              : writebackQuantityError ?? (isHeaderRow && !derived ? headerCellDisplay : cell)}
                           onMouseEnter={() => selectingColumn && !derived && setHoveredColumn(absoluteColumn)}
                           onPointerDown={(event) => {
                             if (editableWritebackCell) {
@@ -1061,6 +1068,7 @@ export function ExcelPreview({ api, filePath, candidates, activeSheetName, onAct
             <span><i className="is-mapped" />常规匹配字段</span>
             {showsWritebackColumns ? <span><i className="is-writeback" />写回结果</span> : null}
             {showsWritebackColumns ? <span><i className="is-alert" />金额差/数量异常</span> : null}
+            {showsWritebackColumns ? <span><i className="is-original-sku-quantity" />原始 SKU/数量</span> : null}
             {mapping && activeSheet.name === mapping.orderSheet ? <span><i className="is-matched-row" />已匹配行号</span> : null}
             {mapping && activeSheet.name === mapping.orderSheet && unmatchedOrderRows.length > 0 ? <span><i className="is-unmatched-row" />未匹配定位行</span> : null}
           </div>

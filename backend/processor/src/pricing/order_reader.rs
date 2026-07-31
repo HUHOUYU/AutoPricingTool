@@ -9,9 +9,23 @@ pub(super) fn read_order_lines(
     Vec<PriceCheckException>,
     Vec<ResolvedOrderQuantity>,
 ) {
+    read_order_lines_with_overrides(sheet, mapping, config, &[])
+}
+
+pub(super) fn read_order_lines_with_overrides(
+    sheet: &SheetData,
+    mapping: &PriceCheckMapping,
+    config: &Config,
+    overrides: &[PricePreviewWritebackRow],
+) -> (
+    Vec<OrderLine>,
+    Vec<PriceCheckException>,
+    Vec<ResolvedOrderQuantity>,
+) {
     let mut lines = Vec::new();
     let mut exceptions = Vec::new();
-    let resolved_quantities = resolve_order_quantities(sheet, mapping, config);
+    let resolved_quantities =
+        resolve_order_quantities_with_overrides(sheet, mapping, config, overrides);
     let single_shipment_orders =
         single_shipment_orders(sheet, mapping, config, &resolved_quantities);
     for resolved in &resolved_quantities {

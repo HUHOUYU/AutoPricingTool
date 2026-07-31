@@ -929,11 +929,16 @@
 
 .issue-details-dialog > header {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 32px;
+  grid-template-columns: 38px minmax(0, 1fr) auto 32px;
   align-items: start;
   gap: 11px;
   padding: 14px 16px 12px;
   border-bottom: 1px solid var(--border);
+}
+
+.issue-details-dialog-action {
+  align-self: center;
+  white-space: nowrap;
 }
 
 .issue-details-dialog-icon {
