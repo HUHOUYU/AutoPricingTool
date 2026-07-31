@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } from "electron";
 import { existsSync } from "node:fs";
-import { access, appendFile, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, appendFile, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { availableParallelism, userInfo } from "node:os";
 import { assertTrustedIpcSender } from "./security";
@@ -25,7 +25,9 @@ import {
 } from "./app-settings-store";
 import { resolveBundledDefaultConfigPath } from "./resource-paths";
 import { createConfigDocumentService } from "./config-document-service";
+import { HeaderTemplateStore } from "./header-template-store";
 import { samePath } from "./path-utils";
+import { collectExcelFiles } from "./excel-file-collector";
 import {
   type WindowPreferences,
 } from "./window-preferences";
@@ -50,24 +52,6 @@ type RuntimeLogRow = {
   time: string;
   level: string;
   message: string;
-};
-
-type HeaderTemplateFieldMapping = {
-  fieldKey: string;
-  label: string;
-  sheetName: string;
-  headerRow: number;
-  column: number;
-  header: string;
-};
-
-type HeaderTemplateRecord = {
-  id: string;
-  createdAt: string;
-  createdBy: string;
-  fileName: string;
-  filePath: string;
-  mappings: HeaderTemplateFieldMapping[];
 };
 
 const rootDir = resolve(__dirname, "../..");
@@ -107,6 +91,11 @@ const productionContentSecurityPolicy = [
 ].join("; ");
 const outputArtifactDirs = ["汇总", "正式命名", "待确认", "异常"];
 const supportedExcelExtensions = new Set([".xlsx", ".xlsm", ".xlsb", ".xls"]);
+const headerTemplateStore = new HeaderTemplateStore({
+  directory: templateStoreDir,
+  indexPath: templateStorePath,
+  isSupportedFile: (path) => isSupportedExcelPath(path),
+});
 const MAX_INPUT_FILES = 5_000;
 const TASK_PROGRESS_PERSIST_FILE_INTERVAL = 10;
 const defaultWindowBackgroundColor = "#EEF3F8";
@@ -206,39 +195,6 @@ function isSupportedExcelPath(path: string): boolean {
   return supportedExcelExtensions.has(extname(path).toLowerCase());
 }
 
-const skippedInputDirectoryNames = new Set([".git", "node_modules", "dist-electron", "target", "核价结果"]);
-
-async function collectExcelFiles(directory: string): Promise<{ files: string[]; skippedTemporary: number; skippedUnsupported: number; skippedOutput: number }> {
-  const files: string[] = [];
-  let skippedTemporary = 0;
-  let skippedUnsupported = 0;
-  let skippedOutput = 0;
-  const resolvedDirectory = resolve(directory);
-  const entries = await readdir(resolvedDirectory, { withFileTypes: true });
-  entries.sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
-  for (const entry of entries) {
-    if (!entry.isFile()) {
-      if (entry.isDirectory() && skippedInputDirectoryNames.has(entry.name)) skippedOutput += 1;
-      continue;
-    }
-    if (entry.name.startsWith("~$")) {
-      skippedTemporary += 1;
-      continue;
-    }
-    const candidate = join(resolvedDirectory, entry.name);
-    if (!isSupportedExcelPath(candidate)) {
-      skippedUnsupported += 1;
-      continue;
-    }
-    files.push(resolve(candidate));
-    if (files.length > MAX_INPUT_FILES) break;
-  }
-  if (files.length > MAX_INPUT_FILES) {
-    throw new RangeError(`输入文件夹包含 ${files.length} 个 Excel 文件，最多支持 ${MAX_INPUT_FILES} 个`);
-  }
-  return { files, skippedTemporary, skippedUnsupported, skippedOutput };
-}
-
 async function validatePricePayload(value: unknown): Promise<Record<string, unknown>> {
   const input = requireRecord(value, "核价参数");
   const files = input.files;
@@ -329,53 +285,6 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function readHeaderTemplates(): Promise<HeaderTemplateRecord[]> {
-  try {
-    const parsed = JSON.parse(await readFile(templateStorePath, "utf8")) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is HeaderTemplateRecord => {
-      if (!item || typeof item !== "object") return false;
-      const record = item as Partial<HeaderTemplateRecord>;
-      return typeof record.id === "string"
-        && typeof record.createdAt === "string"
-        && typeof record.createdBy === "string"
-        && typeof record.fileName === "string"
-        && typeof record.filePath === "string"
-        && Array.isArray(record.mappings);
-    });
-  } catch {
-    return [];
-  }
-}
-
-async function writeHeaderTemplates(records: HeaderTemplateRecord[]): Promise<void> {
-  await mkdir(templateStoreDir, { recursive: true });
-  await writeFile(templateStorePath, `${JSON.stringify(records, null, 2)}\n`, "utf8");
-}
-
-function parseHeaderTemplateMappings(value: unknown): HeaderTemplateFieldMapping[] {
-  if (!Array.isArray(value)) throw new TypeError("模板字段映射必须是数组");
-  return value.map((item) => {
-    const mapping = requireRecord(item, "模板字段映射");
-    if (typeof mapping.fieldKey !== "string" || !mapping.fieldKey.trim()
-      || typeof mapping.label !== "string" || !mapping.label.trim()
-      || typeof mapping.sheetName !== "string" || !mapping.sheetName.trim()
-      || !Number.isInteger(mapping.headerRow) || Number(mapping.headerRow) < 1
-      || !Number.isInteger(mapping.column) || Number(mapping.column) < 1
-      || typeof mapping.header !== "string") {
-      throw new TypeError("模板字段映射格式无效");
-    }
-    return {
-      fieldKey: mapping.fieldKey.trim(),
-      label: mapping.label.trim(),
-      sheetName: mapping.sheetName.trim(),
-      headerRow: Number(mapping.headerRow),
-      column: Number(mapping.column),
-      header: mapping.header.trim(),
-    };
-  });
 }
 
 const markInterruptedTasks = (): Promise<void> => taskHistoryStore.markInterruptedTasks();
@@ -630,7 +539,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("templates:list", (event) => {
     requireTrustedIpc(event);
-    return readHeaderTemplates();
+    return headerTemplateStore.list();
   });
   ipcMain.handle("templates:create", async (event) => {
     requireTrustedIpc(event);
@@ -642,46 +551,16 @@ app.whenReady().then(async () => {
     });
     const sourcePath = result.filePaths[0];
     if (result.canceled || !sourcePath) return null;
-    if (!isSupportedExcelPath(sourcePath)) throw new TypeError("请选择受支持的 Excel 模板文件");
-    await mkdir(templateStoreDir, { recursive: true });
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const storedName = `${id}${extname(sourcePath).toLowerCase()}`;
-    const storedPath = join(templateStoreDir, storedName);
-    await copyFile(sourcePath, storedPath);
-    const record: HeaderTemplateRecord = {
-      id,
-      createdAt: new Date().toISOString(),
-      createdBy: userInfo().username || "当前用户",
-      fileName: basename(sourcePath),
-      filePath: storedPath,
-      mappings: [],
-    };
-    const records = await readHeaderTemplates();
-    records.unshift(record);
-    await writeHeaderTemplates(records);
-    return record;
+    return headerTemplateStore.createFromFile(sourcePath, userInfo().username || "当前用户");
   });
   ipcMain.handle("templates:update-mappings", async (event, payload: unknown) => {
     requireTrustedIpc(event);
     const input = requireRecord(payload, "模板映射参数");
-    if (typeof input.id !== "string" || !input.id.trim()) throw new TypeError("缺少模板 ID");
-    const mappings = parseHeaderTemplateMappings(input.mappings);
-    const records = await readHeaderTemplates();
-    const index = records.findIndex((record) => record.id === input.id);
-    if (index < 0) throw new Error("模板不存在或已被删除");
-    records[index] = { ...records[index], mappings };
-    await writeHeaderTemplates(records);
-    return records[index];
+    return headerTemplateStore.updateMappings(input.id, input.mappings);
   });
   ipcMain.handle("templates:delete", async (event, id: unknown) => {
     requireTrustedIpc(event);
-    if (typeof id !== "string" || !id.trim()) throw new TypeError("缺少模板 ID");
-    const records = await readHeaderTemplates();
-    const index = records.findIndex((record) => record.id === id);
-    if (index < 0) return;
-    const [record] = records.splice(index, 1);
-    await writeHeaderTemplates(records);
-    if (samePath(dirname(record.filePath), templateStoreDir)) await rm(record.filePath, { force: true });
+    await headerTemplateStore.delete(id);
   });
   ipcMain.handle("app:append-runtime-log", (event, payload: RuntimeLogRow) => {
     requireTrustedIpc(event);
@@ -718,7 +597,10 @@ app.whenReady().then(async () => {
     if (!directoryInfo.isDirectory()) {
       throw new TypeError("输入路径不是文件夹");
     }
-    return collectExcelFiles(directory);
+    return collectExcelFiles(directory, {
+      maxFiles: MAX_INPUT_FILES,
+      isSupportedFile: isSupportedExcelPath,
+    });
   });
   ipcMain.handle("app:read-excel-preview-file", (event, filePath: unknown) => {
     requireTrustedIpc(event);
@@ -744,7 +626,7 @@ app.whenReady().then(async () => {
     requireTrustedIpc(event);
     processorSession.send({
       ...(await validatePricePayload(payload)),
-      headerTemplates: await readHeaderTemplates(),
+      headerTemplates: await headerTemplateStore.list(),
       action: "price-check-analyze",
     }, "price-analyze");
   });
@@ -828,7 +710,7 @@ app.whenReady().then(async () => {
         ...validated,
         ...(batchOutputDir ? { outputDir: batchOutputDir } : {}),
         overwriteSourceFiles: appPreferences.overwriteSourceFiles,
-        headerTemplates: await readHeaderTemplates(),
+        headerTemplates: await headerTemplateStore.list(),
         action: "price-check-run",
       }, "price-run");
     } catch (error) {
