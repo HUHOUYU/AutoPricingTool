@@ -12,7 +12,7 @@ import type {
   ConfigValidationResult,
   DesktopAPI,
   ProcessingCapacity,
-} from "../../../../../backend/electron/preload";
+} from "@shared/desktop-api";
 
 type JsonObject = Record<string, unknown>;
 type SingleShipmentMatchField = "recipient_name" | "phone" | "postal_code" | "address" | "email";

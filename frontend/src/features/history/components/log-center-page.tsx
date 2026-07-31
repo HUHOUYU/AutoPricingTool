@@ -23,7 +23,7 @@ import type {
   TaskHistoryQuery,
   TaskHistoryRecord,
   TaskHistoryStatus,
-} from "../../../../../backend/electron/preload";
+} from "@shared/desktop-api";
 
 type LogCenterPageProps = {
   api: DesktopAPI | null;

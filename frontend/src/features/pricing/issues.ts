@@ -2,8 +2,8 @@ import type {
   PricePreviewWritebackRow,
   PriceUnmatchedIssue,
   TaskIssueSummary,
-} from "../../../../backend/electron/preload";
-import { classifyTaskIssue, TASK_ISSUE_LABELS } from "../../../../shared/task-history";
+} from "@shared/desktop-api";
+import { classifyTaskIssue, TASK_ISSUE_LABELS } from "@shared/task-history";
 
 const TASK_ISSUE_SAMPLE_LIMIT = 20;
 

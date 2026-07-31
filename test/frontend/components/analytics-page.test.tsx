@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { DesktopAPI, TaskAnalyticsSummary } from "../../../backend/electron/preload";
+import type { DesktopAPI, TaskAnalyticsSummary } from "@shared/desktop-api";
 import { AnalyticsPage } from "@/features/analytics/components/analytics-page";
 
 const analytics: TaskAnalyticsSummary = {

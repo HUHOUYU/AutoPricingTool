@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
-import type { DesktopAPI, PriceAnalysisFile, ProcessorEvent } from "../../backend/electron/preload";
+import type { DesktopAPI, PriceAnalysisFile, ProcessorEvent } from "@shared/desktop-api";
 import type { ExcelPreviewWorkerRequest, ExcelPreviewWorkerResponse } from "@/lib/excel-preview";
 import { App } from "@/App";
 import { useUIStore } from "@/stores/ui-store";

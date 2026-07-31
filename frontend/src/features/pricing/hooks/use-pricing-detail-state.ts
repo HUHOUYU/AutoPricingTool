@@ -3,7 +3,7 @@ import type {
   PriceAnalysisFile,
   PriceCheckMapping,
   PricePreviewWritebackRow,
-} from "../../../../../backend/electron/preload";
+} from "@shared/desktop-api";
 import type { ExcelPreviewWorkbook } from "@/lib/excel-preview";
 import type { ExcelPreviewCandidate } from "@/features/pricing/components/excel-preview";
 import type { MappingValidationState } from "@/features/pricing/components/mapping-editor";
@@ -189,3 +189,5 @@ export function usePricingDetailState({
     writebackRows,
   };
 }
+
+export type PricingDetailState = ReturnType<typeof usePricingDetailState>;

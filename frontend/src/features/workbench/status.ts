@@ -1,4 +1,4 @@
-import type { PriceAnalysisFile } from "../../../../backend/electron/preload";
+import type { PriceAnalysisFile } from "@shared/desktop-api";
 import type { FileTab } from "@/stores/ui-store";
 import type { FileResult, FileStatus } from "./types";
 

@@ -1,5 +1,5 @@
 import type { DropEvent } from "react-dropzone";
-import type { DesktopAPI } from "../../../../backend/electron/preload";
+import type { DesktopAPI } from "@shared/desktop-api";
 import type { ImportMode } from "./types";
 
 export function getDesktopAPI(): DesktopAPI | null {

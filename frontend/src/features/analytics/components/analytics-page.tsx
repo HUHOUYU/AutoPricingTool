@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AnalyticsChart } from "./analytics-charts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { DesktopAPI, TaskAnalyticsSummary, TaskHistoryStatus } from "../../../../../backend/electron/preload";
+import type { DesktopAPI, TaskAnalyticsSummary, TaskHistoryStatus } from "@shared/desktop-api";
 
 type AnalyticsPageProps = {
   api: DesktopAPI | null;

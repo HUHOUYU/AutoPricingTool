@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import type { DesktopAPI, HeaderTemplateFieldMapping, HeaderTemplateRecord } from "../../../../../backend/electron/preload";
+import type { DesktopAPI, HeaderTemplateFieldMapping, HeaderTemplateRecord } from "@shared/desktop-api";
 
 type RequiredTemplateField = {
   key: string;

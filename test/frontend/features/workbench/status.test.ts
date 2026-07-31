@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PriceAnalysisFile } from "../../../../backend/electron/preload";
+import type { PriceAnalysisFile } from "@shared/desktop-api";
 import { isAnalysisError, pickBestResultTab, statusForFile, tabForStatus } from "@/features/workbench/status";
 
 function createAnalysis(status: "eligible" | "confirm" | "error" = "eligible"): PriceAnalysisFile {

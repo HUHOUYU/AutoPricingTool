@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight, ChartNoAxesCombined, CheckCircle2, FilePlus2, Files, FolderOpen, Gauge, Inbox, ListChecks, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { HistoryTrendChart } from "@/features/history/components/history-trend-chart";
-import type { DesktopAPI, TaskHistorySummary } from "../../../../../backend/electron/preload";
+import type { DesktopAPI, TaskHistorySummary } from "@shared/desktop-api";
 
 type DashboardPageProps = {
   api: DesktopAPI | null;

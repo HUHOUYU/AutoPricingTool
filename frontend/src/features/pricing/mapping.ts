@@ -1,7 +1,7 @@
 import type {
   PriceAnalysisCandidate,
   PriceCheckMapping,
-} from "../../../../backend/electron/preload";
+} from "@shared/desktop-api";
 
 export type MappingFieldTarget =
   | "orderHeaderRow"

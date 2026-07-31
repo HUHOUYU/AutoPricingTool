@@ -126,3 +126,5 @@ export function useDetailDrawerLayout(): {
     startSidebarResize,
   };
 }
+
+export type DetailDrawerLayoutState = ReturnType<typeof useDetailDrawerLayout>;

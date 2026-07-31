@@ -1,4 +1,4 @@
-import type { DesktopAPI } from "../backend/electron/preload";
+import type { DesktopAPI } from "@shared/desktop-api";
 
 declare global {
   interface Window {

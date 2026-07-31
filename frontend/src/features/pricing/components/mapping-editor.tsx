@@ -4,7 +4,7 @@ import type {
   PriceCheckMapping,
   PriceMappingValidation,
   SingleShipmentMatchField,
-} from "../../../../../backend/electron/preload";
+} from "@shared/desktop-api";
 import type { ExcelPreviewSheet, ExcelPreviewWorkbook } from "@/lib/excel-preview";
 import type { MappingFieldTarget } from "@/features/pricing/mapping";
 import { Button } from "@/components/ui/button";

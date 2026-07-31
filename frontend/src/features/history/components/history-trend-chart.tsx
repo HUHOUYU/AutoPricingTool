@@ -3,7 +3,7 @@ import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
 import { GridComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
-import type { TaskHistorySummary } from "../../../../../backend/electron/preload";
+import type { TaskHistorySummary } from "@shared/desktop-api";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { DesktopAPI, TaskHistoryDetail, TaskHistoryRecord } from "../../../backend/electron/preload";
+import type { DesktopAPI, TaskHistoryDetail, TaskHistoryRecord } from "@shared/desktop-api";
 import { LogCenterPage } from "@/features/history/components/log-center-page";
 
 const record: TaskHistoryRecord = {

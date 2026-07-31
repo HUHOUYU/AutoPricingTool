@@ -4,7 +4,7 @@ import { quantityIssueDetails } from "@/features/pricing/issues";
 import type {
   PricePreviewWritebackRow,
   PriceUnmatchedIssue,
-} from "../../../../../backend/electron/preload";
+} from "@shared/desktop-api";
 
 function DecisionMappingText({ value }: { value: string }): React.JSX.Element {
   const mappingPairs = value.split("、").map((pair) =>

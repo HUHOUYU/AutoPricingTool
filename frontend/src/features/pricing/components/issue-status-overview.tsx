@@ -16,7 +16,7 @@ import type {
   PriceAnalysisFile,
   PricePreviewWritebackRow,
   PriceUnmatchedIssue,
-} from "../../../../../backend/electron/preload";
+} from "@shared/desktop-api";
 
 type IssueStatusOverviewProps = {
   analysis: PriceAnalysisFile | undefined;

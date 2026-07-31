@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PriceCheckMapping } from "../../../../backend/electron/preload";
+import type { PriceCheckMapping } from "@shared/desktop-api";
 import {
   applyMappingColumn,
   mappingColumnConflict,

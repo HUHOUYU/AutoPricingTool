@@ -4,7 +4,7 @@ import type {
   PriceAnalysisFile,
   PriceMappingValidation,
   PricePreviewWritebackRow,
-} from "../../../../backend/electron/preload";
+} from "@shared/desktop-api";
 import { usePricingDetailState } from "@/features/pricing/hooks/use-pricing-detail-state";
 
 const detailPath = "C:\\batch\\order.xlsx";
