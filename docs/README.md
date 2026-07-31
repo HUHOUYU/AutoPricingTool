@@ -102,10 +102,25 @@ AutoPricingTool/
   backend/processor/src/pricing.rs # 核价核心
   backend/processor/src/pricing_writer.rs # 原工作簿写回
   backend/electron/main/                     # Electron 主进程
+  backend/electron/main/excel-file-collector.ts # 文件夹导入筛选与数量上限
+  backend/electron/main/header-template-store.ts # 模板文件、映射与索引持久化
   backend/electron/main/task-history-store.ts # 批次历史与统计聚合
-  backend/electron/preload/
-  shared/task-history.ts    # 主进程/预加载/渲染器共享类型与异常分类
-  frontend/                 # UI
+  backend/electron/preload/ # Electron IPC 的安全适配层，不定义业务契约
+  shared/desktop-api.ts     # 主进程/预加载/渲染器共享的桌面 API 契约
+  shared/task-history.ts    # 共享的批次类型与异常分类
+  frontend/src/features/    # 按业务领域拆分的页面、组件与 Hooks
+  frontend/src/app/components/app-shell.tsx # 标题栏、导航、提示与应用外壳
+  frontend/src/app/components/app-page-content.tsx # 非文件页面的路由内容
+  frontend/src/app/hooks/use-app-settings.ts # 应用目录、配置与偏好加载
+  frontend/src/features/workbench/hooks/use-processor-session.ts # 处理器会话状态
+  frontend/src/features/workbench/hooks/use-processing-commands.ts # 分析与核价命令
+  frontend/src/features/workbench/hooks/use-processor-events.ts # 处理器事件桥接
+  frontend/src/features/workbench/hooks/use-batch-*.ts # 文件集合、扫描与批次生命周期
+  frontend/src/features/workbench/hooks/use-*-effects.ts # 自动运行与结果导航副作用
+  frontend/src/features/workbench/components/workbench-panels.tsx # 工具栏、进度与分页
+  frontend/src/features/pricing/components/pricing-detail-drawer.tsx # 文件预览与映射详情抽屉
+  frontend/src/features/pricing/hooks/use-excel-preview-workbook.ts # 预览文件读取、Worker 与缓存生命周期
+  frontend/src/features/pricing/hooks/use-mapping-*-actions.ts # 映射试算、复核与详情交互
   docs/                         # 本文档
 ```
 
