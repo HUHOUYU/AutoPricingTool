@@ -153,6 +153,18 @@ describe("task history store", () => {
     expect(await store.readTaskHistory()).toEqual([]);
   });
 
+  it("deletes one batch summary and its detail file", async () => {
+    const { store } = await createStore();
+    await store.persistTaskRecord(record());
+    await store.persistTaskRecord(record({ id: "batch-2" }));
+    await store.appendFileResult("batch-1", fileResult());
+
+    await store.deleteTaskHistory("batch-1");
+
+    expect((await store.readTaskHistory()).map((item) => item.id)).toEqual(["batch-2"]);
+    await expect(access(store.detailPath("batch-1"))).rejects.toThrow();
+  });
+
   it("exports filtered batch rows as Excel-friendly CSV content", async () => {
     const { store } = await createStore();
     await store.persistTaskRecord(record());

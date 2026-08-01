@@ -264,13 +264,10 @@ export function App(): React.JSX.Element {
     setImportedAt,
     setImportModes,
     setSelectedPaths,
-    batchName,
     setBatchName,
-    batchNote,
     setBatchNote,
     setEditingBatchName,
     batchNameEditedRef,
-    ensureOutputDirectory,
     setHistoryRevision,
     appendLog,
     onResetBatchView: () => {
@@ -752,9 +749,10 @@ export function App(): React.JSX.Element {
         />
         <ConfirmDialog
           open={nextBatchConfirmOpen}
-          title="结束当前批次？"
-          description={`当前仍有 ${tabCounts.queued} 个待核价、${tabCounts.confirm} 个待确认、${tabCounts.error} 个异常、${tabCounts.pending} 个待分析文件。结束后，所有没有有效核价结果的文件将复制到当前批次结果目录的“未处理”文件夹，原始文件保持不变。`}
-          confirmLabel="结束并归档"
+          title="丢弃当前批次？"
+          description={`当前仍有 ${tabCounts.queued} 个待核价、${tabCounts.confirm} 个待确认、${tabCounts.error} 个异常、${tabCounts.pending} 个待分析文件。继续后，本批次不会保留在日志中心，已生成的结果文件也会删除；原始 Excel 文件不会删除。此操作不可恢复。`}
+          confirmLabel="丢弃本批"
+          tone="danger"
           onCancel={() => setNextBatchConfirmOpen(false)}
           onConfirm={() => {
             setNextBatchConfirmOpen(false);

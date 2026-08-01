@@ -1,6 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import { toast } from "sonner";
-import { taskIssueSummaries } from "@/features/pricing/issues";
 import { getDesktopAPI } from "../file-utils";
 import type { ImportMode, LogEntry } from "../types";
 import type { ProcessorSession } from "./use-processor-session";
@@ -14,13 +13,10 @@ type UseBatchLifecycleActionsOptions = {
   setImportedAt: Dispatch<SetStateAction<Record<string, string>>>;
   setImportModes: Dispatch<SetStateAction<Record<string, ImportMode>>>;
   setSelectedPaths: Dispatch<SetStateAction<string[]>>;
-  batchName: string;
   setBatchName: Dispatch<SetStateAction<string>>;
-  batchNote: string;
   setBatchNote: Dispatch<SetStateAction<string>>;
   setEditingBatchName: Dispatch<SetStateAction<boolean>>;
   batchNameEditedRef: CurrentValue<boolean>;
-  ensureOutputDirectory: () => Promise<string | null>;
   setHistoryRevision: Dispatch<SetStateAction<number>>;
   appendLog: (message: string, level?: LogEntry["level"]) => void;
   onResetBatchView: () => void;
@@ -33,13 +29,10 @@ export function useBatchLifecycleActions({
   setImportedAt,
   setImportModes,
   setSelectedPaths,
-  batchName,
   setBatchName,
-  batchNote,
   setBatchNote,
   setEditingBatchName,
   batchNameEditedRef,
-  ensureOutputDirectory,
   setHistoryRevision,
   appendLog,
   onResetBatchView,
@@ -166,48 +159,26 @@ export function useBatchLifecycleActions({
       toast.success("当前批次已完成，可以导入下一批文件");
       return;
     }
-    const effectiveOutputRoot = await ensureOutputDirectory();
-    if (!effectiveOutputRoot) return;
     try {
-      const finished = await api.finishTaskBatch({
-        ...(batchIdRef.current ? { batchId: batchIdRef.current } : {}),
-        name: batchName,
-        note: batchNote,
-        files,
-        outputRoot: effectiveOutputRoot,
-        diagnostics: files.map((path) => ({
-          inputPath: path,
-          issueSummaries: taskIssueSummaries(
-            analysesRef.current[path]?.unmatchedRows ?? [],
-            writebackEditsRef.current[path] ?? [],
-          ),
-        })),
-      });
-      setHistoryRevision((current) => current + 1);
-      appendLog(
-        `当前批次已结束，${finished.archivedCount} 个未完成文件已归档到：${finished.unprocessedDir ?? "未处理目录"}`,
-        "success",
-      );
+      if (batchIdRef.current) {
+        await api.discardTaskBatch(batchIdRef.current);
+        setHistoryRevision((current) => current + 1);
+      }
       await resetTask();
-      toast.success(`已归档 ${finished.archivedCount} 个未完成文件，可以导入下一批`);
+      toast.success(`已丢弃当前批次及 ${unresolvedFiles.length} 个未完成文件，可以导入下一批`);
     } catch (error) {
-      appendLog("结束当前批次失败：" + String(error), "error");
-      toast.error(`结束当前批次失败：${String(error)}`);
+      appendLog("丢弃当前批次失败：" + String(error), "error");
+      toast.error(`丢弃当前批次失败：${String(error)}`);
     }
   }, [
-    analysesRef,
     appendLog,
     batchIdRef,
-    batchName,
-    batchNote,
-    ensureOutputDirectory,
     files,
     isAnalyzing,
     isRunning,
     resetTask,
     results,
     setHistoryRevision,
-    writebackEditsRef,
   ]);
 
   return {

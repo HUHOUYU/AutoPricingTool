@@ -171,6 +171,7 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
     updateTaskBatchMetadata: vi.fn(async () => {
       throw new Error("测试未配置批次元数据");
     }),
+    discardTaskBatch: vi.fn(async (batchId) => ({ batchId })),
     finishTaskBatch: vi.fn(async () => {
       throw new Error("测试未配置批次结束");
     }),
@@ -487,55 +488,53 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(container.querySelector(".cyber-batch-file")).toHaveTextContent("1/2 个文件 · first.xlsx");
   });
 
-  it("archives an unfinished batch before returning to the empty import view", async () => {
+  it("warns before discarding an unfinished batch and removes its history", async () => {
     const api = createDesktopAPI();
-    api.finishTaskBatch = vi.fn(async () => ({
-      record: {
-        id: "stopped-batch",
-        name: "completed.xlsx",
-        startedAt: "2026-07-29T01:00:00.000Z",
-        completedAt: "2026-07-29T01:01:00.000Z",
-        status: "stopped" as const,
-        totalFiles: 1,
-        completedFiles: 0,
-        failedFiles: 0,
-        totalRows: 0,
-        matchedRows: 0,
-        exceptionRows: 0,
-        outputRoot: "C:\\output",
-        outputDir: "C:\\output\\completed.xlsx",
-        detailAvailable: true,
-      },
-      archivedCount: 1,
-      unprocessedDir: "C:\\output\\completed.xlsx\\未处理",
-    }));
     installAPI(api);
     render(<App />);
     openFileProcessing();
-    dropFiles([new File(["xlsx"], "completed.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })]);
+    dropFiles([
+      new File(["xlsx"], "completed.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+      new File(["xlsx"], "pending.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+    ]);
     expect(await screen.findByText("completed.xlsx")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
-    await act(async () => api.emit({ type: "price-done", mode: "analysis", stopped: true, files: [] }));
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: createAnalysis("C:\\orders\\completed.xlsx") });
+      api.emit({ type: "price-analysis", file: createAnalysis("C:\\orders\\pending.xlsx") });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+    await waitFor(() => expect(api.runPriceCheck).toHaveBeenCalled());
+    await act(async () => {
+      api.emit({
+        type: "price-file-result",
+        path: "C:\\orders\\completed.xlsx",
+        status: "completed",
+        outputPath: "C:\\output\\partial-batch\\completed-priced.xlsx",
+      });
+      api.emit({ type: "price-done", mode: "run", stopped: true, files: [] });
+    });
 
     expect(screen.getByLabelText("批次处理进度")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("button", { name: "继续添加" })).not.toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "暂停任务" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "继续未完成" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "结束本批并处理下一批" }));
+    expect(screen.getByRole("button", { name: /^继续/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "丢弃本批并处理下一批" }));
     const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("本批次不会保留在日志中心");
+    expect(dialog).toHaveTextContent("已生成的结果文件也会删除");
+    expect(dialog).toHaveTextContent("原始 Excel 文件不会删除");
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
-    expect(screen.getByText("completed.xlsx")).toBeInTheDocument();
+    expect(screen.getByText("pending.xlsx")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "结束本批并处理下一批" }));
+    fireEvent.click(screen.getByRole("button", { name: "丢弃本批并处理下一批" }));
     const nextDialog = await screen.findByRole("alertdialog");
-    fireEvent.click(within(nextDialog).getByRole("button", { name: "结束并归档" }));
-    await waitFor(() => expect(api.finishTaskBatch).toHaveBeenCalledWith(expect.objectContaining({
-      files: ["C:\\orders\\completed.xlsx"],
-      outputRoot: "C:\\output",
-    })));
+    fireEvent.click(within(nextDialog).getByRole("button", { name: "丢弃本批" }));
+    await waitFor(() => expect(api.discardTaskBatch).toHaveBeenCalledWith("test-batch"));
     expect(await screen.findByText("拖拽一个或多个 Excel 文件到此处")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByLabelText("批次处理进度")).not.toBeInTheDocument());
     expect(api.selectExcelFiles).not.toHaveBeenCalled();
+    expect(api.finishTaskBatch).not.toHaveBeenCalled();
   });
 
   it("centers the empty state independently from the table columns", () => {

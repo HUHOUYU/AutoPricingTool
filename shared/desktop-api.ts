@@ -7,6 +7,7 @@ import type {
 import type {
   TaskAnalyticsQuery,
   TaskAnalyticsSummary,
+  TaskBatchDiscardResult,
   TaskBatchFinishRequest,
   TaskBatchFinishResult,
   TaskBatchMetadataUpdate,
@@ -29,6 +30,7 @@ export type {
 export type {
   TaskAnalyticsQuery,
   TaskAnalyticsSummary,
+  TaskBatchDiscardResult,
   TaskBatchFinishRequest,
   TaskBatchFinishResult,
   TaskBatchMetadataUpdate,
@@ -359,6 +361,7 @@ export type DesktopAPI = {
   }) => Promise<void>;
   runPriceCheck: (payload: PriceCheckRunPayload) => Promise<{ batchId: string }>;
   updateTaskBatchMetadata: (payload: TaskBatchMetadataUpdate) => Promise<TaskHistoryDetail>;
+  discardTaskBatch: (batchId: string) => Promise<TaskBatchDiscardResult>;
   finishTaskBatch: (request: TaskBatchFinishRequest) => Promise<TaskBatchFinishResult>;
   pauseProcessing: () => Promise<void>;
   resumeProcessing: () => Promise<void>;

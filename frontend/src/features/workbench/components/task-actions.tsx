@@ -11,6 +11,7 @@ import { SidebarTooltip } from "@/app/components/sidebar-tooltip";
 
 export type TaskNextAction = {
   className: string;
+  description?: string;
   icon: LucideIcon;
   label: string;
   onClick: () => void;
@@ -92,7 +93,13 @@ export function TaskActions({
       ) : null}
 
       {showNext && nextAction ? (
-        <button type="button" aria-label={nextAction.label} className={nextAction.className} onClick={nextAction.onClick}>
+        <button
+          type="button"
+          aria-label={nextAction.label}
+          title={nextAction.description}
+          className={nextAction.className}
+          onClick={nextAction.onClick}
+        >
           <NextIcon />
           <strong>{nextAction.label}</strong>
         </button>
@@ -106,9 +113,15 @@ export function TaskActions({
       ) : null}
 
       {showReset && batchStarted && !isTaskActive && pendingReviewCount > 0 ? (
-        <button type="button" aria-label="结束本批并处理下一批" className="cyber-action is-reset" onClick={onFinishBatch}>
+        <button
+          type="button"
+          aria-label="丢弃本批并处理下一批"
+          title="当前批次尚未全部完成，继续前需要确认丢弃"
+          className="cyber-action is-reset"
+          onClick={onFinishBatch}
+        >
           <FilePlus2 />
-          <strong>结束并下一批</strong>
+          <strong>丢弃并下一批</strong>
         </button>
       ) : null}
     </div>

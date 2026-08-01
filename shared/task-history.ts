@@ -169,6 +169,11 @@ export type TaskBatchFinishResult = {
   unprocessedDir?: string;
 };
 
+export type TaskBatchDiscardResult = {
+  batchId: string;
+  deletedOutputDirectory?: string;
+};
+
 export const TASK_ISSUE_LABELS: Record<TaskIssueCode, string> = {
   quantity_calculation: "数量计算",
   country_route: "国家路由",

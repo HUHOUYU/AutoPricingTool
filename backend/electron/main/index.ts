@@ -536,6 +536,10 @@ app.whenReady().then(async () => {
     requireTrustedIpc(event);
     return taskHistoryService.updateMetadata(payload);
   });
+  ipcMain.handle("history:discard-batch", (event, batchId: unknown) => {
+    requireTrustedIpc(event);
+    return taskHistoryService.discardBatch(batchId);
+  });
   ipcMain.handle("history:finish-batch", (event, payload: unknown) => {
     requireTrustedIpc(event);
     return taskHistoryService.finishBatch(payload);

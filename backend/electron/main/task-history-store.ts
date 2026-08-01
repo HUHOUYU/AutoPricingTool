@@ -147,6 +147,19 @@ export class TaskHistoryStore {
     });
   }
 
+  deleteTaskHistory(batchId: string): Promise<void> {
+    return this.enqueue(async () => {
+      const retained = (await this.readTaskHistory()).filter((record) => record.id !== batchId);
+      await mkdir(dirname(this.historyPath), { recursive: true });
+      await writeFile(
+        this.historyPath,
+        retained.slice().reverse().map((record) => JSON.stringify(record)).join("\n") + (retained.length ? "\n" : ""),
+        "utf8",
+      );
+      await rm(this.detailPath(batchId), { force: true });
+    });
+  }
+
   appendEvent(batchId: string, event: TaskHistoryEvent): Promise<void> {
     return this.appendDetailEntry(batchId, { kind: "event", event });
   }

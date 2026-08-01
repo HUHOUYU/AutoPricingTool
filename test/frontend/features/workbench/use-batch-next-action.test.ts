@@ -85,6 +85,7 @@ describe("useBatchNextAction", () => {
     );
 
     expect(result.current?.label).toBe("处理下一批");
+    expect(result.current?.description).toBe("当前批次已全部完成，清空列表并处理下一批");
     act(() => result.current?.onClick());
     expect(onNextBatch).toHaveBeenCalledTimes(1);
   });

@@ -64,4 +64,17 @@ describe("TaskActions", () => {
     expect(props.onStop).toHaveBeenCalledOnce();
     expect(nextAction.onClick).toHaveBeenCalledOnce();
   });
+
+  it("labels unfinished batch disposal as destructive", () => {
+    const props = renderActions({
+      batchStarted: true,
+      pendingReviewCount: 1,
+      showReset: true,
+    });
+
+    const discardButton = screen.getByRole("button", { name: "丢弃本批并处理下一批" });
+    expect(discardButton).toHaveAttribute("title", "当前批次尚未全部完成，继续前需要确认丢弃");
+    fireEvent.click(discardButton);
+    expect(props.onFinishBatch).toHaveBeenCalledOnce();
+  });
 });

@@ -20,6 +20,7 @@ import type {
   RuntimeLogRow,
   TaskAnalyticsQuery,
   TaskAnalyticsSummary,
+  TaskBatchDiscardResult,
   TaskBatchFinishRequest,
   TaskBatchFinishResult,
   TaskBatchMetadataUpdate,
@@ -78,6 +79,8 @@ const desktopAPI: DesktopAPI = {
     ipcRenderer.invoke("processor:price-check-run", payload),
   updateTaskBatchMetadata: (payload: TaskBatchMetadataUpdate): Promise<TaskHistoryDetail> =>
     ipcRenderer.invoke("history:update-metadata", payload),
+  discardTaskBatch: (batchId: string): Promise<TaskBatchDiscardResult> =>
+    ipcRenderer.invoke("history:discard-batch", batchId),
   finishTaskBatch: (request: TaskBatchFinishRequest): Promise<TaskBatchFinishResult> =>
     ipcRenderer.invoke("history:finish-batch", request),
   pauseProcessing: (): Promise<void> => ipcRenderer.invoke("processor:pause"),

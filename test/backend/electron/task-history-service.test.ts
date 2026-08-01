@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -166,5 +166,76 @@ describe("createTaskHistoryService", () => {
       status: "stopped",
       archivedPath: join(result.unprocessedDir!, "订单.xlsx"),
     });
+  });
+
+  it("discards the batch output and removes it from history", async () => {
+    const { root, store, service } = await createFixture();
+    const inputDir = join(root, "input");
+    const outputRoot = join(root, "output");
+    const outputDir = join(outputRoot, "partial-batch");
+    await mkdir(inputDir);
+    await mkdir(outputDir, { recursive: true });
+    const inputPath = join(inputDir, "订单.xlsx");
+    const outputPath = join(outputDir, "订单_核价结果.xlsx");
+    await writeFile(inputPath, "source");
+    await writeFile(outputPath, "result");
+    await store.persistTaskRecord({
+      id: "batch-1",
+      startedAt: "2026-07-30T10:00:00.000Z",
+      status: "stopped",
+      totalFiles: 2,
+      completedFiles: 1,
+      failedFiles: 0,
+      totalRows: 10,
+      matchedRows: 10,
+      exceptionRows: 0,
+      outputRoot,
+      outputDir,
+      detailAvailable: true,
+    });
+    await store.appendFileResult("batch-1", {
+      path: inputPath,
+      fileName: "订单.xlsx",
+      status: "completed",
+      outputPath,
+      totalRows: 10,
+      matchedRows: 10,
+      exceptionRows: 0,
+      issueSummaries: [],
+    });
+
+    const discarded = await service.discardBatch("batch-1");
+
+    expect(discarded).toEqual({ batchId: "batch-1", deletedOutputDirectory: outputDir });
+    await expect(readFile(outputPath, "utf8")).rejects.toThrow();
+    expect(await readFile(inputPath, "utf8")).toBe("source");
+    await expect(access(outputRoot)).resolves.toBeUndefined();
+    expect(await store.getTaskHistoryDetail("batch-1")).toBeNull();
+  });
+
+  it("refuses to discard an output directory outside its registered root", async () => {
+    const { root, store, service } = await createFixture();
+    const outputRoot = join(root, "output");
+    const unsafeDir = join(root, "outside");
+    await mkdir(unsafeDir);
+    await writeFile(join(unsafeDir, "keep.txt"), "keep");
+    await store.persistTaskRecord({
+      id: "batch-unsafe",
+      startedAt: "2026-07-30T10:00:00.000Z",
+      status: "stopped",
+      totalFiles: 1,
+      completedFiles: 0,
+      failedFiles: 0,
+      totalRows: 0,
+      matchedRows: 0,
+      exceptionRows: 0,
+      outputRoot,
+      outputDir: unsafeDir,
+      detailAvailable: true,
+    });
+
+    await expect(service.discardBatch("batch-unsafe")).rejects.toThrow("不在登记的输出根目录下");
+    expect(await readFile(join(unsafeDir, "keep.txt"), "utf8")).toBe("keep");
+    expect(await store.getTaskHistoryDetail("batch-unsafe")).not.toBeNull();
   });
 });

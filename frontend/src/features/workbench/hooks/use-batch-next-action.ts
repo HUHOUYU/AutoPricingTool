@@ -68,6 +68,7 @@ export function useBatchNextAction({
     if (tabCounts.success > 0) {
       return {
         label: "处理下一批",
+        description: "当前批次已全部完成，清空列表并处理下一批",
         icon: FilePlus2,
         className: BATCH_NEXT_ACTION_CLASS,
         onClick: onNextBatch,

@@ -1,7 +1,8 @@
 import { access, rm, writeFile } from "node:fs/promises";
-import { basename, extname, isAbsolute, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
 import type {
   TaskAnalyticsQuery,
+  TaskBatchDiscardResult,
   TaskBatchFinishRequest,
   TaskBatchFinishResult,
   TaskHistoryDetail,
@@ -236,6 +237,26 @@ export function createTaskHistoryService(options: TaskHistoryServiceOptions) {
     };
   }
 
+  async function discardBatch(value: unknown): Promise<TaskBatchDiscardResult> {
+    const id = validateBatchId(value);
+    if (options.isActiveBatch(id)) throw new Error("批次仍在处理中");
+    const detail = await options.store.getTaskHistoryDetail(id);
+    if (!detail) throw new Error("批次不存在");
+    const outputDir = detail.record.outputDir;
+    const outputRoot = detail.record.outputRoot;
+    if (outputDir) {
+      if (!outputRoot || !samePath(dirname(resolve(outputDir)), resolve(outputRoot))) {
+        throw new Error("批次输出目录不在登记的输出根目录下，已停止删除");
+      }
+      await rm(outputDir, { recursive: true, force: true });
+    }
+    await options.store.deleteTaskHistory(id);
+    return {
+      batchId: id,
+      ...(outputDir ? { deletedOutputDirectory: outputDir } : {}),
+    };
+  }
+
   async function exportHistory(value: unknown): Promise<string | null> {
     const input = requireRecord(value, "历史导出参数") as Partial<TaskHistoryExportRequest>;
     if (input.format === "json") {
@@ -269,6 +290,7 @@ export function createTaskHistoryService(options: TaskHistoryServiceOptions) {
     list: (query: unknown) => options.store.listTaskHistory(validateTaskHistoryQuery(query)),
     getDetail: (batchId: unknown) => options.store.getTaskHistoryDetail(validateBatchId(batchId)),
     updateMetadata,
+    discardBatch,
     finishBatch,
     getAnalytics: (query: unknown) => {
       const validated = validateTaskHistoryQuery(query);
