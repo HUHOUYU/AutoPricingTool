@@ -4,6 +4,7 @@ import {
   APP_SETTINGS_SCHEMA_VERSION,
   DEFAULT_APP_PREFERENCES,
   defaultAppState,
+  normalizeIssueNavigationKinds,
   type AppPreferences,
   type AppPreferencesUpdate,
   type AppState,
@@ -34,6 +35,7 @@ export function normalizeAppPreferences(value: unknown): AppPreferences {
     archiveStandardFiles: input.archiveStandardFiles === true,
     autoRevealManualResult: input.autoRevealManualResult === true,
     continuousIssueReviewEnabled: input.continuousIssueReviewEnabled === true,
+    issueNavigationKinds: normalizeIssueNavigationKinds(input.issueNavigationKinds),
     overwriteSourceFiles: input.overwriteSourceFiles === true,
     rememberWindowSize: input.rememberWindowSize === true,
   };
@@ -65,6 +67,12 @@ export function validateAppPreferencesUpdate(value: unknown): AppPreferencesUpda
     if (input[key] === undefined) continue;
     if (typeof input[key] !== "boolean") throw new TypeError(`应用偏好字段 ${key} 必须是布尔值`);
     result[key] = input[key];
+  }
+  if (input.issueNavigationKinds !== undefined) {
+    if (!Array.isArray(input.issueNavigationKinds)) {
+      throw new TypeError("应用偏好字段 issueNavigationKinds 必须是数组");
+    }
+    result.issueNavigationKinds = normalizeIssueNavigationKinds(input.issueNavigationKinds, []);
   }
   return result;
 }

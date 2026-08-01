@@ -38,7 +38,10 @@ describe("AppSettingsStore", () => {
   it("keeps preferences and state in independent files", async () => {
     const { preferencesPath, statePath, store } = await createStore();
 
-    await store.updatePreferences({ continuousIssueReviewEnabled: true });
+    await store.updatePreferences({
+      continuousIssueReviewEnabled: true,
+      issueNavigationKinds: ["unmatched", "quantity"],
+    });
     await store.updateState({
       activeBusinessConfigPath: "C:\\rules\\business.json",
       recentOutputDirectory: "C:\\output",
@@ -46,6 +49,7 @@ describe("AppSettingsStore", () => {
 
     expect(JSON.parse(await readFile(preferencesPath, "utf8"))).toMatchObject({
       continuousIssueReviewEnabled: true,
+      issueNavigationKinds: ["unmatched", "quantity"],
       autoRevealManualResult: false,
       overwriteSourceFiles: false,
     });
@@ -69,6 +73,20 @@ describe("AppSettingsStore", () => {
     });
   });
 
+  it("normalizes persisted issue navigation kinds without losing an explicit empty selection", () => {
+    expect(normalizeAppPreferences({})).toMatchObject({
+      issueNavigationKinds: ["unmatched"],
+    });
+    expect(normalizeAppPreferences({
+      issueNavigationKinds: ["quantity", "invalid", "unmatched", "quantity"],
+    })).toMatchObject({
+      issueNavigationKinds: ["unmatched", "quantity"],
+    });
+    expect(normalizeAppPreferences({ issueNavigationKinds: [] })).toMatchObject({
+      issueNavigationKinds: [],
+    });
+  });
+
   it("serializes concurrent updates without dropping fields", async () => {
     const { store } = await createStore();
 
@@ -88,6 +106,11 @@ describe("AppSettingsStore", () => {
       .toThrow("必须是布尔值");
     expect(() => validateAppPreferencesUpdate({ overwriteSourceFiles: "yes" }))
       .toThrow("必须是布尔值");
+    expect(() => validateAppPreferencesUpdate({ issueNavigationKinds: "unmatched" }))
+      .toThrow("必须是数组");
+    expect(validateAppPreferencesUpdate({
+      issueNavigationKinds: ["quantity", "invalid", "difference", "quantity"],
+    })).toEqual({ issueNavigationKinds: ["difference", "quantity"] });
     expect(() => validateAppStateUpdate({ recentOutputDirectory: 42 }))
       .toThrow("必须是有效路径字符串");
   });

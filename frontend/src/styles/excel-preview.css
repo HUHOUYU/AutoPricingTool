@@ -10,6 +10,7 @@ html.dark .excel-preview-panel {
 }
 
 .excel-preview-tabs > button[role="tab"],
+.excel-preview-tabs > .excel-preview-issue-filter-trigger,
 .excel-preview-tabs > .excel-preview-unmatched-switch,
 .excel-preview-tabs .excel-preview-load-all {
   display: inline-flex;
@@ -27,8 +28,10 @@ html.dark .excel-preview-panel {
 }
 
 .excel-preview-tabs > button[role="tab"] strong,
+.excel-preview-tabs > .excel-preview-issue-filter-trigger strong,
 .excel-preview-tabs > .excel-preview-unmatched-switch strong { max-width: 130px; overflow: hidden; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .excel-preview-tabs > button[role="tab"] span,
+.excel-preview-tabs > .excel-preview-issue-filter-trigger span,
 .excel-preview-tabs > .excel-preview-unmatched-switch span { border-radius: 999px; padding: 2px 5px; color: var(--cyber-dim); background: var(--cyber-panel); font-size: 8px; white-space: nowrap; }
 .excel-preview-tabs > button[role="tab"].is-active { border-color: color-mix(in srgb, var(--cyber-primary) 55%, var(--cyber-border)); color: var(--cyber-primary); background: color-mix(in srgb, var(--cyber-primary) 8%, var(--cyber-panel)); }
 .excel-preview-tabs > button[role="tab"].is-active span { color: var(--cyber-primary); }
@@ -41,6 +44,39 @@ html.dark .excel-preview-panel {
 .excel-preview-unmatched-switch.is-enabled > i::after { transform: translateX(10px); }
 .excel-preview-tabs > .excel-preview-unmatched-switch strong { max-width: none; }
 .excel-preview-tabs > .excel-preview-unmatched-switch:disabled { opacity: .45; }
+
+.excel-preview-tabs > .excel-preview-issue-filter-trigger {
+  min-width: 112px;
+  width: auto;
+  justify-content: flex-start;
+  gap: 6px;
+}
+.excel-preview-issue-filter-trigger > svg { width: 13px; height: 13px; }
+.excel-preview-tabs > .excel-preview-issue-filter-trigger:disabled { opacity: .45; }
+.excel-preview-issue-filter-popover {
+  z-index: 120;
+  width: 190px;
+  border: 1px solid var(--cyber-border);
+  border-radius: 6px;
+  padding: 6px;
+  color: var(--cyber-text);
+  background: var(--cyber-panel);
+  box-shadow: 0 12px 28px color-mix(in srgb, #000 18%, transparent);
+}
+.excel-preview-issue-filter-popover [role="group"] { display: grid; gap: 2px; }
+.excel-preview-issue-filter-popover label {
+  display: grid;
+  min-height: 32px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.excel-preview-issue-filter-popover label:hover { background: var(--cyber-panel-soft); }
+.excel-preview-issue-filter-popover label > strong { color: var(--cyber-dim); font-size: 10px; font-weight: 600; }
 
 .excel-preview-tabs .excel-preview-load-all {
   min-width: 86px;
