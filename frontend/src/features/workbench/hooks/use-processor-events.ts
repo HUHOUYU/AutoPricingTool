@@ -181,14 +181,26 @@ export function useProcessorEvents({
       }
       if (event.type === "price-file-result") {
         setHistoryRevision((current) => current + 1);
+        const finalExceptionRows = Math.max(
+          event.exceptionRows ?? 0,
+          event.anomalySummary?.affectedRows ?? 0,
+        );
+        const finalStatus = event.status === "failed"
+          ? "failed"
+          : event.status === "awaiting_confirmation"
+              || (event.anomalySummary?.affectedRows ?? 0) > 0
+              || finalExceptionRows > 0
+            ? "awaiting_confirmation"
+            : "completed";
         const result: FileResult = {
           path: event.path,
-          status: event.status,
+          status: finalStatus,
           outputPath: event.outputPath,
           totalRows: event.totalRows,
           matchedRows: event.matchedRows,
-          exceptionRows: event.exceptionRows,
+          exceptionRows: finalExceptionRows,
           coverage: event.coverage,
+          anomalySummary: event.anomalySummary,
           message: event.message,
           completedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
         };
@@ -199,23 +211,27 @@ export function useProcessorEvents({
           && manualReview?.phase === "run"
           && manualReview.path === event.path;
         if (isContinuousManualReview && manualReview) {
-          manualReview.outcome = event.status;
+          manualReview.outcome = finalStatus === "completed"
+            ? "completed"
+            : finalStatus === "awaiting_confirmation"
+              ? "unresolved"
+              : "failed";
         }
         if (autoRevealManualResult && confirmedPathsRef.current.has(event.path) && !isContinuousManualReview) {
-          setActiveTab(event.status === "completed" ? "success" : "error");
+          setActiveTab(finalStatus === "completed" ? "success" : finalStatus === "awaiting_confirmation" ? "confirm" : "error");
           setPendingResultRevealPath(event.path);
         }
         appendLog(
-          event.status === "completed"
+          finalStatus !== "failed"
             ? fileNameFromPath(event.path) +
-                "：完成 " +
+                (finalStatus === "awaiting_confirmation" ? "：待确认 " : "：完成 ") +
                 (event.matchedRows ?? 0) +
                 "/" +
                 (event.totalRows ?? 0) +
                 " 行" +
-                ((event.exceptionRows ?? 0) > 0 ? "，有异常待复核" : "")
+                (finalStatus === "awaiting_confirmation" ? `，${finalExceptionRows} 行核价异常` : "")
             : fileNameFromPath(event.path) + "：" + (event.message ?? "核价失败"),
-          event.status === "completed" && (event.exceptionRows ?? 0) === 0 ? "success" : event.status === "completed" ? "warning" : "error",
+          finalStatus === "completed" ? "success" : finalStatus === "awaiting_confirmation" ? "warning" : "error",
         );
         return;
       }
@@ -259,7 +275,7 @@ export function useProcessorEvents({
             setManualIssueReviewResolution({
               path: manualReview.path,
               preferredTab: manualReview.preferredTab,
-              outcome: !event.stopped && manualReview.outcome === "completed" ? "completed" : "failed",
+              outcome: event.stopped ? "failed" : manualReview.outcome ?? "failed",
             });
           }
           setProgress((current) => event.stopped
@@ -267,16 +283,14 @@ export function useProcessorEvents({
             : { ...current, current: current.total, phase: "run", path: "" });
           appendLog(event.stopped ? "核价已停止" : "核价完成", event.stopped ? "warning" : "success");
           if (!event.stopped) {
-            const completedCount = event.files.filter((item) => (
-              Number(item.exceptionRows ?? 0) === 0 ||
-              (typeof item.path === "string" && confirmedPathsRef.current.has(item.path))
-            )).length;
-            const exceptionCount = event.files.filter((item) => (
-              Number(item.exceptionRows ?? 0) > 0 &&
-              !(typeof item.path === "string" && confirmedPathsRef.current.has(item.path))
-            )).length + (event.failures?.length ?? 0);
-            const confirmCount = Object.values(analysesRef.current).filter((analysis) => analysis.automationDecision.status === "confirm").length;
-            toast.success(`批次完成：完成 ${completedCount}，待确认 ${confirmCount}，异常 ${exceptionCount}`);
+            const completedCount = event.files.filter((item) => item.status === "completed").length;
+            const resultConfirmCount = event.files.filter((item) => item.status === "awaiting_confirmation").length;
+            const mappingConfirmCount = Object.values(analysesRef.current)
+              .filter((analysis) => analysis.automationDecision.status === "confirm").length;
+            const exceptionCount = (event.failures?.length ?? 0);
+            toast.success(
+              `批次完成：完成 ${completedCount}，待确认 ${resultConfirmCount + mappingConfirmCount}，异常 ${exceptionCount}`,
+            );
           }
         }
         return;

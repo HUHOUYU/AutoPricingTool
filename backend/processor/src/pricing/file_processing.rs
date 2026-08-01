@@ -117,6 +117,7 @@ pub(super) fn process_price_file(
         &resolved_quantities,
     );
     apply_writeback_overrides(&mut writeback_rows, writeback_overrides);
+    let anomaly_summary = summarize_pricing_anomalies(&writeback_rows);
     let mut report = PriceCheckReport {
         input_path: input_path.display().to_string(),
         output_path: output_path.display().to_string(),
@@ -125,7 +126,8 @@ pub(super) fn process_price_file(
         exceptions,
         total_rows,
         matched_rows,
-        exception_rows: total_rows.saturating_sub(matched_rows),
+        exception_rows: anomaly_summary.affected_rows,
+        anomaly_summary,
         coverage: ratio(matched_rows, total_rows),
     };
     crate::pricing_writer::write_price_result(
@@ -203,6 +205,7 @@ pub(super) fn apply_writeback_overrides(
         row.pricing_price = edited.pricing_price;
         row.price_difference = edited.price_difference;
         row.quantity = edited.quantity;
+        row.quantity_mismatch = edited.quantity_mismatch;
         row.quantity_error = edited.quantity_error.clone();
         if row.quantity.is_some() {
             row.quantity_error = None;

@@ -243,6 +243,7 @@ export function PricingDetailDrawer({
                           setPreviewSheetName(previewSheet);
                         }}
                         onPreviewSheetChange={setPreviewSheetName}
+                        confirmLabel={result?.status === "awaiting_confirmation" ? "修正后重新核价" : undefined}
                         onConfirm={onConfirm}
                       />
                     ) : null}

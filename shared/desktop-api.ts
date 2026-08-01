@@ -17,6 +17,7 @@ import type {
   TaskHistoryPage,
   TaskHistoryQuery,
   TaskHistorySummary,
+  PricingAnomalySummary,
   TaskRunDiagnostics,
 } from "./task-history";
 
@@ -45,6 +46,8 @@ export type {
   TaskHistoryRecord,
   TaskHistoryStatus,
   TaskHistorySummary,
+  PricingAnomalySample,
+  PricingAnomalySummary,
   TaskIssueCode,
   TaskIssueSample,
   TaskIssueSummary,
@@ -256,12 +259,13 @@ export type ProcessorEvent =
   | {
       type: "price-file-result";
       path: string;
-      status: "completed" | "failed";
+      status: "awaiting_confirmation" | "completed" | "failed";
       outputPath?: string;
       totalRows?: number;
       matchedRows?: number;
       exceptionRows?: number;
       coverage?: number;
+      anomalySummary?: PricingAnomalySummary;
       message?: string;
     }
   | {

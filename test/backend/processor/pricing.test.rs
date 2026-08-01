@@ -2865,6 +2865,8 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
                 pricing_price: Some(8.0),
                 price_difference: Some(1.0),
                 quantity: Some(1),
+                quantity_mismatch: true,
+                quantity_error: Some("数量无法计算".to_string()),
                 ..PriceWritebackRow::default()
             },
             PriceWritebackRow {
@@ -2893,8 +2895,142 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
         assert_eq!(rows[0].pricing_price, Some(9.5));
         assert_eq!(rows[0].price_difference, Some(2.5));
         assert_eq!(rows[0].quantity, Some(4));
+        assert!(!rows[0].quantity_mismatch);
+        assert_eq!(rows[0].quantity_error, None);
         assert_eq!(rows[1].pricing_price, Some(6.0));
         assert_eq!(rows[1].quantity, Some(2));
+    }
+
+    #[test]
+    fn manual_pricing_override_resolves_an_unmatched_final_price() {
+        let mut rows = vec![PriceWritebackRow {
+            source_row: 2,
+            matched: false,
+            pricing_price: None,
+            price_difference: None,
+            quantity: Some(1),
+            ..PriceWritebackRow::default()
+        }];
+
+        apply_writeback_overrides(
+            &mut rows,
+            &[PricePreviewWritebackRow {
+                source_row: 2,
+                pricing_price: Some(10.0),
+                price_difference: Some(0.0),
+                quantity: Some(1),
+                quantity_mismatch: false,
+                quantity_error: None,
+                quantity_issue_context: None,
+                used_original_sku_quantity: false,
+            }],
+        );
+
+        let summary = summarize_pricing_anomalies(&rows);
+        assert_eq!(summary.affected_rows, 0);
+        assert_eq!(summary.price_unavailable_rows, 0);
+    }
+
+    #[test]
+    fn pricing_anomaly_summary_counts_final_writeback_rows() {
+        let rows = vec![
+            PriceWritebackRow {
+                source_row: 2,
+                matched: false,
+                pricing_price: None,
+                price_difference: None,
+                quantity: Some(2),
+                ..PriceWritebackRow::default()
+            },
+            PriceWritebackRow {
+                source_row: 3,
+                matched: true,
+                pricing_price: Some(10.0),
+                price_difference: Some(1.5),
+                quantity: Some(1),
+                ..PriceWritebackRow::default()
+            },
+            PriceWritebackRow {
+                source_row: 4,
+                matched: true,
+                pricing_price: Some(8.0),
+                price_difference: Some(-2.0),
+                quantity: Some(3),
+                quantity_mismatch: true,
+                ..PriceWritebackRow::default()
+            },
+            PriceWritebackRow {
+                source_row: 5,
+                matched: true,
+                pricing_price: Some(6.0),
+                price_difference: Some(0.1 + 0.2 - 0.3),
+                quantity: Some(0),
+                quantity_error: Some("SKU关系无法计算".to_string()),
+                ..PriceWritebackRow::default()
+            },
+            PriceWritebackRow {
+                source_row: 6,
+                matched: true,
+                pricing_price: Some(5.0),
+                price_difference: Some(0.0),
+                quantity: Some(0),
+                ..PriceWritebackRow::default()
+            },
+        ];
+
+        let summary = summarize_pricing_anomalies(&rows);
+
+        assert_eq!(summary.affected_rows, 4);
+        assert_eq!(summary.price_unavailable_rows, 1);
+        assert_eq!(summary.amount_difference_rows, 2);
+        assert_eq!(summary.positive_difference_rows, 1);
+        assert_eq!(summary.negative_difference_rows, 1);
+        assert_eq!(summary.quantity_anomaly_rows, 2);
+        assert_eq!(summary.quantity_mismatch_rows, 1);
+        assert_eq!(summary.quantity_calculation_error_rows, 1);
+        assert_eq!(summary.amount_difference_samples.len(), 2);
+        assert_eq!(summary.quantity_mismatch_samples[0].source_row, 4);
+        assert_eq!(summary.quantity_calculation_error_samples[0].source_row, 5);
+    }
+
+    #[test]
+    fn pricing_anomaly_summary_deduplicates_rows_across_categories() {
+        let rows = vec![PriceWritebackRow {
+            source_row: 9,
+            matched: false,
+            pricing_price: None,
+            price_difference: Some(3.0),
+            quantity: Some(1),
+            quantity_mismatch: true,
+            ..PriceWritebackRow::default()
+        }];
+
+        let summary = summarize_pricing_anomalies(&rows);
+
+        assert_eq!(summary.affected_rows, 1);
+        assert_eq!(summary.price_unavailable_rows, 1);
+        assert_eq!(summary.amount_difference_rows, 1);
+        assert_eq!(summary.quantity_anomaly_rows, 1);
+        assert_eq!(summary.quantity_mismatch_rows, 1);
+        assert_eq!(summary.quantity_calculation_error_rows, 0);
+    }
+
+    #[test]
+    fn pricing_anomaly_summary_serializes_for_the_desktop_event_contract() {
+        let summary = summarize_pricing_anomalies(&[PriceWritebackRow {
+            source_row: 9,
+            matched: true,
+            pricing_price: Some(10.0),
+            price_difference: Some(-1.0),
+            quantity: Some(1),
+            ..PriceWritebackRow::default()
+        }]);
+
+        let value = serde_json::to_value(summary).expect("异常摘要应可序列化");
+
+        assert_eq!(value["affectedRows"], 1);
+        assert_eq!(value["negativeDifferenceRows"], 1);
+        assert_eq!(value["quantityCalculationErrorRows"], 0);
     }
 
     #[test]

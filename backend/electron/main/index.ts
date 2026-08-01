@@ -700,6 +700,7 @@ app.whenReady().then(async () => {
         status: "running",
         totalFiles: allBatchFiles.length,
         completedFiles: previousRecord?.completedFiles ?? 0,
+        awaitingConfirmationFiles: previousRecord?.awaitingConfirmationFiles ?? 0,
         failedFiles: previousRecord?.failedFiles ?? 0,
         totalRows: previousRecord?.totalRows ?? 0,
         matchedRows: previousRecord?.matchedRows ?? 0,

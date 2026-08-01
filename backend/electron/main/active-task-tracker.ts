@@ -9,7 +9,11 @@ import type {
 } from "../../../shared/task-history";
 import { TASK_ISSUE_LABELS } from "../../../shared/task-history";
 import type { TaskHistoryStore } from "./task-history-store";
-import { aggregateTaskFiles } from "./task-history-utils";
+import {
+  aggregateTaskFiles,
+  normalizePricingAnomalySummary,
+  pricingAnomalyIssueSummaries,
+} from "./task-history-utils";
 
 export type ActiveTaskRun = {
   record: TaskHistoryRecord;
@@ -77,7 +81,7 @@ export function createActiveTaskTracker(options: ActiveTaskTrackerOptions) {
 
   function aggregateFiles(): Pick<
     TaskHistoryRecord,
-    "completedFiles" | "failedFiles" | "totalRows" | "matchedRows" | "exceptionRows"
+    "completedFiles" | "awaitingConfirmationFiles" | "failedFiles" | "totalRows" | "matchedRows" | "exceptionRows"
   > {
     return aggregateTaskFiles([...taskFiles.values()]);
   }
@@ -109,7 +113,7 @@ export function createActiveTaskTracker(options: ActiveTaskTrackerOptions) {
       });
     }
     appendEvent(
-      status === "completed" ? "success" : status === "stopped" ? "warning" : "error",
+      status === "completed" ? "success" : status === "failed" ? "error" : "warning",
       "batch",
       message,
     );
@@ -207,10 +211,16 @@ export function createActiveTaskTracker(options: ActiveTaskTrackerOptions) {
     const totalRows = typeof payload.totalRows === "number" ? payload.totalRows : 0;
     const matchedRows = typeof payload.matchedRows === "number" ? payload.matchedRows : 0;
     const exceptionRows = typeof payload.exceptionRows === "number" ? payload.exceptionRows : 0;
+    const anomalySummary = normalizePricingAnomalySummary(payload.anomalySummary);
+    const finalExceptionRows = Math.max(exceptionRows, anomalySummary?.affectedRows ?? 0);
     const completedAt = now().toISOString();
     if (currentFile) {
       const startedAt = currentFile.startedAt ?? activeTask.startedAt;
-      const status = payload.status === "completed" ? "completed" : "failed";
+      const status = payload.status === "failed"
+        ? "failed"
+        : payload.status === "awaiting_confirmation" || finalExceptionRows > 0
+          ? "awaiting_confirmation"
+          : "completed";
       const issueSummaries = status === "failed"
         ? [...currentFile.issueSummaries, {
             code: "file_processing" as const,
@@ -224,7 +234,7 @@ export function createActiveTaskTracker(options: ActiveTaskTrackerOptions) {
               reason: String(payload.message ?? "文件处理失败"),
             }],
           }]
-        : currentFile.issueSummaries;
+        : pricingAnomalyIssueSummaries(anomalySummary);
       saveFile({
         ...currentFile,
         status,
@@ -233,25 +243,28 @@ export function createActiveTaskTracker(options: ActiveTaskTrackerOptions) {
         durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)),
         totalRows,
         matchedRows,
-        exceptionRows,
+        exceptionRows: finalExceptionRows,
+        ...(anomalySummary ? { anomalySummary } : {}),
         issueSummaries,
         ...(typeof payload.coverage === "number" ? { coverage: payload.coverage } : {}),
         ...(typeof payload.outputPath === "string" ? { outputPath: payload.outputPath } : {}),
         ...(typeof payload.message === "string" ? { message: payload.message } : {}),
       });
       appendEvent(
-        status === "completed" ? (exceptionRows > 0 ? "warning" : "success") : "error",
+        status === "failed" ? "error" : status === "awaiting_confirmation" ? "warning" : "success",
         "file",
-        status === "completed"
-          ? `${currentFile.fileName} 处理完成：匹配 ${matchedRows}/${totalRows} 行，异常 ${exceptionRows} 行`
-          : `${currentFile.fileName} 处理失败：${String(payload.message ?? "未知错误")}`,
+        status === "failed"
+          ? `${currentFile.fileName} 处理失败：${String(payload.message ?? "未知错误")}`
+          : status === "awaiting_confirmation"
+            ? `${currentFile.fileName} 处理完成：匹配 ${matchedRows}/${totalRows} 行，发现 ${finalExceptionRows} 行核价结果异常，等待确认`
+            : `${currentFile.fileName} 处理完成：匹配 ${matchedRows}/${totalRows} 行，异常 0 行`,
         path,
       );
     }
     activeTask = { ...activeTask, ...aggregateFiles() };
     const processedFiles = [...activeRunFiles].filter((runPath) => {
       const status = taskFiles.get(runPath)?.status;
-      return status === "completed" || status === "failed";
+      return status === "completed" || status === "awaiting_confirmation" || status === "failed";
     }).length;
     if (
       processedFiles === activeRunFiles.size
@@ -266,17 +279,17 @@ export function createActiveTaskTracker(options: ActiveTaskTrackerOptions) {
     if (!activeTask) return;
     const status = payload.stopped
       ? "stopped"
-      : remainingFiles > 0
-        ? "awaiting_confirmation"
-        : activeTask.failedFiles > 0
+      : activeTask.failedFiles > 0
           ? "failed"
-          : "completed";
+          : remainingFiles > 0 || (activeTask.awaitingConfirmationFiles ?? 0) > 0
+            ? "awaiting_confirmation"
+            : "completed";
     complete(
       status,
       status === "completed"
         ? "批次处理完成"
         : status === "awaiting_confirmation"
-          ? `本次${executionTypeLabel(executionType)}完成，仍有 ${remainingFiles} 个文件待处理`
+          ? `本次${executionTypeLabel(executionType)}完成，仍有 ${(activeTask.awaitingConfirmationFiles ?? 0) + remainingFiles} 个文件待确认`
           : status === "stopped"
             ? "批次已停止"
             : `批次完成，但有 ${activeTask.failedFiles} 个文件失败`,

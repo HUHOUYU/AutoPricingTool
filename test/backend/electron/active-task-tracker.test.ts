@@ -41,7 +41,7 @@ function createFixture() {
 }
 
 describe("createActiveTaskTracker", () => {
-  it("tracks a file from queued to completed and persists the final batch", async () => {
+  it("keeps a file with final pricing anomalies awaiting confirmation", async () => {
     const { store, tracker } = createFixture();
     const path = resolve("订单.xlsx");
     await tracker.startRun({
@@ -65,14 +65,29 @@ describe("createActiveTaskTracker", () => {
       matchedRows: 9,
       exceptionRows: 1,
       outputPath: resolve("订单_核价结果.xlsx"),
+      anomalySummary: {
+        affectedRows: 1,
+        priceUnavailableRows: 0,
+        amountDifferenceRows: 1,
+        positiveDifferenceRows: 1,
+        negativeDifferenceRows: 0,
+        quantityAnomalyRows: 0,
+        quantityMismatchRows: 0,
+        quantityCalculationErrorRows: 0,
+        priceUnavailableSamples: [],
+        amountDifferenceSamples: [{ sourceRow: 8, reason: "金额差为正 1.5", priceDifference: 1.5 }],
+        quantityMismatchSamples: [],
+        quantityCalculationErrorSamples: [],
+      },
     });
     tracker.trackProcessorEvent({ type: "price-done", mode: "run", stopped: false });
 
     const persistCalls = vi.mocked(store.persistTaskRecord).mock.calls;
     expect(persistCalls.at(-1)?.[0]).toMatchObject({
       id: "batch-1",
-      status: "completed",
-      completedFiles: 1,
+      status: "awaiting_confirmation",
+      completedFiles: 0,
+      awaitingConfirmationFiles: 1,
       failedFiles: 0,
       totalRows: 10,
       matchedRows: 9,
@@ -81,9 +96,13 @@ describe("createActiveTaskTracker", () => {
     expect(vi.mocked(store.appendEvent).mock.calls.map((call) => call[1].message)).toEqual([
       "批次开始：自动处理 1 个文件",
       "开始处理 订单.xlsx",
-      "订单.xlsx 处理完成：匹配 9/10 行，异常 1 行",
-      "批次处理完成",
+      "订单.xlsx 处理完成：匹配 9/10 行，发现 1 行核价结果异常，等待确认",
+      "本次自动处理完成，仍有 1 个文件待确认",
     ]);
+    expect(vi.mocked(store.appendFileResult).mock.calls.some(([, file]) => (
+      file.status === "awaiting_confirmation"
+      && file.issueSummaries.map((issue) => issue.code).includes("amount_difference")
+    ))).toBe(true);
     expect(tracker.isActiveBatch("batch-1")).toBe(false);
   });
 
@@ -109,7 +128,7 @@ describe("createActiveTaskTracker", () => {
     });
     expect(vi.mocked(store.appendEvent).mock.calls.at(-1)?.[1]).toMatchObject({
       sequence: 6,
-      message: "本次人工确认处理完成，仍有 2 个文件待处理",
+      message: "本次人工确认处理完成，仍有 2 个文件待确认",
     });
   });
 
@@ -136,6 +155,45 @@ describe("createActiveTaskTracker", () => {
     });
     expect(vi.mocked(store.persistTaskRecord).mock.calls.at(-1)?.[0]).toMatchObject({
       status: "stopped",
+    });
+  });
+
+  it("keeps failed files above awaiting-confirmation files in the batch status", async () => {
+    const { store, tracker } = createFixture();
+    const awaitingPath = resolve("待确认.xlsx");
+    const failedPath = resolve("失败.xlsx");
+    await tracker.startRun({
+      record: { ...runningRecord(awaitingPath), totalFiles: 2, fileNames: [awaitingPath, failedPath] },
+      existingFiles: [],
+      allFiles: [awaitingPath, failedPath],
+      runFiles: [awaitingPath, failedPath],
+      remainingFiles: 0,
+      executionType: "automatic",
+      diagnostics: new Map(),
+      eventSequence: 0,
+      isContinuation: false,
+    });
+
+    tracker.trackProcessorEvent({
+      type: "price-file-result",
+      path: awaitingPath,
+      status: "awaiting_confirmation",
+      totalRows: 2,
+      matchedRows: 2,
+      exceptionRows: 1,
+    });
+    tracker.trackProcessorEvent({
+      type: "price-file-result",
+      path: failedPath,
+      status: "failed",
+      message: "写入结果文件失败",
+    });
+    tracker.trackProcessorEvent({ type: "price-done", mode: "run", stopped: false });
+
+    expect(vi.mocked(store.persistTaskRecord).mock.calls.at(-1)?.[0]).toMatchObject({
+      status: "failed",
+      awaitingConfirmationFiles: 1,
+      failedFiles: 1,
     });
   });
 });

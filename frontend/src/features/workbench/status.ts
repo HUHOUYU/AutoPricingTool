@@ -36,12 +36,13 @@ export function statusForFile(
   result: FileResult | undefined,
   activePath: string,
   isBusy: boolean,
-  manuallyConfirmed: boolean,
+  _manuallyConfirmed: boolean,
   isPricing = false,
 ): FileStatus {
   if (result?.status === "failed") return "error";
+  if (result?.status === "awaiting_confirmation") return "ready";
   if (result?.status === "completed") {
-    return manuallyConfirmed || (result.exceptionRows ?? 0) === 0 ? "success" : "warning";
+    return (result.exceptionRows ?? 0) === 0 ? "success" : "ready";
   }
   if (isBusy && activePath === path) return isPricing ? "pricing" : "running";
   if (analysis) {

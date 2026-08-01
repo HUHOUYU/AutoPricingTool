@@ -34,7 +34,7 @@ type LogCenterPageProps = {
 
 const STATUS_LABELS: Record<TaskHistoryStatus, string> = {
   running: "处理中",
-  awaiting_confirmation: "待处理",
+  awaiting_confirmation: "待确认",
   completed: "已完成",
   failed: "失败",
   stopped: "已停止",
@@ -79,6 +79,15 @@ function batchTitle(record: TaskHistoryRecord): string {
   if (names.length === 0) return `批次 ${record.id.slice(-8)}`;
   if (names.length === 1) return names[0];
   return `${names[0]} 等 ${names.length} 个文件`;
+}
+
+function taskFileStatusLabel(status: TaskFileResult["status"]): string {
+  if (status === "queued") return "等待";
+  if (status === "running") return "处理中";
+  if (status === "awaiting_confirmation") return "待确认";
+  if (status === "completed") return "完成";
+  if (status === "failed") return "失败";
+  return "停止";
 }
 
 export function LogCenterPage({
@@ -223,7 +232,9 @@ export function LogCenterPage({
 
   const openFileResult = async (file: TaskFileResult): Promise<void> => {
     if (!api) return;
-    const targetPath = file.status === "completed" ? file.outputPath : file.archivedPath;
+    const targetPath = file.status === "completed" || file.status === "awaiting_confirmation"
+      ? file.outputPath
+      : file.archivedPath;
     if (!targetPath) return;
     const openError = await api.openPath(targetPath);
     if (openError) {
@@ -271,7 +282,7 @@ export function LogCenterPage({
                 <div className="batch-list-heading"><strong title={batchTitle(record)}>{batchTitle(record)}</strong><span className={`history-status is-${record.status}`}>{STATUS_LABELS[record.status]}</span></div>
                 <div className="batch-list-identity"><time>{new Date(record.startedAt).toLocaleString("zh-CN", { hour12: false })}</time><code>{record.id.slice(-8)}</code></div>
                 <p className="batch-list-metrics">
-                  <span className="is-info"><small>文件</small><b>{record.completedFiles + record.failedFiles}/{record.totalFiles}</b></span>
+                  <span className="is-info"><small>文件</small><b>{record.completedFiles + (record.awaitingConfirmationFiles ?? 0) + record.failedFiles}/{record.totalFiles}</b></span>
                   <span className="is-success"><small>匹配率</small><b>{formatRate(record.matchedRows, record.totalRows)}</b></span>
                   <span className="is-confirm"><small>耗时</small><b>{formatDuration(record.durationMs)}</b></span>
                 </p>
@@ -312,6 +323,7 @@ export function LogCenterPage({
               ) : detail.record.note ? <p className="batch-detail-note"><span>备注</span>{detail.record.note}</p> : null}
               <section className="batch-metrics" aria-label="批次指标">
                 <article className="is-info"><span>处理文件</span><strong>{detail.record.totalFiles}</strong></article>
+                <article className="is-confirm"><span>待确认文件</span><strong>{detail.record.awaitingConfirmationFiles ?? 0}</strong></article>
                 <article className="is-primary"><span>总行数</span><strong>{detail.record.totalRows || "—"}</strong></article>
                 <article className="is-success"><span>匹配率</span><strong>{formatRate(detail.record.matchedRows, detail.record.totalRows)}</strong></article>
                 <article className="is-error"><span>异常行</span><strong>{detail.record.exceptionRows}</strong></article>
@@ -326,9 +338,9 @@ export function LogCenterPage({
                       <table>
                         <thead><tr><th><button type="button" onClick={() => chooseFileSort("fileName")}>文件名</button></th><th><button type="button" onClick={() => chooseFileSort("status")}>状态</button></th><th><button type="button" onClick={() => chooseFileSort("totalRows")}>匹配</button></th><th><button type="button" onClick={() => chooseFileSort("exceptionRows")}>异常</button></th><th><button type="button" onClick={() => chooseFileSort("durationMs")}>耗时</button></th><th>结果</th></tr></thead>
                         <tbody>{sortedFiles.map((file) => {
-                          const canOpen = file.status === "completed" ? Boolean(file.outputPath) : Boolean(file.archivedPath);
-                          const openLabel = file.status === "completed" ? `打开 ${file.fileName} 结果` : `打开 ${file.fileName} 未处理归档`;
-                          return <tr className={file.path === selectedFilePath ? "is-selected" : undefined} key={file.path} onClick={() => setSelectedFilePath((current) => current === file.path ? null : file.path)}><td title={file.path}>{file.fileName}</td><td><span className={`file-result-status is-${file.status}`}>{file.status === "queued" ? "等待" : file.status === "running" ? "处理中" : file.status === "completed" ? "完成" : file.status === "failed" ? "失败" : "停止"}</span></td><td className="history-number is-success">{file.totalRows ? `${file.matchedRows}/${file.totalRows}` : "—"}</td><td className="history-number is-error">{file.exceptionRows}</td><td className="history-number is-confirm">{formatDuration(file.durationMs)}</td><td>{canOpen ? <button type="button" className="file-result-open" aria-label={openLabel} title={file.status === "completed" ? "打开结果文件" : "打开未处理归档"} onClick={(event) => { event.stopPropagation(); void openFileResult(file); }}><ExternalLink /></button> : "—"}</td></tr>;
+                          const canOpen = file.status === "completed" || file.status === "awaiting_confirmation" ? Boolean(file.outputPath) : Boolean(file.archivedPath);
+                          const openLabel = file.status === "completed" || file.status === "awaiting_confirmation" ? `打开 ${file.fileName} 结果` : `打开 ${file.fileName} 未处理归档`;
+                          return <tr className={file.path === selectedFilePath ? "is-selected" : undefined} key={file.path} onClick={() => setSelectedFilePath((current) => current === file.path ? null : file.path)}><td title={file.path}>{file.fileName}</td><td><span className={`file-result-status is-${file.status}`}>{taskFileStatusLabel(file.status)}</span></td><td className="history-number is-success">{file.totalRows ? `${file.matchedRows}/${file.totalRows}` : "—"}</td><td className="history-number is-error">{file.exceptionRows}</td><td className="history-number is-confirm">{formatDuration(file.durationMs)}</td><td>{canOpen ? <button type="button" className="file-result-open" aria-label={openLabel} title={file.status === "completed" || file.status === "awaiting_confirmation" ? "打开结果文件" : "打开未处理归档"} onClick={(event) => { event.stopPropagation(); void openFileResult(file); }}><ExternalLink /></button> : "—"}</td></tr>;
                         })}</tbody>
                       </table>
                     </div>
@@ -337,7 +349,8 @@ export function LogCenterPage({
                   <section className="batch-lower-grid">
                     <article className="batch-section batch-issues">
                       <header><div><h3>异常分类</h3><span>{selectedFile ? selectedFile.fileName : "当前批次"}</span></div></header>
-                      {visibleIssues.length === 0 ? <div className="compact-empty">没有记录到异常</div> : visibleIssues.map((issue) => <details key={issue.code}><summary><span>{issue.label}</span><strong>{issue.count}</strong></summary>{issue.samples.length === 0 ? <p>未保存问题样例</p> : <ul>{issue.samples.map((sample, index) => <li key={`${sample.sourceRow}-${index}`}><b className="batch-issue-row">{sample.sourceRow > 0 ? `第 ${sample.sourceRow} 行` : "文件级问题"}</b><span className="batch-issue-context">{sample.country ? <em className="is-country">{sample.country}</em> : null}{sample.sku ? <em className="is-sku">{sample.sku}</em> : null}{sample.quantity !== null ? <em className="is-quantity">数量 {sample.quantity}</em> : null}</span><p><strong>原因</strong>{sample.reason}</p></li>)}</ul>}</details>)}
+                      {(detail.record.schemaVersion ?? 0) < 6 ? <div className="legacy-history-notice">旧记录使用原异常口径，未记录核价三列异常明细。</div> : null}
+                      {visibleIssues.length === 0 ? <div className="compact-empty">没有记录到异常</div> : visibleIssues.map((issue) => <details key={issue.code}><summary><span>{issue.label}{issue.code === "amount_difference" ? `（正差 ${issue.positiveDifferenceRows ?? 0}，负差 ${issue.negativeDifferenceRows ?? 0}）` : ""}</span><strong>{issue.count}</strong></summary>{issue.samples.length === 0 ? <p>未保存问题样例</p> : <ul>{issue.samples.map((sample, index) => <li key={`${sample.sourceRow}-${index}`}><b className="batch-issue-row">{sample.sourceRow > 0 ? `第 ${sample.sourceRow} 行` : "文件级问题"}</b><span className="batch-issue-context">{sample.country ? <em className="is-country">{sample.country}</em> : null}{sample.sku ? <em className="is-sku">{sample.sku}</em> : null}{sample.quantity !== null ? <em className="is-quantity">数量 {sample.quantity}</em> : null}</span><p><strong>原因</strong>{sample.reason}</p></li>)}</ul>}</details>)}
                     </article>
                     <article className="batch-section batch-events">
                       <header><div><h3>事件时间线</h3><span>{visibleEvents.length} 条</span></div><Select value={eventLevel} onValueChange={(value) => setEventLevel(value as "all" | TaskEventLevel)}><SelectTrigger className="history-event-select" aria-label="事件级别"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部级别</SelectItem>{Object.entries(EVENT_LEVEL_LABELS).map(([level, label]) => <SelectItem value={level} key={level}>{label}</SelectItem>)}</SelectContent></Select></header>

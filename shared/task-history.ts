@@ -1,6 +1,6 @@
 export type TaskHistoryStatus = "running" | "awaiting_confirmation" | "completed" | "failed" | "stopped" | "interrupted";
 
-export type TaskFileStatus = "queued" | "running" | "completed" | "failed" | "stopped";
+export type TaskFileStatus = "queued" | "running" | "awaiting_confirmation" | "completed" | "failed" | "stopped";
 
 export type TaskEventLevel = "info" | "success" | "warning" | "error";
 
@@ -12,8 +12,33 @@ export type TaskIssueCode =
   | "sku"
   | "quantity_tier"
   | "price_unavailable"
+  | "amount_difference"
+  | "quantity_mismatch"
   | "file_processing"
   | "other";
+
+export type PricingAnomalySample = {
+  sourceRow: number;
+  reason: string;
+  pricingPrice?: number | null;
+  priceDifference?: number | null;
+  quantity?: number | null;
+};
+
+export type PricingAnomalySummary = {
+  affectedRows: number;
+  priceUnavailableRows: number;
+  amountDifferenceRows: number;
+  positiveDifferenceRows: number;
+  negativeDifferenceRows: number;
+  quantityAnomalyRows: number;
+  quantityMismatchRows: number;
+  quantityCalculationErrorRows: number;
+  priceUnavailableSamples: PricingAnomalySample[];
+  amountDifferenceSamples: PricingAnomalySample[];
+  quantityMismatchSamples: PricingAnomalySample[];
+  quantityCalculationErrorSamples: PricingAnomalySample[];
+};
 
 export type TaskIssueSample = {
   sourceRow: number;
@@ -27,6 +52,8 @@ export type TaskIssueSummary = {
   code: TaskIssueCode;
   label: string;
   count: number;
+  positiveDifferenceRows?: number;
+  negativeDifferenceRows?: number;
   samples: TaskIssueSample[];
 };
 
@@ -45,6 +72,7 @@ export type TaskFileResult = {
   coverage?: number;
   message?: string;
   executionType?: TaskExecutionType;
+  anomalySummary?: PricingAnomalySummary;
   issueSummaries: TaskIssueSummary[];
 };
 
@@ -69,6 +97,7 @@ export type TaskHistoryRecord = {
   status: TaskHistoryStatus;
   totalFiles: number;
   completedFiles: number;
+  awaitingConfirmationFiles?: number;
   failedFiles: number;
   totalRows: number;
   matchedRows: number;
@@ -175,11 +204,13 @@ export type TaskBatchDiscardResult = {
 };
 
 export const TASK_ISSUE_LABELS: Record<TaskIssueCode, string> = {
-  quantity_calculation: "数量计算",
+  quantity_calculation: "数量计算失败",
   country_route: "国家路由",
   sku: "SKU",
   quantity_tier: "数量档位",
-  price_unavailable: "价格不可用或重复",
+  price_unavailable: "核价价格异常",
+  amount_difference: "金额差异常",
+  quantity_mismatch: "数量不一致",
   file_processing: "文件处理失败",
   other: "其他",
 };
@@ -194,6 +225,16 @@ export function classifyTaskIssue(reason: string): TaskIssueCode {
   }
   if (normalized.includes("数量档位") || normalized.includes("档位不存在")) {
     return "quantity_tier";
+  }
+  if (
+    normalized.includes("金额差")
+    || normalized.includes("金额异常")
+    || normalized.includes("差额")
+  ) {
+    return "amount_difference";
+  }
+  if (normalized.includes("数量不一致") || normalized.includes("数量异常")) {
+    return "quantity_mismatch";
   }
   if (
     normalized.includes("价格不可用")

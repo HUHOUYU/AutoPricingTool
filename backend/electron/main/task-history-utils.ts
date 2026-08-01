@@ -5,9 +5,12 @@ import type {
   TaskHistoryQuery,
   TaskHistoryRecord,
   TaskHistoryStatus,
+  PricingAnomalySample,
+  PricingAnomalySummary,
   TaskIssueSummary,
   TaskRunDiagnostics,
 } from "../../../shared/task-history";
+import { TASK_ISSUE_LABELS } from "../../../shared/task-history";
 
 const TASK_BATCH_NAME_MAX_LENGTH = 120;
 const TASK_BATCH_NOTE_MAX_LENGTH = 1_000;
@@ -82,9 +85,13 @@ export function batchNote(value: unknown): string {
 
 export function aggregateTaskFiles(
   files: TaskFileResult[],
-): Pick<TaskHistoryRecord, "completedFiles" | "failedFiles" | "totalRows" | "matchedRows" | "exceptionRows"> {
+): Pick<
+  TaskHistoryRecord,
+  "completedFiles" | "awaitingConfirmationFiles" | "failedFiles" | "totalRows" | "matchedRows" | "exceptionRows"
+> {
   return {
     completedFiles: files.filter((file) => file.status === "completed").length,
+    awaitingConfirmationFiles: files.filter((file) => file.status === "awaiting_confirmation").length,
     failedFiles: files.filter((file) => file.status === "failed").length,
     totalRows: files.reduce((sum, file) => sum + file.totalRows, 0),
     matchedRows: files.reduce((sum, file) => sum + file.matchedRows, 0),
@@ -102,4 +109,101 @@ export function normalizeTaskDiagnostics(value: unknown): Map<string, TaskIssueS
     result.set(resolve(diagnostic.inputPath), diagnostic.issueSummaries);
   }
   return result;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function nonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function normalizeAnomalySample(value: unknown): PricingAnomalySample | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const sourceRow = nonNegativeInteger(input.sourceRow);
+  if (sourceRow === null) return null;
+  return {
+    sourceRow,
+    reason: typeof input.reason === "string" ? input.reason : "",
+    pricingPrice: finiteNumber(input.pricingPrice),
+    priceDifference: finiteNumber(input.priceDifference),
+    quantity: nonNegativeInteger(input.quantity),
+  };
+}
+
+function normalizeSamples(value: unknown): PricingAnomalySample[] {
+  return Array.isArray(value)
+    ? value.map(normalizeAnomalySample).filter((sample): sample is PricingAnomalySample => sample !== null)
+    : [];
+}
+
+export function normalizePricingAnomalySummary(value: unknown): PricingAnomalySummary | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  return {
+    affectedRows: nonNegativeInteger(input.affectedRows) ?? 0,
+    priceUnavailableRows: nonNegativeInteger(input.priceUnavailableRows) ?? 0,
+    amountDifferenceRows: nonNegativeInteger(input.amountDifferenceRows) ?? 0,
+    positiveDifferenceRows: nonNegativeInteger(input.positiveDifferenceRows) ?? 0,
+    negativeDifferenceRows: nonNegativeInteger(input.negativeDifferenceRows) ?? 0,
+    quantityAnomalyRows: nonNegativeInteger(input.quantityAnomalyRows) ?? 0,
+    quantityMismatchRows: nonNegativeInteger(input.quantityMismatchRows) ?? 0,
+    quantityCalculationErrorRows: nonNegativeInteger(input.quantityCalculationErrorRows) ?? 0,
+    priceUnavailableSamples: normalizeSamples(input.priceUnavailableSamples),
+    amountDifferenceSamples: normalizeSamples(input.amountDifferenceSamples),
+    quantityMismatchSamples: normalizeSamples(input.quantityMismatchSamples),
+    quantityCalculationErrorSamples: normalizeSamples(input.quantityCalculationErrorSamples),
+  };
+}
+
+function issueSample(sample: PricingAnomalySample): TaskIssueSummary["samples"][number] {
+  return {
+    sourceRow: sample.sourceRow,
+    country: "",
+    sku: "",
+    quantity: sample.quantity ?? null,
+    reason: sample.reason,
+  };
+}
+
+export function pricingAnomalyIssueSummaries(summary: PricingAnomalySummary | undefined): TaskIssueSummary[] {
+  if (!summary || summary.affectedRows <= 0) return [];
+  const issues: TaskIssueSummary[] = [];
+  if (summary.priceUnavailableRows > 0) {
+    issues.push({
+      code: "price_unavailable",
+      label: TASK_ISSUE_LABELS.price_unavailable,
+      count: summary.priceUnavailableRows,
+      samples: summary.priceUnavailableSamples.map(issueSample),
+    });
+  }
+  if (summary.amountDifferenceRows > 0) {
+    issues.push({
+      code: "amount_difference",
+      label: TASK_ISSUE_LABELS.amount_difference,
+      count: summary.amountDifferenceRows,
+      positiveDifferenceRows: summary.positiveDifferenceRows,
+      negativeDifferenceRows: summary.negativeDifferenceRows,
+      samples: summary.amountDifferenceSamples.map(issueSample),
+    });
+  }
+  if (summary.quantityMismatchRows > 0) {
+    issues.push({
+      code: "quantity_mismatch",
+      label: TASK_ISSUE_LABELS.quantity_mismatch,
+      count: summary.quantityMismatchRows,
+      samples: summary.quantityMismatchSamples.map(issueSample),
+    });
+  }
+  if (summary.quantityCalculationErrorRows > 0) {
+    issues.push({
+      code: "quantity_calculation",
+      label: TASK_ISSUE_LABELS.quantity_calculation,
+      count: summary.quantityCalculationErrorRows,
+      samples: summary.quantityCalculationErrorSamples.map(issueSample),
+    });
+  }
+  return issues;
 }

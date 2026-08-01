@@ -478,6 +478,12 @@ html.dark .date-picker-popover {
   background: color-mix(in srgb, #24a56a 12%, var(--card));
 }
 
+.history-status.is-awaiting_confirmation,
+.file-result-status.is-awaiting_confirmation {
+  color: #a36a16;
+  background: color-mix(in srgb, #d8932f 12%, var(--card));
+}
+
 .history-status.is-running,
 .file-result-status.is-running {
   color: var(--primary);

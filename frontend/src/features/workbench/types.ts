@@ -1,3 +1,4 @@
+import type { PricingAnomalySummary } from "@shared/desktop-api";
 import type { FileTab } from "@/stores/ui-store";
 
 export type FileResult = {
@@ -7,7 +8,8 @@ export type FileResult = {
   matchedRows?: number;
   exceptionRows?: number;
   coverage?: number;
-  status: "completed" | "failed";
+  anomalySummary?: PricingAnomalySummary;
+  status: "awaiting_confirmation" | "completed" | "failed";
   message?: string;
   completedAt: string;
 };
@@ -43,7 +45,7 @@ export type ManualIssueReviewContext = {
   path: string;
   preferredTab: IssueReviewTab;
   phase: "analysis" | "run";
-  outcome?: "completed" | "failed";
+  outcome?: "completed" | "failed" | "unresolved";
 };
 
 export type ManualIssueReviewResolution = {

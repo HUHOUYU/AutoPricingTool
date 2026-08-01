@@ -126,23 +126,31 @@ pub(crate) fn run_price_check(command: &Value, state: &RuntimeState) -> Result<(
         ) {
             Ok(report) => {
                 let output_path = report.output_path.clone();
+                let status = if report.anomaly_summary.affected_rows > 0 {
+                    "awaiting_confirmation"
+                } else {
+                    "completed"
+                };
                 emit(json!({
                     "type": "price-file-result",
                     "path": path,
-                    "status": "completed",
+                    "status": status,
                     "outputPath": output_path,
                     "totalRows": report.total_rows,
                     "matchedRows": report.matched_rows,
                     "exceptionRows": report.exception_rows,
                     "coverage": report.coverage,
+                    "anomalySummary": report.anomaly_summary,
                 }));
                 file_results.push(json!({
                     "path": path,
+                    "status": status,
                     "outputPath": report.output_path,
                     "totalRows": report.total_rows,
                     "matchedRows": report.matched_rows,
                     "exceptionRows": report.exception_rows,
                     "coverage": report.coverage,
+                    "anomalySummary": report.anomaly_summary,
                 }));
             }
             Err(error) => {

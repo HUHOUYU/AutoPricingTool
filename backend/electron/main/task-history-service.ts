@@ -193,6 +193,7 @@ export function createTaskHistoryService(options: TaskHistoryServiceOptions) {
         status: "stopped" as const,
         totalFiles: files.length,
         completedFiles: 0,
+        awaitingConfirmationFiles: 0,
         failedFiles: 0,
         totalRows: 0,
         matchedRows: 0,

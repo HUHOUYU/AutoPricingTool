@@ -28,6 +28,7 @@ type MappingEditorProps = {
   onColumnChange: (target: MappingFieldTarget, column: number | null, header: string) => void;
   onSheetChange: (orderSheet: string, pricingSheet: string, previewSheet: string) => void;
   onPreviewSheetChange: (sheetName: string) => void;
+  confirmLabel?: string;
   onConfirm: () => void;
 };
 
@@ -157,6 +158,7 @@ export function MappingEditor({
   onColumnChange,
   onSheetChange,
   onPreviewSheetChange,
+  confirmLabel,
   onConfirm,
 }: MappingEditorProps): React.JSX.Element {
   const orderSheet = sheetFor(workbook, mapping.orderSheet);
@@ -287,7 +289,7 @@ export function MappingEditor({
       </div>
 
       <div className="mapping-editor-footer">
-        <Button type="button" disabled={!canConfirm} onClick={onConfirm}>确认并处理此文件</Button>
+        <Button type="button" disabled={!canConfirm} onClick={onConfirm}>{confirmLabel ?? "确认字段映射并开始核价"}</Button>
       </div>
     </section>
   );

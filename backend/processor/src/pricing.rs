@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 mod aggregation;
 mod analysis_pipeline;
+mod anomalies;
 mod column_rules;
 mod command_handlers;
 mod country_rules;
@@ -44,6 +45,7 @@ use analysis_pipeline::{
     candidate_ambiguity_reason, classify_candidate_ambiguity, decide_automation,
     mapping_is_nested_variant, mapping_variants,
 };
+use anomalies::summarize_pricing_anomalies;
 use column_rules::{
     deduplicate_equivalent_sku_qty_pairs, highest_sku_quantity_group, numeric_header_ladder_level,
     pair_sku_qty_columns, parse_tier, tier_columns,
@@ -397,6 +399,7 @@ pub(crate) struct PriceCheckReport {
     pub(crate) total_rows: usize,
     pub(crate) matched_rows: usize,
     pub(crate) exception_rows: usize,
+    pub(crate) anomaly_summary: PricingAnomalySummary,
     pub(crate) coverage: f64,
 }
 
@@ -510,6 +513,33 @@ pub(crate) struct PricePreviewWritebackRow {
     quantity_issue_context: Option<SkuQuantityIssueContext>,
     #[serde(default)]
     used_original_sku_quantity: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PricingAnomalySample {
+    source_row: usize,
+    reason: String,
+    pricing_price: Option<f64>,
+    price_difference: Option<f64>,
+    quantity: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PricingAnomalySummary {
+    affected_rows: usize,
+    price_unavailable_rows: usize,
+    amount_difference_rows: usize,
+    positive_difference_rows: usize,
+    negative_difference_rows: usize,
+    quantity_anomaly_rows: usize,
+    quantity_mismatch_rows: usize,
+    quantity_calculation_error_rows: usize,
+    price_unavailable_samples: Vec<PricingAnomalySample>,
+    amount_difference_samples: Vec<PricingAnomalySample>,
+    quantity_mismatch_samples: Vec<PricingAnomalySample>,
+    quantity_calculation_error_samples: Vec<PricingAnomalySample>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

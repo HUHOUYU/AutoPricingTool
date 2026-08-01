@@ -75,6 +75,7 @@ describe("task history utilities", () => {
       },
     ])).toEqual({
       completedFiles: 1,
+      awaitingConfirmationFiles: 0,
       failedFiles: 1,
       totalRows: 13,
       matchedRows: 8,

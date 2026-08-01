@@ -5,13 +5,14 @@ import { LogCenterPage } from "@/features/history/components/log-center-page";
 
 const record: TaskHistoryRecord = {
   id: "batch-20260728",
-  schemaVersion: 2,
+  schemaVersion: 6,
   startedAt: "2026-07-28T01:00:00.000Z",
   completedAt: "2026-07-28T01:01:00.000Z",
   durationMs: 60_000,
-  status: "completed",
+  status: "awaiting_confirmation",
   totalFiles: 1,
-  completedFiles: 1,
+  completedFiles: 0,
+  awaitingConfirmationFiles: 1,
   failedFiles: 0,
   totalRows: 10,
   matchedRows: 9,
@@ -27,17 +28,19 @@ const detail: TaskHistoryDetail = {
   files: [{
     path: "C:\\input\\orders.xlsx",
     fileName: "orders.xlsx",
-    status: "completed",
+    status: "awaiting_confirmation",
     totalRows: 10,
     matchedRows: 9,
     exceptionRows: 1,
     durationMs: 50_000,
     outputPath: "C:\\output\\orders.xlsx",
     issueSummaries: [{
-      code: "country_route",
-      label: "国家路由",
+      code: "amount_difference",
+      label: "金额差异常",
       count: 1,
-      samples: [{ sourceRow: 8, country: "FR-D", sku: "SKU-1", quantity: 2, reason: "国家路由不存在" }],
+      positiveDifferenceRows: 1,
+      negativeDifferenceRows: 0,
+      samples: [{ sourceRow: 8, country: "", sku: "", quantity: 2, reason: "金额差为正 1.5" }],
     }],
   }],
   events: [{
@@ -49,10 +52,12 @@ const detail: TaskHistoryDetail = {
     message: "批次开始",
   }],
   issueSummaries: [{
-    code: "country_route",
-    label: "国家路由",
+    code: "amount_difference",
+    label: "金额差异常",
     count: 1,
-    samples: [{ sourceRow: 8, country: "FR-D", sku: "SKU-1", quantity: 2, reason: "国家路由不存在" }],
+    positiveDifferenceRows: 1,
+    negativeDifferenceRows: 0,
+    samples: [{ sourceRow: 8, country: "", sku: "", quantity: 2, reason: "金额差为正 1.5" }],
   }],
 };
 
@@ -87,13 +92,12 @@ describe("LogCenterPage", () => {
     expect(screen.getAllByText("90.0%")).toHaveLength(2);
     const metrics = screen.getByLabelText("批次指标");
     expect(within(metrics).getByText("90.0%").closest("article")).toHaveClass("is-success");
+    expect(within(metrics).getByText("待确认文件").closest("article")).toHaveTextContent("1");
     expect(within(metrics).getByText("1 分 0 秒").closest("article")).toHaveClass("is-confirm");
-    expect(screen.getByText("国家路由")).toBeInTheDocument();
+    expect(screen.getByText("金额差异常（正差 1，负差 0）")).toBeInTheDocument();
     expect(screen.getByText("第 8 行")).toHaveClass("batch-issue-row");
-    expect(screen.getByText("FR-D")).toHaveClass("is-country");
-    expect(screen.getByText("SKU-1")).toHaveClass("is-sku");
     expect(screen.getByText("数量 2")).toHaveClass("is-quantity");
-    expect(screen.getByText("国家路由不存在").querySelector("strong")).toHaveTextContent("原因");
+    expect(screen.getByText("金额差为正 1.5").querySelector("strong")).toHaveTextContent("原因");
     expect(screen.getByText("批次开始")).toBeInTheDocument();
     const openResult = screen.getByRole("button", { name: "打开 orders.xlsx 结果" });
     expect(openResult).toHaveClass("file-result-open");
@@ -113,6 +117,12 @@ describe("LogCenterPage", () => {
 
     expect(await screen.findByText("仅有汇总")).toBeInTheDocument();
     expect(await screen.findByText("该批次由旧版本创建，历史版本未记录文件明细。")).toBeInTheDocument();
+  });
+
+  it("labels detailed records created before the final anomaly schema", async () => {
+    render(<LogCenterPage api={apiFor({ ...detail, record: { ...record, schemaVersion: 5 } })} revision={0} requestedBatchId={null} onRequestedBatchHandled={() => undefined} />);
+
+    expect(await screen.findByText("旧记录使用原异常口径，未记录核价三列异常明细。")).toBeInTheDocument();
   });
 
   it("opens an archived unresolved file without falling back to the source", async () => {

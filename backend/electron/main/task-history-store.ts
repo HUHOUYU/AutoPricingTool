@@ -19,7 +19,7 @@ export const TASK_HISTORY_RETENTION_DAYS = 365;
 export const TASK_HISTORY_MAX_BATCHES = 1_000;
 export const TASK_HISTORY_DEFAULT_PAGE_SIZE = 30;
 export const TASK_HISTORY_MAX_PAGE_SIZE = 100;
-export const TASK_HISTORY_SCHEMA_VERSION = 5;
+export const TASK_HISTORY_SCHEMA_VERSION = 6;
 
 type TaskDetailEntry =
   | { kind: "event"; event: TaskHistoryEvent }
@@ -67,12 +67,24 @@ function mergeIssueSummaries(files: TaskFileResult[]): TaskIssueSummary[] {
       const current = summaries.get(issue.code);
       if (current) {
         current.count += issue.count;
+        if (issue.positiveDifferenceRows !== undefined) {
+          current.positiveDifferenceRows = (current.positiveDifferenceRows ?? 0) + issue.positiveDifferenceRows;
+        }
+        if (issue.negativeDifferenceRows !== undefined) {
+          current.negativeDifferenceRows = (current.negativeDifferenceRows ?? 0) + issue.negativeDifferenceRows;
+        }
         current.samples.push(...issue.samples);
       } else {
         summaries.set(issue.code, {
           code: issue.code,
           label: issue.label || TASK_ISSUE_LABELS[issue.code],
           count: issue.count,
+          ...(issue.positiveDifferenceRows !== undefined
+            ? { positiveDifferenceRows: issue.positiveDifferenceRows }
+            : {}),
+          ...(issue.negativeDifferenceRows !== undefined
+            ? { negativeDifferenceRows: issue.negativeDifferenceRows }
+            : {}),
           samples: [...issue.samples],
         });
       }
@@ -88,6 +100,7 @@ function normalizeRecord(record: TaskHistoryRecord): TaskHistoryRecord {
     : undefined;
   return {
     ...record,
+    awaitingConfirmationFiles: record.awaitingConfirmationFiles ?? 0,
     ...(record.durationMs === undefined && Number.isFinite(derivedDuration) ? { durationMs: derivedDuration } : {}),
     detailAvailable: record.detailAvailable === true,
   };
@@ -187,6 +200,7 @@ export class TaskHistoryStore {
     const liveRecord = record.status === "running" && latestFiles.length > 0 ? {
       ...record,
       completedFiles: latestFiles.filter((file) => file.status === "completed").length,
+      awaitingConfirmationFiles: latestFiles.filter((file) => file.status === "awaiting_confirmation").length,
       failedFiles: latestFiles.filter((file) => file.status === "failed").length,
       totalRows: latestFiles.reduce((sum, file) => sum + file.totalRows, 0),
       matchedRows: latestFiles.reduce((sum, file) => sum + file.matchedRows, 0),
@@ -323,7 +337,7 @@ export class TaskHistoryStore {
       const next = await this.listTaskHistory({ ...query, page, pageSize: TASK_HISTORY_MAX_PAGE_SIZE });
       history.push(...next.items);
     }
-    const headers = ["批次ID", "批次名称", "备注", "开始时间", "完成时间", "状态", "文件数", "完成文件", "失败文件", "总行数", "匹配行数", "异常行数", "匹配率", "耗时毫秒", "输出目录"];
+    const headers = ["批次ID", "批次名称", "备注", "开始时间", "完成时间", "状态", "文件数", "完成文件", "待确认文件", "失败文件", "总行数", "匹配行数", "异常行数", "匹配率", "耗时毫秒", "输出目录"];
     const rows = history.map((record) => [
       record.id,
       record.name ?? "",
@@ -333,6 +347,7 @@ export class TaskHistoryStore {
       record.status,
       record.totalFiles,
       record.completedFiles,
+      record.awaitingConfirmationFiles ?? 0,
       record.failedFiles,
       record.totalRows,
       record.matchedRows,

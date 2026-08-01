@@ -67,7 +67,7 @@ export function useMappingReviewActions({
       manualIssueReviewRef.current = { path, preferredTab: "confirm", phase: "run" };
     }
     onCloseDetail();
-    toast.success("映射已确认，开始处理当前文件");
+    toast.success("开始核价当前文件");
     await runPricing([path], "manual");
   }, [
     confirmedPathsRef,

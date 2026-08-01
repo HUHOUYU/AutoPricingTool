@@ -39,7 +39,7 @@ describe("workbench status", () => {
     expect(pickBestResultTab({ pending: 0, queued: 0, confirm: 0, error: 0, success: 0 })).toBeNull();
   });
 
-  it("distinguishes analysis, running, warning, and confirmed results", () => {
+  it("keeps final pricing anomalies in the confirmation tab", () => {
     const analysis = createAnalysis("confirm");
     expect(statusForFile(analysis.inputPath, analysis, undefined, "", false, false)).toBe("ready");
     expect(statusForFile(analysis.inputPath, createAnalysis("eligible"), undefined, "", false, false)).toBe("queued");
@@ -50,11 +50,23 @@ describe("workbench status", () => {
       status: "completed",
       exceptionRows: 1,
       completedAt: "2026-07-30T00:00:00Z",
-    }, "", false, false)).toBe("warning");
+    }, "", false, false)).toBe("ready");
+    expect(statusForFile(analysis.inputPath, analysis, {
+      path: analysis.inputPath,
+      status: "awaiting_confirmation",
+      exceptionRows: 1,
+      completedAt: "2026-07-30T00:00:00Z",
+    }, "", false, false)).toBe("ready");
     expect(statusForFile(analysis.inputPath, analysis, {
       path: analysis.inputPath,
       status: "completed",
       exceptionRows: 1,
+      completedAt: "2026-07-30T00:00:00Z",
+    }, "", false, true)).toBe("ready");
+    expect(statusForFile(analysis.inputPath, analysis, {
+      path: analysis.inputPath,
+      status: "completed",
+      exceptionRows: 0,
       completedAt: "2026-07-30T00:00:00Z",
     }, "", false, true)).toBe("success");
   });

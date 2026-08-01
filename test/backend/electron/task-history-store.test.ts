@@ -108,6 +108,70 @@ describe("task history store", () => {
     expect(analytics.issues).toEqual([{ code: "country_route", label: "国家路由", count: 1 }]);
   });
 
+  it("persists final pricing anomalies as awaiting-confirmation results", async () => {
+    const { store } = await createStore();
+    await store.persistTaskRecord(record({
+      status: "awaiting_confirmation",
+      completedAt: undefined,
+      completedFiles: 0,
+      awaitingConfirmationFiles: 1,
+      exceptionRows: 2,
+    }));
+    await store.appendFileResult("batch-1", fileResult({
+      status: "awaiting_confirmation",
+      exceptionRows: 2,
+      anomalySummary: {
+        affectedRows: 2,
+        priceUnavailableRows: 0,
+        amountDifferenceRows: 1,
+        positiveDifferenceRows: 1,
+        negativeDifferenceRows: 0,
+        quantityAnomalyRows: 1,
+        quantityMismatchRows: 0,
+        quantityCalculationErrorRows: 1,
+        priceUnavailableSamples: [],
+        amountDifferenceSamples: [{ sourceRow: 8, reason: "金额差为正 1.5", priceDifference: 1.5 }],
+        quantityMismatchSamples: [],
+        quantityCalculationErrorSamples: [{ sourceRow: 9, reason: "SKU关系无法计算", quantity: 0 }],
+      },
+      issueSummaries: [
+        {
+          code: "amount_difference",
+          label: "金额差异常",
+          count: 1,
+          positiveDifferenceRows: 1,
+          negativeDifferenceRows: 0,
+          samples: [{ sourceRow: 8, country: "", sku: "", quantity: null, reason: "金额差为正 1.5" }],
+        },
+        {
+          code: "quantity_calculation",
+          label: "数量计算失败",
+          count: 1,
+          samples: [{ sourceRow: 9, country: "", sku: "", quantity: 0, reason: "SKU关系无法计算" }],
+        },
+      ],
+    }));
+
+    const detail = await store.getTaskHistoryDetail("batch-1");
+
+    expect(detail?.record).toMatchObject({
+      status: "awaiting_confirmation",
+      completedFiles: 0,
+      awaitingConfirmationFiles: 1,
+      exceptionRows: 2,
+    });
+    expect(detail?.files[0]?.anomalySummary).toMatchObject({
+      affectedRows: 2,
+      amountDifferenceRows: 1,
+      quantityCalculationErrorRows: 1,
+    });
+    expect(detail?.issueSummaries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "amount_difference", positiveDifferenceRows: 1 }),
+      expect.objectContaining({ code: "quantity_calculation", count: 1 }),
+    ]));
+    expect(await store.exportHistoryCsv({})).toContain("待确认文件");
+  });
+
   it("keeps legacy summaries readable and ignores a truncated final line", async () => {
     const { store, historyPath } = await createStore();
     await store.persistTaskRecord(record({ schemaVersion: undefined, detailAvailable: undefined }));
