@@ -25,7 +25,7 @@ export type IssueDetail = {
   }>;
   messageHighlights?: Array<{
     value: string;
-    tone: "warning" | "info";
+    tone: "danger" | "warning" | "info";
   }>;
 };
 
@@ -81,6 +81,7 @@ export function unmatchedIssueDetails(unmatchedIssues: PriceUnmatchedIssue[]): I
     const reasonType = reasonSeparator >= 0 ? issue.reason.slice(0, reasonSeparator) : "价格未匹配";
     const reasonDetail = reasonSeparator >= 0 ? issue.reason.slice(reasonSeparator + 1) : issue.reason;
     const pricingSheet = /核价 Sheet (.+?) 中/u.exec(reasonDetail)?.[1]?.trim();
+    const unavailableReason = /价格不可用[：:]\s*(.+)$/u.exec(reasonDetail)?.[1]?.trim();
     return {
       sourceRow: issue.sourceRow,
       label: `第 ${issue.sourceRow} 行`,
@@ -91,6 +92,7 @@ export function unmatchedIssueDetails(unmatchedIssues: PriceUnmatchedIssue[]): I
         { label: "数量", value: String(issue.quantity), tone: "info" as const },
       ],
       messageHighlights: [
+        ...(unavailableReason ? [{ value: unavailableReason, tone: "danger" as const }] : []),
         ...(pricingSheet ? [{ value: pricingSheet, tone: "info" as const }] : []),
         ...issue.country.split("/").map((value) => value.trim()).filter(Boolean)
           .map((value) => ({ value, tone: "warning" as const })),

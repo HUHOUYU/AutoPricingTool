@@ -1272,6 +1272,11 @@
   background: color-mix(in srgb, var(--warning) 10%, transparent);
 }
 
+.issue-details-dialog-reason-detail mark.is-danger {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+
 .issue-details-dialog-reason-detail mark.is-info {
   color: var(--blue);
   background: color-mix(in srgb, var(--blue) 9%, transparent);

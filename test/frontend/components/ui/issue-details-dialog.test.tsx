@@ -16,6 +16,7 @@ describe("IssueDetailsDialog", () => {
         ],
         message: "核价 Sheet price 的国家路由 FR-D、SKU TC3348-L-4 没有数量 2 对应的档位",
         messageHighlights: [
+          { value: "没有数量 2 对应的档位", tone: "danger" as const },
           { value: "price", tone: "info" as const },
           { value: "FR-D", tone: "warning" as const },
           { value: "TC3348-L-4", tone: "info" as const },
@@ -54,6 +55,7 @@ describe("IssueDetailsDialog", () => {
     expect(within(table).getByText("2", { selector: ".issue-details-dialog-reason-markers strong" }).closest("span")).toHaveClass("is-info");
     expect(within(table).getByText("price", { selector: "mark" })).toHaveClass("is-info");
     expect(within(table).getByText("TC3348-L-4", { selector: "mark" })).toHaveClass("is-info");
+    expect(within(table).getByText("没有数量 2 对应的档位", { selector: "mark" })).toHaveClass("is-danger");
   });
 
   it("scrolls the issue table to its header and footer", () => {
