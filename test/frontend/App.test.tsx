@@ -7,6 +7,10 @@ import type { ExcelPreviewWorkerRequest, ExcelPreviewWorkerResponse } from "@/li
 import { App } from "@/App";
 import { useUIStore } from "@/stores/ui-store";
 
+// CI 中跨页面交互与预览渲染会比本机慢，保持明确的有限超时。
+const MANUAL_REVIEW_TEST_TIMEOUT_MS = 15_000;
+const PREVIEW_INTERACTION_TEST_TIMEOUT_MS = 30_000;
+
 function createAnalysis(path: string): PriceAnalysisFile {
   const mapping = {
     orderSheet: "订单",
@@ -962,7 +966,7 @@ describe("AutoPricingTool cyber workstation", () => {
       api.emit({ type: "price-done", mode: "run", stopped: false, files: [{ totalRows: 8, matchedRows: 8, exceptionRows: 0 }] });
     });
     await waitFor(() => expect(screen.getByRole("button", { name: "完成2" })).toHaveClass("is-active"));
-  });
+  }, MANUAL_REVIEW_TEST_TIMEOUT_MS);
 
   it("continuously opens confirmation files before falling back to abnormal files", async () => {
     const api = createDesktopAPI();
@@ -1545,7 +1549,7 @@ describe("AutoPricingTool cyber workstation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "关闭文件详情" }));
     await waitFor(() => expect(FakeExcelPreviewWorker.instances[0].terminate).toHaveBeenCalledTimes(1));
-  }, 15_000);
+  }, PREVIEW_INTERACTION_TEST_TIMEOUT_MS);
 
   it("edits only the three financial columns and recalculates a quantity change by row", async () => {
     vi.stubGlobal("Worker", FakeExcelPreviewWorker);
