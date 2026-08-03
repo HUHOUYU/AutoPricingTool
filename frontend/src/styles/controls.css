@@ -612,6 +612,22 @@ html.dark .cyber-batch-progress .cyber-progress-actions .cyber-action.is-batch-n
   background: var(--cyber-panel);
 }
 
+.cyber-batch-progress .cyber-progress-actions .cyber-action.is-save,
+html:not(.dark) .cyber-batch-progress .cyber-progress-actions .cyber-action.is-save,
+html.dark .cyber-batch-progress .cyber-progress-actions .cyber-action.is-save {
+  border-color: color-mix(in srgb, var(--cyber-status-success) 38%, var(--cyber-border));
+  color: color-mix(in srgb, var(--cyber-status-success) 80%, var(--cyber-text));
+  background: color-mix(in srgb, var(--cyber-status-success) 7%, transparent);
+}
+
+.cyber-batch-progress .cyber-progress-actions .cyber-action.is-reset,
+html:not(.dark) .cyber-batch-progress .cyber-progress-actions .cyber-action.is-reset,
+html.dark .cyber-batch-progress .cyber-progress-actions .cyber-action.is-reset {
+  border-color: color-mix(in srgb, var(--button-danger) 34%, var(--cyber-border));
+  color: color-mix(in srgb, var(--button-danger) 78%, var(--cyber-text));
+  background: color-mix(in srgb, var(--button-danger) 6%, transparent);
+}
+
 /* 内容区按钮保持位置稳定；侧栏导航继续保留自身的位移动画。 */
 .cyber-workspace button {
   box-shadow: none !important;
