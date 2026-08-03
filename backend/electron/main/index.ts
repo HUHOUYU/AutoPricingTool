@@ -42,6 +42,11 @@ import {
   normalizeTaskDiagnostics,
   validateBatchId,
 } from "./task-history-utils";
+import {
+  APP_INITIALIZATION_RELAUNCH_DELAY_MS,
+  APP_INITIALIZATION_RELOAD_DELAY_MS,
+  clearAppInitializationData,
+} from "./app-initialization";
 
 type ExportFileRowsPayload = {
   categoryLabel: string;
@@ -61,14 +66,16 @@ const portableRootDir =
   app.isPackaged && process.env.PORTABLE_EXECUTABLE_DIR ? process.env.PORTABLE_EXECUTABLE_DIR : dirname(process.execPath);
 const bundledDefaultConfigPath = resolveBundledDefaultConfigPath(resourceRootDir, app.isPackaged);
 const defaultExtractConfigPath = join(writableRootDir, "config", "extract_rules.json");
-const runtimeLogPath = join(writableRootDir, "runtime", "logs", "app.log");
-const taskHistoryPath = join(writableRootDir, "runtime", "task-history.jsonl");
-const taskHistoryDetailsDir = join(writableRootDir, "runtime", "task-details");
+const runtimeDirectory = join(writableRootDir, "runtime");
+const runtimeLogPath = join(runtimeDirectory, "logs", "app.log");
+const taskHistoryPath = join(runtimeDirectory, "task-history.jsonl");
+const taskHistoryDetailsDir = join(runtimeDirectory, "task-details");
 const taskHistoryStore = new TaskHistoryStore(taskHistoryPath, taskHistoryDetailsDir);
 const templateStoreDir = join(app.getPath("userData"), "templates");
 const templateStorePath = join(templateStoreDir, "templates.json");
 const preferencesPath = join(app.getPath("userData"), "preferences.json");
 const statePath = join(app.getPath("userData"), "state.json");
+const legacyWindowPreferencesPath = join(app.getPath("userData"), "window-preferences.json");
 const appSettingsStore = new AppSettingsStore(preferencesPath, statePath, defaultExtractConfigPath);
 const appIconPath = join(resourceRootDir, "resources", "app-icon.ico");
 const rendererHtmlPath = join(__dirname, "../renderer/index.html");
@@ -474,6 +481,32 @@ app.whenReady().then(async () => {
     requireTrustedIpc(event);
     return { detectedThreads: detectedProcessingThreads, maxWorkers: maxConfiguredProcessingWorkers };
   });
+  ipcMain.handle("app:initialize", async (event) => {
+    requireTrustedIpc(event);
+    await processorSession.stop();
+    await Promise.all([
+      session.defaultSession.clearCache(),
+      session.defaultSession.clearStorageData(),
+    ]);
+    await clearAppInitializationData({
+      defaultConfigPath: defaultExtractConfigPath,
+      runtimeDirectory,
+      templatesDirectory: templateStoreDir,
+      preferencesPath,
+      statePath,
+      legacyWindowPreferencesPath,
+      removeConfigDirectory: app.isPackaged,
+    });
+    if (!app.isPackaged) {
+      appPreferences = { ...DEFAULT_APP_PREFERENCES };
+      appState = defaultAppState(defaultExtractConfigPath);
+      await ensureWritableConfig();
+      setTimeout(() => event.sender.reloadIgnoringCache(), APP_INITIALIZATION_RELOAD_DELAY_MS);
+      return;
+    }
+    app.relaunch();
+    setTimeout(() => app.exit(0), APP_INITIALIZATION_RELAUNCH_DELAY_MS);
+  });
   ipcMain.handle("window:minimize", (event) => {
     requireTrustedIpc(event);
     windowManager.minimize(event.sender);
@@ -820,6 +853,9 @@ app.whenReady().then(async () => {
       windowManager.createWindow();
     }
   });
+}).catch((error: unknown) => {
+  console.error("应用启动失败", error);
+  app.exit(1);
 });
 
 app.on("window-all-closed", () => {
