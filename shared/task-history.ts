@@ -195,7 +195,7 @@ export type TaskBatchFinishRequest = {
 export type TaskBatchFinishResult = {
   record: TaskHistoryRecord;
   archivedCount: number;
-  unprocessedDir?: string;
+  unconfirmedDir?: string;
 };
 
 export type TaskBatchDiscardResult = {

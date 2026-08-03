@@ -126,7 +126,8 @@ export function App(): React.JSX.Element {
     setPreviewWorkbook: setDetailPreviewWorkbook,
   } = pricingDetailState;
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
-  const [nextBatchConfirmOpen, setNextBatchConfirmOpen] = useState(false);
+  const [archiveBatchConfirmOpen, setArchiveBatchConfirmOpen] = useState(false);
+  const [discardBatchConfirmOpen, setDiscardBatchConfirmOpen] = useState(false);
   const userTabLockedRef = useRef(false);
   const batchTaskWasActiveRef = useRef(false);
   const batchNameEditedRef = useRef(false);
@@ -257,9 +258,12 @@ export function App(): React.JSX.Element {
     onInputDirectoryChange: setInputDir,
     onInputDirectorySelectedChange: setInputDirectorySelected,
   });
-  const { resetTask, chooseNextBatch } = useBatchLifecycleActions({
+  const { resetTask, archiveAndNextBatch, discardAndNextBatch } = useBatchLifecycleActions({
     session: processorSession,
     files,
+    batchName,
+    batchNote,
+    ensureOutputDirectory,
     setFiles,
     setImportedAt,
     setImportModes,
@@ -275,7 +279,8 @@ export function App(): React.JSX.Element {
       userTabLockedRef.current = false;
       batchTaskWasActiveRef.current = false;
       setResetConfirmOpen(false);
-      setNextBatchConfirmOpen(false);
+      setArchiveBatchConfirmOpen(false);
+      setDiscardBatchConfirmOpen(false);
       setInputDirectorySelected(false);
       setActiveTab("pending");
       setPageIndex(0);
@@ -506,7 +511,7 @@ export function App(): React.JSX.Element {
         void runPricing(unfinishedFiles, "retry");
       }
     },
-    onNextBatch: () => { void chooseNextBatch(); },
+    onNextBatch: () => { void discardAndNextBatch(); },
   });
 
   const listEmptyState = useMemo(() => {
@@ -571,7 +576,8 @@ export function App(): React.JSX.Element {
         pendingReviewCount={tabCounts.confirm + tabCounts.error + tabCounts.queued + tabCounts.pending}
         showNext={showNext}
         showReset={showReset}
-        onFinishBatch={() => setNextBatchConfirmOpen(true)}
+        onArchiveBatch={() => setArchiveBatchConfirmOpen(true)}
+        onDiscardBatch={() => setDiscardBatchConfirmOpen(true)}
         onPause={() => void togglePauseTask()}
         onReset={requestResetTask}
         onStart={() => {
@@ -748,15 +754,26 @@ export function App(): React.JSX.Element {
           onConfirm={() => { void resetTask(); }}
         />
         <ConfirmDialog
-          open={nextBatchConfirmOpen}
+          open={archiveBatchConfirmOpen}
+          title="保存当前批次并处理下一批？"
+          description={`当前仍有 ${tabCounts.queued} 个待核价、${tabCounts.confirm} 个待确认、${tabCounts.error} 个异常、${tabCounts.pending} 个待分析文件。保存后，已生成的核价结果和批次日志会保留；所有未完成原文件会复制到批次输出目录的“未确认文件”，原始 Excel 文件不会改变。`}
+          confirmLabel="保存本批"
+          onCancel={() => setArchiveBatchConfirmOpen(false)}
+          onConfirm={() => {
+            setArchiveBatchConfirmOpen(false);
+            void archiveAndNextBatch();
+          }}
+        />
+        <ConfirmDialog
+          open={discardBatchConfirmOpen}
           title="丢弃当前批次？"
           description={`当前仍有 ${tabCounts.queued} 个待核价、${tabCounts.confirm} 个待确认、${tabCounts.error} 个异常、${tabCounts.pending} 个待分析文件。继续后，本批次不会保留在日志中心，已生成的结果文件也会删除；原始 Excel 文件不会删除。此操作不可恢复。`}
           confirmLabel="丢弃本批"
           tone="danger"
-          onCancel={() => setNextBatchConfirmOpen(false)}
+          onCancel={() => setDiscardBatchConfirmOpen(false)}
           onConfirm={() => {
-            setNextBatchConfirmOpen(false);
-            void chooseNextBatch();
+            setDiscardBatchConfirmOpen(false);
+            void discardAndNextBatch();
           }}
         />
     </AppShell>

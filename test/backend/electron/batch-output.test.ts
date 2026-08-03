@@ -1,10 +1,10 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   batchOutputFolderName,
-  archiveUnprocessedFiles,
+  archiveUnconfirmedFiles,
   createBatchOutputDirectory,
   remapBatchOutputPath,
   renameBatchOutputDirectory,
@@ -61,20 +61,37 @@ describe("batch output directory", () => {
     await writeFile(firstSource, "first");
     await writeFile(secondSource, "second");
 
-    const archived = await archiveUnprocessedFiles(
+    const archived = await archiveUnconfirmedFiles(
       batchDirectory,
       "batch-12345678",
       [firstSource, secondSource],
     );
 
-    expect(archived.directory).toBe(join(batchDirectory, "未处理"));
+    expect(archived.directory).toBe(join(batchDirectory, "未确认文件"));
     expect(archived.files.map((file) => file.archivedPath)).toEqual([
-      join(batchDirectory, "未处理", "订单.xlsx"),
-      join(batchDirectory, "未处理", "订单 (2).xlsx"),
+      join(batchDirectory, "未确认文件", "订单.xlsx"),
+      join(batchDirectory, "未确认文件", "订单 (2).xlsx"),
     ]);
     expect(await readFile(firstSource, "utf8")).toBe("first");
     expect(await readFile(secondSource, "utf8")).toBe("second");
     expect(await readFile(archived.files[0]!.archivedPath, "utf8")).toBe("first");
     expect(await readFile(archived.files[1]!.archivedPath, "utf8")).toBe("second");
+  });
+
+  it("removes staging files when an archive copy fails", async () => {
+    const root = await temporaryDirectory();
+    const batchDirectory = join(root, "法国补发");
+    await mkdir(batchDirectory);
+    const existingSource = join(root, "existing.xlsx");
+    await writeFile(existingSource, "source");
+
+    await expect(archiveUnconfirmedFiles(
+      batchDirectory,
+      "batch-12345678",
+      [existingSource, join(root, "missing.xlsx")],
+    )).rejects.toThrow();
+
+    await expect(access(join(batchDirectory, "未确认文件"))).rejects.toThrow();
+    await expect(access(join(batchDirectory, ".未确认文件-12345678.tmp"))).rejects.toThrow();
   });
 });

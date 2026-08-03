@@ -1,10 +1,11 @@
 import {
+  Archive,
   CircleStop,
   FileCheck2,
-  FilePlus2,
   Pause,
   Play,
   RefreshCw,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 import { SidebarTooltip } from "@/app/components/sidebar-tooltip";
@@ -29,7 +30,8 @@ type TaskActionsProps = {
   pendingReviewCount: number;
   showNext?: boolean;
   showReset?: boolean;
-  onFinishBatch: () => void;
+  onArchiveBatch: () => void;
+  onDiscardBatch: () => void;
   onPause: () => void;
   onReset: () => void;
   onStart: () => void;
@@ -48,7 +50,8 @@ export function TaskActions({
   pendingReviewCount,
   showNext = false,
   showReset = false,
-  onFinishBatch,
+  onArchiveBatch,
+  onDiscardBatch,
   onPause,
   onReset,
   onStart,
@@ -113,16 +116,28 @@ export function TaskActions({
       ) : null}
 
       {showReset && batchStarted && !isTaskActive && pendingReviewCount > 0 ? (
-        <button
-          type="button"
-          aria-label="丢弃本批并处理下一批"
-          title="当前批次尚未全部完成，继续前需要确认丢弃"
-          className="cyber-action is-reset"
-          onClick={onFinishBatch}
-        >
-          <FilePlus2 />
-          <strong>丢弃并下一批</strong>
-        </button>
+        <>
+          <button
+            type="button"
+            aria-label="保存本批并处理下一批"
+            title="保留已生成结果，并将未完成原文件归档后进入下一批"
+            className="cyber-action is-save"
+            onClick={onArchiveBatch}
+          >
+            <Archive />
+            <strong>保存并下一批</strong>
+          </button>
+          <button
+            type="button"
+            aria-label="丢弃本批并处理下一批"
+            title="当前批次尚未全部完成，继续前需要确认丢弃"
+            className="cyber-action is-reset"
+            onClick={onDiscardBatch}
+          >
+            <Trash2 />
+            <strong>丢弃并下一批</strong>
+          </button>
+        </>
       ) : null}
     </div>
   );

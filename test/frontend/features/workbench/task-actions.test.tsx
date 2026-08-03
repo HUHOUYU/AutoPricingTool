@@ -15,7 +15,8 @@ function renderActions(overrides: Partial<React.ComponentProps<typeof TaskAction
     isTaskActive: false,
     nextAction: null,
     pendingReviewCount: 0,
-    onFinishBatch: vi.fn(),
+    onArchiveBatch: vi.fn(),
+    onDiscardBatch: vi.fn(),
     onPause: vi.fn(),
     onReset: vi.fn(),
     onStart: vi.fn(),
@@ -65,16 +66,21 @@ describe("TaskActions", () => {
     expect(nextAction.onClick).toHaveBeenCalledOnce();
   });
 
-  it("labels unfinished batch disposal as destructive", () => {
+  it("offers separate save and discard exits for an unfinished batch", () => {
     const props = renderActions({
       batchStarted: true,
       pendingReviewCount: 1,
       showReset: true,
     });
 
+    const archiveButton = screen.getByRole("button", { name: "保存本批并处理下一批" });
+    expect(archiveButton).toHaveAttribute("title", "保留已生成结果，并将未完成原文件归档后进入下一批");
+    fireEvent.click(archiveButton);
+    expect(props.onArchiveBatch).toHaveBeenCalledOnce();
+
     const discardButton = screen.getByRole("button", { name: "丢弃本批并处理下一批" });
     expect(discardButton).toHaveAttribute("title", "当前批次尚未全部完成，继续前需要确认丢弃");
     fireEvent.click(discardButton);
-    expect(props.onFinishBatch).toHaveBeenCalledOnce();
+    expect(props.onDiscardBatch).toHaveBeenCalledOnce();
   });
 });

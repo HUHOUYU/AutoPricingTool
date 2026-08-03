@@ -544,6 +544,69 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(api.finishTaskBatch).not.toHaveBeenCalled();
   });
 
+  it("saves an unfinished batch before moving to the next batch", async () => {
+    const api = createDesktopAPI();
+    api.finishTaskBatch = vi.fn(async () => ({
+      record: {
+        id: "test-batch",
+        name: "AI_template",
+        startedAt: "2026-08-03T10:00:00.000Z",
+        completedAt: "2026-08-03T10:01:00.000Z",
+        status: "stopped" as const,
+        totalFiles: 2,
+        completedFiles: 1,
+        failedFiles: 0,
+        totalRows: 10,
+        matchedRows: 10,
+        exceptionRows: 0,
+      },
+      archivedCount: 1,
+      unconfirmedDir: "C:\\output\\partial-batch\\未确认文件",
+    }));
+    installAPI(api);
+    render(<App />);
+    openFileProcessing();
+    dropFiles([
+      new File(["xlsx"], "completed.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+      new File(["xlsx"], "pending.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+    ]);
+    expect(await screen.findByText("completed.xlsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "开始处理" }));
+    await act(async () => {
+      api.emit({ type: "price-analysis", file: createAnalysis("C:\\orders\\completed.xlsx") });
+      api.emit({ type: "price-analysis", file: createAnalysis("C:\\orders\\pending.xlsx") });
+      api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
+    });
+    await waitFor(() => expect(api.runPriceCheck).toHaveBeenCalled());
+    await act(async () => {
+      api.emit({
+        type: "price-file-result",
+        path: "C:\\orders\\completed.xlsx",
+        status: "completed",
+        outputPath: "C:\\output\\partial-batch\\completed-priced.xlsx",
+      });
+      api.emit({ type: "price-done", mode: "run", stopped: true, files: [] });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "保存本批并处理下一批" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "保存当前批次并处理下一批？" });
+    expect(dialog).toHaveTextContent("已生成的核价结果和批次日志会保留");
+    expect(dialog).toHaveTextContent("未确认文件");
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(api.finishTaskBatch).not.toHaveBeenCalled();
+    expect(screen.getByText("pending.xlsx")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存本批并处理下一批" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "保存本批" }));
+    await waitFor(() => expect(api.finishTaskBatch).toHaveBeenCalledWith(expect.objectContaining({
+      batchId: "test-batch",
+      files: ["C:\\orders\\completed.xlsx", "C:\\orders\\pending.xlsx"],
+      outputRoot: "C:\\output",
+    })));
+    expect(api.discardTaskBatch).not.toHaveBeenCalled();
+    expect(await screen.findByText("拖拽一个或多个 Excel 文件到此处")).toBeInTheDocument();
+  });
+
   it("centers the empty state independently from the table columns", () => {
     const api = createDesktopAPI();
     installAPI(api);

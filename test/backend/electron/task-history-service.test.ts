@@ -162,11 +162,74 @@ describe("createTaskHistoryService", () => {
       totalFiles: 1,
     });
     expect(result.archivedCount).toBe(1);
-    expect(await readFile(join(result.unprocessedDir!, "订单.xlsx"), "utf8")).toBe("source");
+    expect(await readFile(join(result.unconfirmedDir!, "订单.xlsx"), "utf8")).toBe("source");
     expect((await store.getTaskHistoryDetail("batch-fixed"))?.files[0]).toMatchObject({
       status: "stopped",
-      archivedPath: join(result.unprocessedDir!, "订单.xlsx"),
+      archivedPath: join(result.unconfirmedDir!, "订单.xlsx"),
     });
+  });
+
+  it("keeps completed results and archives every non-completed source file", async () => {
+    const { root, store, service } = await createFixture();
+    const inputDirectory = join(root, "input");
+    const outputRoot = join(root, "output");
+    const outputDir = join(outputRoot, "mixed-batch");
+    await mkdir(inputDirectory);
+    await mkdir(outputDir, { recursive: true });
+    const statuses = ["completed", "awaiting_confirmation", "failed", "queued", "running"] as const;
+    const sourcePaths = statuses.map((status) => join(inputDirectory, `${status}.xlsx`));
+    await Promise.all(sourcePaths.map((path, index) => writeFile(path, `source-${index}`)));
+    const completedOutputPath = join(outputDir, "completed_核价结果.xlsx");
+    await writeFile(completedOutputPath, "completed-result");
+    await store.persistTaskRecord({
+      id: "batch-mixed",
+      name: "mixed-batch",
+      startedAt: "2026-07-30T10:00:00.000Z",
+      status: "stopped",
+      totalFiles: statuses.length,
+      completedFiles: 1,
+      awaitingConfirmationFiles: 1,
+      failedFiles: 1,
+      totalRows: 10,
+      matchedRows: 10,
+      exceptionRows: 0,
+      outputRoot,
+      outputDir,
+      detailAvailable: true,
+    });
+    for (const [index, status] of statuses.entries()) {
+      await store.appendFileResult("batch-mixed", {
+        path: sourcePaths[index]!,
+        fileName: `${status}.xlsx`,
+        status,
+        ...(status === "completed" ? { outputPath: completedOutputPath } : {}),
+        totalRows: status === "completed" ? 10 : 0,
+        matchedRows: status === "completed" ? 10 : 0,
+        exceptionRows: 0,
+        issueSummaries: [],
+      });
+    }
+
+    const result = await service.finishBatch({
+      batchId: "batch-mixed",
+      name: "mixed-batch",
+      files: sourcePaths,
+      outputRoot,
+    });
+
+    expect(result.archivedCount).toBe(4);
+    expect(result.unconfirmedDir).toBe(join(outputDir, "未确认文件"));
+    expect(await readFile(completedOutputPath, "utf8")).toBe("completed-result");
+    const detail = await store.getTaskHistoryDetail("batch-mixed");
+    const completedFile = detail?.files.find((file) => file.status === "completed");
+    expect(completedFile?.outputPath).toBe(completedOutputPath);
+    expect(completedFile?.archivedPath).toBeUndefined();
+    const archivedFiles = detail?.files.filter((file) => file.status !== "completed") ?? [];
+    expect(archivedFiles).toHaveLength(4);
+    for (const file of archivedFiles) {
+      expect(file.archivedPath).toBe(join(result.unconfirmedDir!, file.fileName));
+      expect(await readFile(file.archivedPath!, "utf8")).toMatch(/^source-/);
+    }
   });
 
   it("discards the batch output and removes it from history", async () => {

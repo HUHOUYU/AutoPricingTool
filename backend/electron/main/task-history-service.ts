@@ -11,7 +11,7 @@ import type {
   TaskRunDiagnostics,
 } from "../../../shared/task-history";
 import {
-  archiveUnprocessedFiles,
+  archiveUnconfirmedFiles,
   createBatchOutputDirectory,
   remapBatchOutputPath,
   renameBatchOutputDirectory,
@@ -69,7 +69,7 @@ async function validateFinishRequest(value: unknown, maxInputFiles: number): Pro
       && SUPPORTED_EXCEL_EXTENSIONS.has(extname(item).toLocaleLowerCase())
       && await pathExists(item);
     if (!validPath) {
-      throw new TypeError(`未处理文件不存在或不是有效的 Excel 文件：${String(item)}`);
+      throw new TypeError(`未确认文件不存在或不是有效的 Excel 文件：${String(item)}`);
     }
     files.push(resolve(item));
   }
@@ -159,22 +159,22 @@ export function createTaskHistoryService(options: TaskHistoryServiceOptions) {
     }
     const currentFiles = [...filesByPath.values()];
     const unresolvedFiles = currentFiles.filter((file) => file.status !== "completed");
-    if (unresolvedFiles.length === 0) throw new Error("当前批次没有需要归档的未处理文件");
+    if (unresolvedFiles.length === 0) throw new Error("当前批次没有需要归档的未确认文件");
     const name = request.name
       || detail?.record.name
       || defaultBatchName(request.files.map((path) => basename(path)), id);
     const outputRoot = detail?.record.outputRoot ?? request.outputRoot;
     const outputDir = detail?.record.outputDir
       ?? await createBatchOutputDirectory(outputRoot, name, id);
-    let archived: Awaited<ReturnType<typeof archiveUnprocessedFiles>>;
+    let archived: Awaited<ReturnType<typeof archiveUnconfirmedFiles>>;
     try {
-      archived = await archiveUnprocessedFiles(
+      archived = await archiveUnconfirmedFiles(
         outputDir,
         id,
         unresolvedFiles.map((file) => file.path),
       );
     } catch (error) {
-      throw new Error(`归档未处理文件失败：${String(error)}`);
+      throw new Error(`归档未确认文件失败：${String(error)}`);
     }
     const completedAt = now().toISOString();
     const archivedPaths = new Map(archived.files.map((file) => [file.sourcePath, file.archivedPath]));
@@ -224,7 +224,7 @@ export function createTaskHistoryService(options: TaskHistoryServiceOptions) {
         time: completedAt,
         level: "warning",
         phase: "batch",
-        message: `用户结束当前批次，${unresolvedFiles.length} 个未完成文件已归档到：${archived.directory}`,
+        message: `用户保存当前批次，${unresolvedFiles.length} 个未完成文件已归档到：${archived.directory}`,
       });
       await options.store.persistTaskRecord(record);
     } catch (error) {
@@ -234,7 +234,7 @@ export function createTaskHistoryService(options: TaskHistoryServiceOptions) {
     return {
       record,
       archivedCount: unresolvedFiles.length,
-      unprocessedDir: archived.directory,
+      unconfirmedDir: archived.directory,
     };
   }
 

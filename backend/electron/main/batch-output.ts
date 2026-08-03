@@ -2,8 +2,8 @@ import { access, copyFile, mkdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const BATCH_OUTPUT_FOLDER_MAX_LENGTH = 100;
-export const UNPROCESSED_OUTPUT_FOLDER_NAME = "未处理";
-const UNPROCESSED_STAGING_FOLDER_PREFIX = ".未处理-";
+export const UNCONFIRMED_OUTPUT_FOLDER_NAME = "未确认文件";
+const UNCONFIRMED_STAGING_FOLDER_PREFIX = ".未确认文件-";
 const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 const WINDOWS_INVALID_CHARACTERS = /[<>:"/\\|?*\u0000-\u001f]/g;
 
@@ -106,20 +106,20 @@ export type ArchivedBatchFile = {
   archivedPath: string;
 };
 
-export async function archiveUnprocessedFiles(
+export async function archiveUnconfirmedFiles(
   batchDirectory: string,
   batchId: string,
   sourcePaths: string[],
 ): Promise<{ directory: string; files: ArchivedBatchFile[] }> {
   const resolvedBatchDirectory = resolve(batchDirectory);
-  const targetDirectory = join(resolvedBatchDirectory, UNPROCESSED_OUTPUT_FOLDER_NAME);
+  const targetDirectory = join(resolvedBatchDirectory, UNCONFIRMED_OUTPUT_FOLDER_NAME);
   const stagingDirectory = join(
     resolvedBatchDirectory,
-    `${UNPROCESSED_STAGING_FOLDER_PREFIX}${batchId.slice(-8)}.tmp`,
+    `${UNCONFIRMED_STAGING_FOLDER_PREFIX}${batchId.slice(-8)}.tmp`,
   );
   await mkdir(resolvedBatchDirectory, { recursive: true });
   if (await pathExists(targetDirectory)) {
-    throw new Error(`未处理目录已存在：${targetDirectory}`);
+    throw new Error(`未确认文件目录已存在：${targetDirectory}`);
   }
   await rm(stagingDirectory, { recursive: true, force: true });
   await mkdir(stagingDirectory);

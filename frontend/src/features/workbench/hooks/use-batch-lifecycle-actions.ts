@@ -1,5 +1,6 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import { toast } from "sonner";
+import { taskIssueSummaries } from "@/features/pricing/issues";
 import { getDesktopAPI } from "../file-utils";
 import type { ImportMode, LogEntry } from "../types";
 import type { ProcessorSession } from "./use-processor-session";
@@ -9,6 +10,9 @@ type CurrentValue<T> = { current: T };
 type UseBatchLifecycleActionsOptions = {
   session: ProcessorSession;
   files: string[];
+  batchName: string;
+  batchNote: string;
+  ensureOutputDirectory: () => Promise<string | null>;
   setFiles: Dispatch<SetStateAction<string[]>>;
   setImportedAt: Dispatch<SetStateAction<Record<string, string>>>;
   setImportModes: Dispatch<SetStateAction<Record<string, ImportMode>>>;
@@ -25,6 +29,9 @@ type UseBatchLifecycleActionsOptions = {
 export function useBatchLifecycleActions({
   session,
   files,
+  batchName,
+  batchNote,
+  ensureOutputDirectory,
   setFiles,
   setImportedAt,
   setImportModes,
@@ -150,7 +157,63 @@ export function useBatchLifecycleActions({
     writebackEditsRef,
   ]);
 
-  const chooseNextBatch = useCallback(async (): Promise<void> => {
+  const archiveAndNextBatch = useCallback(async (): Promise<void> => {
+    const api = getDesktopAPI();
+    if (!api || isAnalyzing || isRunning) return;
+    const unresolvedFiles = files.filter((path) => results[path]?.status !== "completed");
+    if (unresolvedFiles.length === 0) {
+      await resetTask();
+      toast.success("当前批次已完成，可以导入下一批文件");
+      return;
+    }
+    const outputRoot = await ensureOutputDirectory();
+    if (!outputRoot) return;
+    try {
+      const result = await api.finishTaskBatch({
+        ...(batchIdRef.current ? { batchId: batchIdRef.current } : {}),
+        name: batchName,
+        ...(batchNote ? { note: batchNote } : {}),
+        files,
+        outputRoot,
+        diagnostics: files.map((path) => ({
+          inputPath: path,
+          issueSummaries: taskIssueSummaries(
+            analysesRef.current[path]?.unmatchedRows ?? [],
+            writebackEditsRef.current[path] ?? [],
+          ),
+        })),
+      });
+      const archivedDirectory = result.unconfirmedDir;
+      await resetTask();
+      setHistoryRevision((current) => current + 1);
+      appendLog(
+        archivedDirectory
+          ? `已保存当前批次，${result.archivedCount} 个未完成文件已归档到：${archivedDirectory}`
+          : `已保存当前批次，归档 ${result.archivedCount} 个未完成文件`,
+        "success",
+      );
+      toast.success(`已保存当前批次并归档 ${result.archivedCount} 个未完成文件，可以导入下一批`);
+    } catch (error) {
+      appendLog("保存当前批次失败：" + String(error), "error");
+      toast.error(`保存当前批次失败：${String(error)}`);
+    }
+  }, [
+    analysesRef,
+    appendLog,
+    batchIdRef,
+    batchName,
+    batchNote,
+    ensureOutputDirectory,
+    files,
+    isAnalyzing,
+    isRunning,
+    resetTask,
+    results,
+    setHistoryRevision,
+    writebackEditsRef,
+  ]);
+
+  const discardAndNextBatch = useCallback(async (): Promise<void> => {
     const api = getDesktopAPI();
     if (!api || isAnalyzing || isRunning) return;
     const unresolvedFiles = files.filter((path) => results[path]?.status !== "completed");
@@ -183,6 +246,7 @@ export function useBatchLifecycleActions({
 
   return {
     resetTask,
-    chooseNextBatch,
+    archiveAndNextBatch,
+    discardAndNextBatch,
   };
 }
