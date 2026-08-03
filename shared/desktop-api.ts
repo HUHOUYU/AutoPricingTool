@@ -316,6 +316,7 @@ export type DesktopAPI = {
   setAppState: (state: AppStateUpdate) => Promise<AppState>;
   getDefaultPriceOutputDir: () => Promise<string>;
   getProcessingCapacity: () => Promise<ProcessingCapacity>;
+  initializeApp: () => Promise<void>;
   getConfigDocument: (path?: string) => Promise<ConfigDocument>;
   validateConfigDocument: (content: string) => Promise<ConfigValidationResult>;
   saveConfigDocument: (payload: { path: string; content: string; expectedModifiedAt: number }) => Promise<ConfigDocument>;

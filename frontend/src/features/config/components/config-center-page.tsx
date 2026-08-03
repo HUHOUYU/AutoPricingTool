@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Braces, CheckCircle2, FileJson2, FolderOpen, RefreshCw, RotateCcw, Save, SaveAll } from "lucide-react";
+import { AlertTriangle, Braces, CheckCircle2, FileJson2, FolderOpen, RefreshCw, RotateCcw, Save, SaveAll, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { ConfigActionButton } from "./config-action-button";
 import type {
   AppPreferences,
   AppPreferencesUpdate,
@@ -53,6 +55,8 @@ export function ConfigCenterPage({
   const [dirty, setDirty] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [initializeDialogOpen, setInitializeDialogOpen] = useState(false);
+  const [initializing, setInitializing] = useState(false);
   const [sourceScrollTop, setSourceScrollTop] = useState(0);
   const [processingCapacity, setProcessingCapacity] = useState<ProcessingCapacity | null>(null);
   const [preferences, setPreferences] = useState<AppPreferences | null>(null);
@@ -252,6 +256,18 @@ export function ConfigCenterPage({
     }
   };
 
+  const initialize = async (): Promise<void> => {
+    if (!api || initializing) return;
+    setInitializing(true);
+    try {
+      await api.initializeApp();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "软件初始化失败");
+      setInitializing(false);
+      setInitializeDialogOpen(false);
+    }
+  };
+
   const formatSource = (): void => {
     try {
       const value = JSON.parse(source) as unknown;
@@ -291,13 +307,16 @@ export function ConfigCenterPage({
           <span>{validation.valid ? "配置结构正常" : `${validation.issues.length} 项需要修复`}</span>
           <Button variant="ghost" onClick={() => void validate()}>立即校验</Button>
         </div>
-        <div className="config-center-actions">
-          <Button className="is-info" variant="outline" onClick={() => void selectDocument()} disabled={loading}><FolderOpen />选择</Button>
-          <Button className="is-info" variant="outline" onClick={() => void loadDocument(document?.path)} disabled={loading}><RefreshCw />重新加载</Button>
-          <Button className="is-primary" variant="outline" onClick={() => void saveAs()} disabled={loading}><SaveAll />另存为</Button>
-          <Button className="is-warning" variant="outline" onClick={() => setRestoreDialogOpen(true)} disabled={loading || restoring}><RotateCcw />恢复默认</Button>
-          <Button className="is-success" onClick={() => void save()} disabled={loading || !dirty}><Save />保存</Button>
-        </div>
+        <TooltipProvider delayDuration={250}>
+          <div className="config-center-actions">
+            <ConfigActionButton icon={FolderOpen} label="选择" className="is-info" variant="outline" onClick={() => void selectDocument()} disabled={loading} />
+            <ConfigActionButton icon={RefreshCw} label="重新加载" className="is-info" variant="outline" onClick={() => void loadDocument(document?.path)} disabled={loading} />
+            <ConfigActionButton icon={SaveAll} label="另存为" className="is-primary" variant="outline" onClick={() => void saveAs()} disabled={loading} />
+            <ConfigActionButton icon={RotateCcw} label="恢复默认" className="is-warning" variant="outline" onClick={() => setRestoreDialogOpen(true)} disabled={loading || restoring} />
+            <ConfigActionButton icon={Trash2} label="初始化" className="is-danger" variant="outline" onClick={() => setInitializeDialogOpen(true)} disabled={initializing} />
+            <ConfigActionButton icon={Save} label="保存" className="is-success" onClick={() => void save()} disabled={loading || !dirty} />
+          </div>
+        </TooltipProvider>
       </div>
 
       <div className="config-center-grid">
@@ -444,6 +463,16 @@ export function ConfigCenterPage({
         busy={restoring}
         onConfirm={() => void restore()}
         onCancel={() => setRestoreDialogOpen(false)}
+      />
+      <ConfirmDialog
+        open={initializeDialogOpen}
+        title="初始化软件？"
+        description="将永久删除本机业务配置、任务历史、模板、界面偏好和应用缓存，然后自动重新载入软件。不会删除输入或输出目录中的 Excel 文件。"
+        confirmLabel="确认初始化"
+        tone="danger"
+        busy={initializing}
+        onConfirm={() => void initialize()}
+        onCancel={() => setInitializeDialogOpen(false)}
       />
     </div>
   );

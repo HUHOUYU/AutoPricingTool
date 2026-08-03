@@ -45,6 +45,7 @@ const desktopAPI: DesktopAPI = {
   setAppState: (state: AppStateUpdate): Promise<AppState> => ipcRenderer.invoke("app:set-state", state),
   getDefaultPriceOutputDir: (): Promise<string> => ipcRenderer.invoke("app:get-default-price-output-dir"),
   getProcessingCapacity: (): Promise<ProcessingCapacity> => ipcRenderer.invoke("app:get-processing-capacity"),
+  initializeApp: (): Promise<void> => ipcRenderer.invoke("app:initialize"),
   getConfigDocument: (path?: string): Promise<ConfigDocument> => ipcRenderer.invoke("config:get-document", path),
   validateConfigDocument: (content: string): Promise<ConfigValidationResult> => ipcRenderer.invoke("config:validate-document", content),
   saveConfigDocument: (payload: { path: string; content: string; expectedModifiedAt: number }): Promise<ConfigDocument> => ipcRenderer.invoke("config:save-document", payload),

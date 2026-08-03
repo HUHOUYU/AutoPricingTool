@@ -1019,6 +1019,7 @@ html:not(.dark) .cyber-column-manager > div {
 
 .config-center-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; margin-left: auto; }
 .config-center-actions > button { gap: 7px; padding-inline: 14px; }
+.config-action-label { white-space: nowrap; }
 .config-center-actions > button svg {
   width: 17px;
   height: 17px;

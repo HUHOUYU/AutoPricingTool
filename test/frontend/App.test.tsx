@@ -141,6 +141,7 @@ function createDesktopAPI(): DesktopAPI & { emit: (event: ProcessorEvent) => voi
     })),
     getDefaultPriceOutputDir: vi.fn(async () => "C:\\Program\\核价结果"),
     getProcessingCapacity: vi.fn(async () => ({ detectedThreads: 8, maxWorkers: 7 })),
+    initializeApp: vi.fn(async () => undefined),
     getConfigDocument: vi.fn(async () => ({ path: "C:\\config.json", content: "{}\n", modifiedAt: 1, isDefault: false })),
     validateConfigDocument: vi.fn(async () => ({ valid: true, issues: [] })),
     saveConfigDocument: vi.fn(async ({ path, content }) => ({ path, content, modifiedAt: 2, isDefault: false })),
@@ -697,6 +698,23 @@ describe("AutoPricingTool cyber workstation", () => {
     fireEvent.click(screen.getByRole("button", { name: "折叠侧栏" }));
     expect(document.querySelector(".cyber-rail-actions")?.querySelectorAll("button")).toHaveLength(2);
     expect(document.querySelector(".cyber-workbench-actions")).not.toBeInTheDocument();
+  });
+
+  it("requires confirmation before initializing the application", async () => {
+    const api = createDesktopAPI();
+    installAPI(api);
+    render(<App />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "配置中心" })[1]);
+    expect(await screen.findByRole("region", { name: "配置中心" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "初始化" }));
+    expect(screen.getByRole("alertdialog", { name: "初始化软件？" })).toHaveTextContent(
+      "不会删除输入或输出目录中的 Excel 文件",
+    );
+    expect(api.initializeApp).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认初始化" }));
+    await waitFor(() => expect(api.initializeApp).toHaveBeenCalledOnce());
   });
 
   it("loads and toggles the remembered window size immediately", async () => {

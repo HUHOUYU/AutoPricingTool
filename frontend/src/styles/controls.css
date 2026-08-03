@@ -52,6 +52,7 @@
 .config-center-actions > button.is-info { --config-action-tone: var(--cyber-status-info); }
 .config-center-actions > button.is-primary { --config-action-tone: var(--cyber-primary); }
 .config-center-actions > button.is-warning { --config-action-tone: var(--cyber-status-confirm); }
+.config-center-actions > button.is-danger { --config-action-tone: var(--cyber-status-error); }
 .config-center-actions > button.is-success { --config-action-tone: var(--cyber-status-success); }
 html.dark .config-center-actions > button[class*="is-"]:not(:disabled),
 .config-center-actions > button[class*="is-"]:not(:disabled) {
@@ -362,14 +363,15 @@ html.dark .cyber-app {
 }
 
 /* 配置工具栏只保留“保存”为主操作，避免多彩按钮互相争夺注意力。 */
-.config-center-actions > .ui-button[class*="is-"]:not(.is-success):not(.is-warning):not(:disabled) {
+.config-center-actions > .ui-button[class*="is-"]:not(.is-success):not(.is-warning):not(.is-danger):not(:disabled) {
   border-color: var(--button-border);
   color: var(--button-foreground);
   background: var(--button-surface);
   box-shadow: var(--button-shadow);
 }
 
-.config-center-actions > .ui-button.is-warning:not(:disabled) {
+.config-center-actions > .ui-button.is-warning:not(:disabled),
+.config-center-actions > .ui-button.is-danger:not(:disabled) {
   border-color: color-mix(in srgb, var(--button-danger) 35%, var(--button-border));
   color: var(--button-foreground);
   background: var(--button-danger-soft);

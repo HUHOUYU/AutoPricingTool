@@ -268,6 +268,8 @@
 
 /* 配置页顶部与主体使用同一列宽，避免校验状态和操作区错位。 */
 .config-center-status {
+  container-name: config-toolbar;
+  container-type: inline-size;
   display: grid;
   grid-template-columns: minmax(330px, .78fr) minmax(420px, 1.22fr);
   gap: 12px;
@@ -300,6 +302,19 @@
   margin-left: auto;
   border-radius: 8px;
   padding-inline: 10px;
+}
+
+@container config-toolbar (max-width: 960px) {
+  .config-center-actions > button {
+    width: 38px;
+    min-width: 38px;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .config-center-actions .config-action-label {
+    display: none;
+  }
 }
 
 /* 日志筛选操作默认贴右，换行时仍保持右对齐。 */
