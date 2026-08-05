@@ -60,9 +60,17 @@ export function IssueStatusOverview({
     validationMessages.map((message) => message.trim()).filter(Boolean),
   ));
   const validationMessageSet = new Set(uniqueValidationMessages);
+  const fieldDiagnostics = Array.from(new Map(
+    (liveValidation?.fieldDiagnostics ?? analysis?.fieldDiagnostics ?? [])
+      .map((diagnostic) => [`${diagnostic.field}:${diagnostic.level}:${diagnostic.message}`, diagnostic]),
+  ).values());
+  const diagnosticMessageSet = new Set(fieldDiagnostics.map((diagnostic) => diagnostic.message.trim()));
+  const hasFieldError = fieldDiagnostics.some((diagnostic) => diagnostic.level === "error");
   const visibleDecisionReasons = (analysis?.automationDecision.reasons ?? [])
     .filter((reason, index, reasons) => (
       !validationMessageSet.has(reason.trim())
+      && !diagnosticMessageSet.has(reason.trim())
+      && !(hasFieldError && reason.startsWith("必需字段不完整："))
       && reasons.findIndex((candidate) => candidate.trim() === reason.trim()) === index
     ));
   const trialMatched = liveValidation?.matchedRows ?? analysis?.automationDecision.matchedRows;
@@ -140,6 +148,23 @@ export function IssueStatusOverview({
       ) : null}
 
       {result?.message ? <p className="issue-status-message">{result.message}</p> : null}
+
+      {fieldDiagnostics.length > 0 ? (
+        <section className="field-diagnostics" aria-label="字段检查">
+          <header><strong>字段检查</strong><span>{fieldDiagnostics.length} 项</span></header>
+          <div>
+            {fieldDiagnostics.map((diagnostic) => (
+              <article
+                className={`field-diagnostic is-${diagnostic.level}`}
+                key={`${diagnostic.field}:${diagnostic.level}:${diagnostic.message}`}
+              >
+                <strong>{diagnostic.title}</strong>
+                <p>{diagnostic.message}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {uniqueValidationMessages.length > 0 ? (
         <div className={`issue-status-messages ${trialTone}`}>

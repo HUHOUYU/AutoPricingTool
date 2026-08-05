@@ -192,7 +192,16 @@ export type PriceAnalysisFile = {
     scoreKind?: "field" | "sheet" | null;
     scoreGap?: number | null;
   };
+  fieldDiagnostics?: PriceFieldDiagnostic[];
   issues: string[];
+};
+
+export type PriceFieldDiagnostic = {
+  field: "order_header_range" | "order_number" | "country" | "sku_quantity" | "order_price"
+    | "pricing_sku" | "pricing_country" | "quantity_tiers" | "trial_rows";
+  level: "info" | "warning" | "error";
+  title: string;
+  message: string;
 };
 
 export type PriceMappingValidation = {
@@ -205,6 +214,7 @@ export type PriceMappingValidation = {
   writebackRows?: PricePreviewWritebackRow[];
   unmatchedRows?: PriceUnmatchedIssue[];
   singleShipmentMatching?: SingleShipmentMatchingStatus | null;
+  fieldDiagnostics?: PriceFieldDiagnostic[];
   errors: string[];
   warnings: string[];
 };

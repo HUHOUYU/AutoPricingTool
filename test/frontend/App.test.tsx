@@ -1279,6 +1279,20 @@ describe("AutoPricingTool cyber workstation", () => {
       runnerUpScore: 181.2,
       scoreKind: "field",
     };
+    analysis.fieldDiagnostics = [
+      {
+        field: "order_header_range",
+        level: "info",
+        title: "订单核心字段范围",
+        message: "Order!A:N（Name → TOTAL Price，闭区间）；已排除 O(SKU)",
+      },
+      {
+        field: "sku_quantity",
+        level: "error",
+        title: "订单 SKU/数量",
+        message: "范围 A:N 内未形成有效映射；已排除 O(SKU)",
+      },
+    ];
     await act(async () => {
       api.emit({ type: "price-analysis", file: analysis });
       api.emit({ type: "price-done", mode: "analysis", stopped: false, files: [] });
@@ -1293,6 +1307,9 @@ describe("AutoPricingTool cyber workstation", () => {
     expect(screen.getByText("次选").closest(".decision-candidate")).toHaveClass("is-alternate");
     expect(screen.getByText("字段 188.7 分")).toBeInTheDocument();
     expect(screen.getByText("字段 181.2 分")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "字段检查" })).toBeInTheDocument();
+    expect(screen.getByText("Order!A:N（Name → TOTAL Price，闭区间）；已排除 O(SKU)")).toBeInTheDocument();
+    expect(screen.getByText("范围 A:N 内未形成有效映射；已排除 O(SKU)")).toBeInTheDocument();
     expect(screen.getAllByText("SKU F（SKU）", { selector: ".decision-mapping-token.is-sku" })).toHaveLength(1);
     expect(screen.getByText("数量 E（产品总数）", { selector: ".decision-mapping-token.is-quantity" })).toBeInTheDocument();
     expect(await screen.findByText("无法预览工作簿")).toBeInTheDocument();
