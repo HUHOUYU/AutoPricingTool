@@ -249,10 +249,11 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
             "writebackRows": validation.writeback_rows,
             "unmatchedRows": validation.unmatched_rows,
             "singleShipmentMatching": validation.single_shipment_matching,
+            "fieldDiagnostics": validation.field_diagnostics,
             "errors": [],
             "warnings": validation.warnings,
         })),
-        Err(errors) => emit(json!({
+        Err(failure) => emit(json!({
             "type": "price-validation",
             "inputPath": input_path,
             "requestVersion": request_version,
@@ -263,7 +264,8 @@ pub(crate) fn run_price_check_validate(command: &Value, _state: &RuntimeState) -
             "writebackRows": [],
             "unmatchedRows": [],
             "singleShipmentMatching": null,
-            "errors": errors,
+            "fieldDiagnostics": failure.field_diagnostics,
+            "errors": failure.errors,
             "warnings": [],
         })),
     }

@@ -57,6 +57,31 @@ mod tests {
     }
 
     #[test]
+    fn order_core_header_range_accepts_zero_one_or_two_non_empty_headers() {
+        for document in [
+            r#"{}"#,
+            r#"{"pricing":{"order_core_header_range":[]}}"#,
+            r#"{"pricing":{"order_core_header_range":["Total Price"]}}"#,
+            r#"{"pricing":{"order_core_header_range":["Name","Total Price"]}}"#,
+        ] {
+            let mut config: Config = serde_json::from_str(document).expect("valid range config");
+            prepare_config(&mut config).expect("range config must validate");
+        }
+    }
+
+    #[test]
+    fn order_core_header_range_rejects_empty_or_excess_headers() {
+        for document in [
+            r#"{"pricing":{"order_core_header_range":[""]}}"#,
+            r#"{"pricing":{"order_core_header_range":["A","B","C"]}}"#,
+        ] {
+            let mut config: Config = serde_json::from_str(document).expect("range JSON must parse");
+            let error = prepare_config(&mut config).expect_err("invalid range must fail");
+            assert!(format!("{error:#}").contains("pricing.order_core_header_range"));
+        }
+    }
+
+    #[test]
     fn single_shipment_price_marker_aliases_use_defaults_when_missing() {
         let config: Config = serde_json::from_str("{}").expect("old config must use defaults");
 

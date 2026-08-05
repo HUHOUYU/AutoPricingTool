@@ -182,6 +182,23 @@ export function validateConfigContent(
         });
       }
     }
+    if (pricing.order_core_header_range !== undefined) {
+      const range = pricing.order_core_header_range;
+      if (!Array.isArray(range)) {
+        issues.push({ path: "pricing.order_core_header_range", message: "必须是数组" });
+      } else if (range.length > 2) {
+        issues.push({ path: "pricing.order_core_header_range", message: "最多只能配置两个表头" });
+      } else {
+        range.forEach((value, index) => {
+          if (typeof value !== "string" || !value.trim()) {
+            issues.push({
+              path: `pricing.order_core_header_range[${index}]`,
+              message: "必须是非空字符串",
+            });
+          }
+        });
+      }
+    }
     if (pricing.single_shipment_matching_enabled !== undefined
       && typeof pricing.single_shipment_matching_enabled !== "boolean") {
       issues.push({ path: "pricing.single_shipment_matching_enabled", message: "必须是布尔值" });

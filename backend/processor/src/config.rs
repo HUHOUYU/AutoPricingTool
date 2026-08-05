@@ -65,6 +65,8 @@ pub(crate) enum CountryIdentity {
 pub(crate) struct PricingRules {
     #[serde(default = "default_country_identity")]
     pub(crate) country_identity: Vec<CountryIdentity>,
+    #[serde(default)]
+    pub(crate) order_core_header_range: Vec<String>,
     #[serde(default = "default_single_shipment_price_marker_aliases")]
     pub(crate) single_shipment_price_marker_aliases: Vec<String>,
     #[serde(default)]
@@ -93,6 +95,7 @@ impl Default for PricingRules {
     fn default() -> Self {
         Self {
             country_identity: default_country_identity(),
+            order_core_header_range: Vec::new(),
             single_shipment_price_marker_aliases: default_single_shipment_price_marker_aliases(),
             single_shipment_matching_enabled: false,
             single_shipment_match_fields: default_single_shipment_match_fields(),
@@ -535,6 +538,17 @@ pub(crate) fn load_config(path: &Path) -> Result<Config> {
 fn prepare_config(config: &mut Config) -> Result<()> {
     if config.pricing.country_identity.is_empty() {
         anyhow::bail!("pricing.country_identity 至少需要保留一个国家身份字段");
+    }
+    if config.pricing.order_core_header_range.len() > 2 {
+        anyhow::bail!("pricing.order_core_header_range 最多只能配置两个表头");
+    }
+    if config
+        .pricing
+        .order_core_header_range
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        anyhow::bail!("pricing.order_core_header_range 不能包含空表头");
     }
     if config.pricing.single_shipment_matching_enabled
         && config

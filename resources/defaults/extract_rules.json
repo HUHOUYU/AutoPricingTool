@@ -47,6 +47,9 @@
       "english",
       "chinese"
     ],
+    "order_core_header_range": [
+      "Total Price"
+    ],
     "single_shipment_price_marker_aliases": [
       "单独发货价格",
       "单独发货",
@@ -122,6 +125,7 @@
         "header_aliases": [
           "Quantity",
           "Qty",
+          "Lineitem quantity",
           "产品总数"
         ],
         "value_patterns": [

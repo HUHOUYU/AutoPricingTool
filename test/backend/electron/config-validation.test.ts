@@ -6,6 +6,26 @@ describe("validateConfigContent", () => {
     expect(validateConfigContent("{}", 7)).toEqual({ valid: true, issues: [] });
   });
 
+  it("validates the order core header range shape", () => {
+    expect(validateConfigContent(JSON.stringify({
+      pricing: { order_core_header_range: ["Name", "Total Price"] },
+    }), 7)).toEqual({ valid: true, issues: [] });
+
+    expect(validateConfigContent(JSON.stringify({
+      pricing: { order_core_header_range: ["Name", "Total Price", "SKU"] },
+    }), 7)).toMatchObject({
+      valid: false,
+      issues: [{ path: "pricing.order_core_header_range", message: "最多只能配置两个表头" }],
+    });
+
+    expect(validateConfigContent(JSON.stringify({
+      pricing: { order_core_header_range: [""] },
+    }), 7)).toMatchObject({
+      valid: false,
+      issues: [{ path: "pricing.order_core_header_range[0]", message: "必须是非空字符串" }],
+    });
+  });
+
   it("rejects unsupported pricing settings and renderer runtime state", () => {
     const result = validateConfigContent(JSON.stringify({
       pricing: { output_sheets: [] },

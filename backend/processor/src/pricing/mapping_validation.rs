@@ -15,7 +15,7 @@ pub(super) fn recalculate_price_row(
     }
     if !mapping_is_complete(mapping) {
         return Err(anyhow!(
-            "订单号、国家、数量/SKU/合并数量或核价档位等必需字段不完整"
+            incomplete_mapping_reason(mapping).unwrap_or_else(|| "字段映射不完整".to_string())
         ));
     }
     let mut workbook = read_workbook_for_processing(path, config)?;
@@ -25,6 +25,9 @@ pub(super) fn recalculate_price_row(
         .iter()
         .find(|sheet| sheet.name == mapping.order_sheet)
         .ok_or_else(|| anyhow!("找不到订单 Sheet: {}", mapping.order_sheet))?;
+    if let Err(diagnostic) = validate_mapping_core_range(order_sheet, mapping, config) {
+        return Err(anyhow!(diagnostic.message));
+    }
     let pricing_sheet = workbook
         .sheets
         .iter()
@@ -174,6 +177,7 @@ pub(super) fn validate_price_mapping(
     config: &Config,
 ) -> std::result::Result<MappingValidationResult, Vec<String>> {
     validate_price_mapping_with_overrides(path, mapping, cell_edits, &[], config)
+        .map_err(|failure| failure.errors)
 }
 
 pub(super) fn validate_price_mapping_with_overrides(
@@ -182,9 +186,12 @@ pub(super) fn validate_price_mapping_with_overrides(
     cell_edits: &[PriceCellEdit],
     writeback_overrides: &[PricePreviewWritebackRow],
     config: &Config,
-) -> std::result::Result<MappingValidationResult, Vec<String>> {
-    let mut workbook = read_workbook_for_processing(path, config)
-        .map_err(|error| vec![format!("读取文件失败: {error:#}")])?;
+) -> std::result::Result<MappingValidationResult, MappingValidationFailure> {
+    let mut workbook =
+        read_workbook_for_processing(path, config).map_err(|error| MappingValidationFailure {
+            errors: vec![format!("读取文件失败: {error:#}")],
+            field_diagnostics: Vec::new(),
+        })?;
     let data_edits = cell_edits
         .iter()
         .filter(|edit| {
@@ -195,9 +202,12 @@ pub(super) fn validate_price_mapping_with_overrides(
         })
         .cloned()
         .collect::<Vec<_>>();
-    apply_cell_edits(&mut workbook, &data_edits)
-        .map_err(|error| vec![format!("应用单元格编辑失败: {error:#}")])?;
+    apply_cell_edits(&mut workbook, &data_edits).map_err(|error| MappingValidationFailure {
+        errors: vec![format!("应用单元格编辑失败: {error:#}")],
+        field_diagnostics: Vec::new(),
+    })?;
     let mut errors = Vec::new();
+    let mut field_diagnostics = mapping_field_diagnostics(Some(mapping), true, true);
     if mapping.order_sheet == mapping.pricing_sheet {
         errors.push("订单 Sheet 与核价 Sheet 不能相同".to_string());
     }
@@ -216,11 +226,14 @@ pub(super) fn validate_price_mapping_with_overrides(
         errors.push("核价 Sheet 不存在".to_string());
     }
     let (Some(order_sheet), Some(pricing_sheet)) = (order_sheet, pricing_sheet) else {
-        return Err(errors);
+        return Err(MappingValidationFailure {
+            errors,
+            field_diagnostics,
+        });
     };
     let single_shipment_matching = single_shipment_matching_status(order_sheet, mapping, config);
-    if !mapping_is_complete(mapping) {
-        errors.push("订单号、国家、数量/SKU/合并数量或核价档位等必需字段不完整".to_string());
+    if let Some(reason) = incomplete_mapping_reason(mapping) {
+        errors.push(reason);
     }
     if mapping.order_header_row == 0 || mapping.order_header_row > order_sheet.rows.len() {
         errors.push("订单表头行超出有效范围".to_string());
@@ -233,6 +246,14 @@ pub(super) fn validate_price_mapping_with_overrides(
         .is_some_and(|row| row == 0 || row > pricing_sheet.rows.len())
     {
         errors.push("数量档位表头行超出有效范围".to_string());
+    }
+    match validate_mapping_core_range(order_sheet, mapping, config) {
+        Ok(Some(diagnostic)) => field_diagnostics.push(diagnostic),
+        Ok(None) => {}
+        Err(diagnostic) => {
+            errors.push(diagnostic.message.clone());
+            field_diagnostics.push(diagnostic);
+        }
     }
     let order_columns = order_sheet
         .rows
@@ -360,7 +381,10 @@ pub(super) fn validate_price_mapping_with_overrides(
     if !errors.is_empty() {
         errors.sort();
         errors.dedup();
-        return Err(errors);
+        return Err(MappingValidationFailure {
+            errors,
+            field_diagnostics,
+        });
     }
 
     let index = build_price_index(pricing_sheet, mapping, &config.pricing);
@@ -410,6 +434,7 @@ pub(super) fn validate_price_mapping_with_overrides(
         writeback_rows,
         unmatched_rows,
         single_shipment_matching,
+        field_diagnostics,
         warnings,
     })
 }

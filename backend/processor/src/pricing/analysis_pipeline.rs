@@ -8,9 +8,14 @@ pub(super) fn analyze_path_with_templates(
     let workbook = read_workbook_for_processing(path, config)?;
     let mut order_candidates = Vec::new();
     let mut pricing_candidates = Vec::new();
+    let mut order_diagnostics_by_sheet = Vec::new();
     for sheet in &workbook.sheets {
-        if let Some(candidate) = infer_order_candidate_with_config(sheet, config) {
+        let (order_candidate, diagnostics) = infer_order_candidate_with_diagnostics(sheet, config);
+        if let Some(candidate) = order_candidate {
             order_candidates.push(candidate);
+        }
+        if !diagnostics.is_empty() {
+            order_diagnostics_by_sheet.push((sheet.name.clone(), diagnostics));
         }
         if let Some(candidate) = infer_pricing_candidate_with_config(sheet, config) {
             pricing_candidates.push(candidate);
@@ -47,6 +52,7 @@ pub(super) fn analyze_path_with_templates(
                 &order_candidates,
                 &pricing_candidates,
                 header_templates,
+                config,
             )
         })
         .flatten();
@@ -191,6 +197,33 @@ pub(super) fn analyze_path_with_templates(
     automation_decision.candidate_score = candidate_score;
     automation_decision.runner_up_score = runner_up_score;
     automation_decision.score_kind = automation_score_kind;
+    let mut field_diagnostics: Vec<PriceFieldDiagnostic> =
+        if let Some(mapping) = suggested_mapping.as_ref() {
+            order_diagnostics_by_sheet
+                .into_iter()
+                .filter(|(sheet_name, _)| sheet_name == &mapping.order_sheet)
+                .flat_map(|(_, diagnostics)| diagnostics)
+                .collect()
+        } else {
+            order_diagnostics_by_sheet
+                .into_iter()
+                .flat_map(|(_, diagnostics)| diagnostics)
+                .collect()
+        };
+    field_diagnostics.extend(mapping_field_diagnostics(
+        suggested_mapping.as_ref(),
+        !order_candidates.is_empty(),
+        !pricing_candidates.is_empty(),
+    ));
+    field_diagnostics.sort_by(|left, right| {
+        left.level
+            .cmp(&right.level)
+            .then_with(|| left.field.cmp(&right.field))
+            .then_with(|| left.message.cmp(&right.message))
+    });
+    field_diagnostics.dedup_by(|left, right| {
+        left.field == right.field && left.level == right.level && left.message == right.message
+    });
     if let Some(mapping) = suggested_mapping.as_ref()
         && let Some(order_sheet) = workbook
             .sheets
@@ -279,6 +312,7 @@ pub(super) fn analyze_path_with_templates(
         single_shipment_matching,
         requires_confirmation,
         automation_decision,
+        field_diagnostics,
         issues,
     })
 }
@@ -315,14 +349,14 @@ pub(super) fn decide_automation(
     let mut reasons = Vec::new();
     if mapping.is_none() {
         reasons.push("没有生成可用字段映射".to_string());
-    } else if !mapping.is_some_and(mapping_is_complete) {
-        reasons.push("订单号、国家、数量/SKU/合并数量或核价档位等必需字段不完整".to_string());
+    } else if let Some(reason) = mapping.and_then(incomplete_mapping_reason) {
+        reasons.push(reason);
     }
     if mapping.is_some_and(|value| value.order_sheet == value.pricing_sheet) {
         reasons.push("订单 Sheet 与核价 Sheet 不能相同".to_string());
     }
     if evaluated_rows == 0 {
-        reasons.push("没有可用于试算的订单行".to_string());
+        reasons.push(no_trial_rows_reason(mapping));
     } else if evaluated_rows < config.automation.min_trial_rows && coverage < 1.0 {
         reasons.push(format!(
             "试算少于 {} 行时覆盖率必须达到 100%",
@@ -444,14 +478,7 @@ pub(super) fn excel_column_label(mut column: usize) -> String {
 }
 
 pub(super) fn mapping_is_complete(mapping: &PriceCheckMapping) -> bool {
-    mapping.business_order_number_column.is_some()
-        && (mapping.country_code_column.is_some()
-            || mapping.country_english_column.is_some()
-            || mapping.country_chinese_column.is_some())
-        && !mapping.sku_qty_pairs.is_empty()
-        && mapping.pricing_sku_column > 0
-        && mapping.pricing_country_column > 0
-        && !mapping.quantity_tier_columns.is_empty()
+    incomplete_mapping_reason(mapping).is_none()
 }
 
 pub(super) fn mapping_from_candidates(

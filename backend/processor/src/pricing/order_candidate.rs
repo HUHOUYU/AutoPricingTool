@@ -5,41 +5,79 @@ pub(super) fn infer_order_candidate(sheet: &SheetData) -> Option<OrderSheetCandi
     infer_order_candidate_with_config(sheet, &Config::default())
 }
 
+#[cfg(test)]
 pub(super) fn infer_order_candidate_with_config(
     sheet: &SheetData,
     config: &Config,
 ) -> Option<OrderSheetCandidate> {
+    infer_order_candidate_with_diagnostics(sheet, config).0
+}
+
+pub(super) fn infer_order_candidate_with_diagnostics(
+    sheet: &SheetData,
+    config: &Config,
+) -> (Option<OrderSheetCandidate>, Vec<PriceFieldDiagnostic>) {
     let mut best = None;
+    let mut best_diagnostics = Vec::new();
+    let mut range_errors = Vec::new();
     let scan_limit = sheet.rows.len().min(ORDER_HEADER_SCAN_ROWS);
     for header_idx in 0..scan_limit {
         let header = &sheet.rows[header_idx];
-        let sku_columns = configured_matching_columns(
+        let all_sku_columns = configured_matching_columns(
             sheet,
             header_idx,
             order_field_rule(config, "sku"),
             SKU_ALIASES,
         );
-        let qty_columns = configured_matching_columns(
+        let all_qty_columns = configured_matching_columns(
             sheet,
             header_idx,
             order_field_rule(config, "quantity"),
             QTY_ALIASES,
         );
-        let order_col = configured_best_column(
+        let all_order_columns = configured_matching_columns(
             sheet,
             header_idx,
             order_field_rule(config, "order_number"),
             ORDER_ID_ALIASES,
         );
+        let core_range = match resolve_order_core_header_range(header, config) {
+            Ok(range) => range,
+            Err(message) => {
+                if !all_order_columns.is_empty()
+                    && (!all_sku_columns.is_empty() || !all_qty_columns.is_empty())
+                {
+                    range_errors.push(PriceFieldDiagnostic {
+                        field: "order_header_range".to_string(),
+                        level: "error".to_string(),
+                        title: "订单核心字段范围无效".to_string(),
+                        message: format!(
+                            "{} 第 {} 行：{message}，未退回整行扫描",
+                            sheet.name,
+                            header_idx + 1
+                        ),
+                    });
+                }
+                continue;
+            }
+        };
+        let sku_columns = filter_columns_to_core_range(all_sku_columns.clone(), core_range);
+        let qty_columns = filter_columns_to_core_range(all_qty_columns.clone(), core_range);
+        let order_col = filter_columns_to_core_range(all_order_columns.clone(), core_range)
+            .into_iter()
+            .next();
         let mut raw_pairs = pair_sku_qty_columns(header, &sku_columns, &qty_columns);
         let using_product_name = raw_pairs.is_empty();
+        let mut all_product_name_columns = Vec::new();
         if using_product_name {
-            let product_name_columns = configured_matching_columns(
+            all_product_name_columns = configured_matching_columns(
                 sheet,
                 header_idx,
                 order_field_rule(config, "product_name"),
                 PRODUCT_NAME_ALIASES,
             );
+            let product_name_columns =
+                filter_columns_to_core_range(all_product_name_columns.clone(), core_range);
             raw_pairs = pair_sku_qty_columns(header, &product_name_columns, &qty_columns);
         }
         let mut detected_pairs =
@@ -50,12 +88,17 @@ pub(super) fn infer_order_candidate_with_config(
                 std::cmp::Reverse(pair.sku_column),
             )
         });
-        let exact_sku_columns =
-            configured_exact_header_columns(header, order_field_rule(config, "sku"), SKU_ALIASES);
-        let exact_qty_columns = configured_exact_header_columns(
-            header,
-            order_field_rule(config, "quantity"),
-            QTY_ALIASES,
+        let exact_sku_columns = filter_columns_to_core_range(
+            configured_exact_header_columns(header, order_field_rule(config, "sku"), SKU_ALIASES),
+            core_range,
+        );
+        let exact_qty_columns = filter_columns_to_core_range(
+            configured_exact_header_columns(
+                header,
+                order_field_rule(config, "quantity"),
+                QTY_ALIASES,
+            ),
+            core_range,
         );
         let direct_single_group = !using_product_name
             && exact_sku_columns.len() == 1
@@ -80,7 +123,7 @@ pub(super) fn infer_order_candidate_with_config(
             continue;
         }
         let (country_code, country_en, country_cn) =
-            infer_order_country_columns(sheet, header_idx, config);
+            infer_order_country_columns(sheet, header_idx, config, core_range);
         let country_en = country_en.filter(|column| Some(*column) != country_code);
         let country_cn = country_cn
             .filter(|column| Some(*column) != country_code && Some(*column) != country_en);
@@ -90,12 +133,17 @@ pub(super) fn infer_order_candidate_with_config(
             .iter()
             .find(|matched| matched.field == SingleShipmentMatchField::RecipientName)
             .and_then(|matched| matched.columns.first().copied());
-        let price = configured_best_column(
-            sheet,
-            header_idx,
-            order_field_rule(config, "price"),
-            PRICE_ALIASES,
-        );
+        let price = filter_columns_to_core_range(
+            configured_matching_columns(
+                sheet,
+                header_idx,
+                order_field_rule(config, "price"),
+                PRICE_ALIASES,
+            ),
+            core_range,
+        )
+        .into_iter()
+        .next();
         let (valid_rows, country_rows) = score_order_rows(
             sheet,
             header_idx + 1,
@@ -163,46 +211,141 @@ pub(super) fn infer_order_candidate_with_config(
             country_coverage: ratio(country_rows, valid_rows),
             notes,
         };
+        let mut diagnostics = Vec::new();
+        if let Some(range) = core_range {
+            let start_header = header
+                .get(range.start)
+                .map(CellValue::text)
+                .unwrap_or_default();
+            let end_header = header
+                .get(range.end)
+                .map(CellValue::text)
+                .unwrap_or_default();
+            let excluded = core_columns_outside_range(
+                header,
+                all_order_columns
+                    .iter()
+                    .chain(all_sku_columns.iter())
+                    .chain(all_qty_columns.iter())
+                    .chain(all_product_name_columns.iter())
+                    .copied(),
+                core_range,
+            );
+            diagnostics.push(PriceFieldDiagnostic {
+                field: "order_header_range".to_string(),
+                level: "info".to_string(),
+                title: "订单核心字段范围".to_string(),
+                message: format!(
+                    "{}!{}（{} → {}，闭区间）{}",
+                    sheet.name,
+                    range.label(),
+                    start_header,
+                    end_header,
+                    if excluded.is_empty() {
+                        String::new()
+                    } else {
+                        format!("；已排除 {}", excluded.join("、"))
+                    }
+                ),
+            });
+            let excluded_sku =
+                core_columns_outside_range(header, all_sku_columns.iter().copied(), core_range);
+            let pair_summary = candidate
+                .sku_qty_pairs
+                .iter()
+                .map(|pair| {
+                    format!(
+                        "{}({}) + {}({})",
+                        excel_column_label(pair.sku_column),
+                        pair.sku_header,
+                        excel_column_label(pair.qty_column),
+                        pair.qty_header
+                    )
+                })
+                .collect::<Vec<_>>();
+            diagnostics.push(PriceFieldDiagnostic {
+                field: "sku_quantity".to_string(),
+                level: if pair_summary.is_empty() {
+                    "error"
+                } else {
+                    "info"
+                }
+                .to_string(),
+                title: "订单 SKU/数量".to_string(),
+                message: format!(
+                    "范围 {} 内{}{}",
+                    range.label(),
+                    if pair_summary.is_empty() {
+                        "未形成有效映射".to_string()
+                    } else {
+                        format!("使用 {}", pair_summary.join("、"))
+                    },
+                    if excluded_sku.is_empty() {
+                        String::new()
+                    } else {
+                        format!("；已排除 {}", excluded_sku.join("、"))
+                    }
+                ),
+            });
+        }
         if best
             .as_ref()
             .is_none_or(|current: &OrderSheetCandidate| candidate.score > current.score)
         {
             best = Some(candidate);
+            best_diagnostics = diagnostics;
         }
     }
-    best
+    if best.is_some() {
+        (best, best_diagnostics)
+    } else {
+        range_errors.sort_by(|left, right| left.message.cmp(&right.message));
+        range_errors.dedup_by(|left, right| left.message == right.message);
+        (None, range_errors)
+    }
 }
 
 pub(super) fn infer_order_country_columns(
     sheet: &SheetData,
     header_idx: usize,
     config: &Config,
+    core_range: Option<OrderCoreHeaderRange>,
 ) -> (Option<usize>, Option<usize>, Option<usize>) {
     let code_rule = order_field_rule(config, "country_code");
     let english_rule = order_field_rule(config, "country_english");
     let chinese_rule = order_field_rule(config, "country_chinese");
-    let mut candidates =
-        configured_matching_columns(sheet, header_idx, code_rule, COUNTRY_CODE_ALIASES);
-    candidates.extend(configured_matching_columns(
-        sheet,
-        header_idx,
-        english_rule,
-        COUNTRY_EN_ALIASES,
+    let mut candidates = filter_columns_to_core_range(
+        configured_matching_columns(sheet, header_idx, code_rule, COUNTRY_CODE_ALIASES),
+        core_range,
+    );
+    candidates.extend(filter_columns_to_core_range(
+        configured_matching_columns(sheet, header_idx, english_rule, COUNTRY_EN_ALIASES),
+        core_range,
     ));
-    candidates.extend(configured_matching_columns(
-        sheet,
-        header_idx,
-        chinese_rule,
-        COUNTRY_CN_ALIASES,
+    candidates.extend(filter_columns_to_core_range(
+        configured_matching_columns(sheet, header_idx, chinese_rule, COUNTRY_CN_ALIASES),
+        core_range,
     ));
     candidates.sort_unstable();
     candidates.dedup();
-    let mut code_column =
-        configured_best_column(sheet, header_idx, code_rule, COUNTRY_CODE_ALIASES);
-    let mut english_column =
-        configured_best_column(sheet, header_idx, english_rule, COUNTRY_EN_ALIASES);
-    let mut chinese_column =
-        configured_best_column(sheet, header_idx, chinese_rule, COUNTRY_CN_ALIASES);
+    let mut code_column = filter_columns_to_core_range(
+        configured_matching_columns(sheet, header_idx, code_rule, COUNTRY_CODE_ALIASES),
+        core_range,
+    )
+    .into_iter()
+    .next();
+    let mut english_column = filter_columns_to_core_range(
+        configured_matching_columns(sheet, header_idx, english_rule, COUNTRY_EN_ALIASES),
+        core_range,
+    )
+    .into_iter()
+    .next();
+    let mut chinese_column = filter_columns_to_core_range(
+        configured_matching_columns(sheet, header_idx, chinese_rule, COUNTRY_CN_ALIASES),
+        core_range,
+    )
+    .into_iter()
+    .next();
 
     let mut classified = Vec::new();
     for column in candidates {

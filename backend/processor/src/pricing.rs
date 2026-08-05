@@ -19,7 +19,9 @@ mod anomalies;
 mod column_rules;
 mod command_handlers;
 mod country_rules;
+mod field_diagnostics;
 mod file_processing;
+mod header_range;
 mod header_scoring;
 mod mapping_scoring;
 mod mapping_validation;
@@ -58,9 +60,16 @@ use country_rules::normalize_country_fields;
 use country_rules::{
     CountryInfo, country_lookup, country_route_token, normalize_order_country_fields,
 };
+use field_diagnostics::{
+    incomplete_mapping_reason, mapping_field_diagnostics, no_trial_rows_reason,
+};
 use file_processing::{PriceOutputOptions, apply_cell_edits, process_price_file};
 #[cfg(test)]
 use file_processing::{apply_writeback_overrides, output_path_for};
+use header_range::{
+    OrderCoreHeaderRange, core_columns_outside_range, core_mapping_columns,
+    filter_columns_to_core_range, resolve_order_core_header_range, validate_mapping_core_range,
+};
 use header_scoring::{
     HEADER_EXACT_SCORE, configured_best_column, configured_exact_header_columns,
     configured_header_score, configured_matching_columns, field_sample_adjustment,
@@ -75,7 +84,9 @@ use mapping_validation::{
 };
 #[cfg(test)]
 use order_candidate::infer_order_candidate;
+#[cfg(test)]
 use order_candidate::infer_order_candidate_with_config;
+use order_candidate::infer_order_candidate_with_diagnostics;
 use order_reader::{read_order_lines, read_order_lines_with_overrides};
 use price_index::build_price_index;
 use pricing_candidate::infer_pricing_candidate_with_config;
@@ -340,7 +351,17 @@ pub(crate) struct PriceAnalysisFile {
     pub(crate) single_shipment_matching: SingleShipmentMatchingStatus,
     pub(crate) requires_confirmation: bool,
     pub(crate) automation_decision: AutomationDecision,
+    pub(crate) field_diagnostics: Vec<PriceFieldDiagnostic>,
     pub(crate) issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PriceFieldDiagnostic {
+    pub(crate) field: String,
+    pub(crate) level: String,
+    pub(crate) title: String,
+    pub(crate) message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -486,7 +507,14 @@ struct MappingValidationResult {
     writeback_rows: Vec<PricePreviewWritebackRow>,
     unmatched_rows: Vec<UnmatchedPriceIssue>,
     single_shipment_matching: SingleShipmentMatchingStatus,
+    field_diagnostics: Vec<PriceFieldDiagnostic>,
     warnings: Vec<String>,
+}
+
+#[derive(Debug)]
+struct MappingValidationFailure {
+    errors: Vec<String>,
+    field_diagnostics: Vec<PriceFieldDiagnostic>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

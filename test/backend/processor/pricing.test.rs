@@ -11,6 +11,163 @@ mod tests {
         build_writeback_rows(sheet, mapping, candidates, &resolved_quantities)
     }
 
+    fn ranged_order_sheet() -> SheetData {
+        SheetData {
+            name: "Order".to_string(),
+            rows: vec![
+                [
+                    "Name",
+                    "Order number-PY",
+                    "TRACKING NUMBER",
+                    "Date",
+                    "Country",
+                    "Country",
+                    "Country",
+                    "Product",
+                    "Color",
+                    "SKU",
+                    "QTY",
+                    "Price",
+                    "EU TAX",
+                    "TOTAL Price",
+                    "SKU",
+                    "Shipping Name",
+                ]
+                .into_iter()
+                .map(CellValue::string)
+                .collect(),
+                [
+                    "#QQ1",
+                    "Anass1",
+                    "",
+                    "2026-08-05",
+                    "UK",
+                    "United Kingdom",
+                    "英国",
+                    "Teeth Cleaning Kit",
+                    "Full White",
+                    "QY2601326",
+                    "1",
+                    "22.49",
+                    "0",
+                    "22.49",
+                    "QY2601326-02",
+                    "Patricia Smith",
+                ]
+                .into_iter()
+                .map(CellValue::string)
+                .collect(),
+            ],
+        }
+    }
+
+    #[test]
+    fn one_sided_core_range_is_inclusive_and_excludes_trailing_sku() {
+        let sheet = ranged_order_sheet();
+        let mut config = Config::default();
+        config.pricing.order_core_header_range = vec!["Total Price".to_string()];
+
+        let (candidate, diagnostics) = infer_order_candidate_with_diagnostics(&sheet, &config);
+        let candidate = candidate.expect("range should retain a valid order candidate");
+
+        assert_eq!(candidate.sku_qty_pairs.len(), 1);
+        assert_eq!(candidate.sku_qty_pairs[0].sku_column, 10);
+        assert_eq!(candidate.sku_qty_pairs[0].qty_column, 11);
+        assert!(candidate.sku_qty_pairs[0].direct_quantity);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.field == "sku_quantity"
+                && diagnostic.message.contains("J(SKU) + K(QTY)")
+                && diagnostic.message.contains("O(SKU)")
+        }));
+    }
+
+    #[test]
+    fn two_sided_core_range_uses_normalized_exact_headers() {
+        let sheet = ranged_order_sheet();
+        let mut config = Config::default();
+        config.pricing.order_core_header_range =
+            vec![" name ".to_string(), "total-price".to_string()];
+
+        let range = resolve_order_core_header_range(&sheet.rows[0], &config)
+            .expect("configured range should resolve")
+            .expect("configured range should be active");
+
+        assert_eq!((range.start, range.end), (0, 13));
+    }
+
+    #[test]
+    fn missing_core_range_boundary_requires_confirmation_without_full_scan_fallback() {
+        let sheet = ranged_order_sheet();
+        let mut config = Config::default();
+        config.pricing.order_core_header_range = vec!["Missing Total".to_string()];
+
+        let (candidate, diagnostics) = infer_order_candidate_with_diagnostics(&sheet, &config);
+
+        assert!(candidate.is_none());
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.field == "order_header_range"
+                && diagnostic.level == "error"
+                && diagnostic.message.contains("未退回整行扫描")
+        }));
+    }
+
+    #[test]
+    fn manual_core_mapping_outside_configured_range_is_rejected() {
+        let sheet = ranged_order_sheet();
+        let mut config = Config::default();
+        config.pricing.order_core_header_range = vec!["Total Price".to_string()];
+        let mapping = PriceCheckMapping {
+            order_sheet: "Order".to_string(),
+            order_header_row: 1,
+            business_order_number_column: Some(2),
+            country_code_column: Some(5),
+            sku_qty_pairs: vec![SkuQtyPair {
+                sku_column: 15,
+                qty_column: 11,
+                merged_qty_column: 11,
+                direct_quantity: true,
+                sku_header: "SKU".to_string(),
+                qty_header: "QTY".to_string(),
+                merged_qty_header: "QTY".to_string(),
+            }],
+            order_price_column: Some(14),
+            pricing_sheet: "cost".to_string(),
+            pricing_sku_column: 1,
+            pricing_country_column: 4,
+            quantity_tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 6,
+                header: "1".to_string(),
+            }],
+            ..PriceCheckMapping::default()
+        };
+
+        let diagnostic = validate_mapping_core_range(&sheet, &mapping, &config)
+            .expect_err("column O must be outside A:N");
+
+        assert!(diagnostic.message.contains("O(SKU)"));
+    }
+
+    #[test]
+    fn incomplete_mapping_reason_names_the_exact_missing_fields() {
+        let mapping = PriceCheckMapping {
+            business_order_number_column: Some(1),
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 3,
+                header: "1".to_string(),
+            }],
+            ..PriceCheckMapping::default()
+        };
+
+        assert_eq!(
+            incomplete_mapping_reason(&mapping).as_deref(),
+            Some("必需字段不完整：订单国家、订单 SKU/数量映射")
+        );
+    }
+
     #[test]
     fn configured_alias_order_breaks_header_ties() {
         let preferred_first = FieldRule {
@@ -525,6 +682,7 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
             &[order],
             &[pricing],
             &[template],
+            &Config::default(),
         )
         .expect("template match");
         assert_eq!(matched.0, "template.xlsx");

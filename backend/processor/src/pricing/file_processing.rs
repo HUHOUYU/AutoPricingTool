@@ -20,6 +20,9 @@ pub(super) fn process_price_file(
         .iter()
         .find(|sheet| sheet.name == mapping.order_sheet)
         .ok_or_else(|| anyhow!("找不到订单 Sheet: {}", mapping.order_sheet))?;
+    if let Err(diagnostic) = validate_mapping_core_range(order_sheet, mapping, config) {
+        return Err(anyhow!(diagnostic.message));
+    }
     let pricing_sheet = workbook
         .sheets
         .iter()

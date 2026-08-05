@@ -179,6 +179,7 @@ pub(super) fn match_header_template(
     order_candidates: &[OrderSheetCandidate],
     pricing_candidates: &[PricingSheetCandidate],
     templates: &[HeaderTemplateRecord],
+    config: &Config,
 ) -> Option<(String, PriceCheckMapping)> {
     const ORDER_FIELDS: [&str; 4] = ["order_number", "country_code", "sku_detail", "qty_detail"];
     const PRICING_FIELDS: [&str; 2] = ["pricing_sku", "pricing_country"];
@@ -285,6 +286,17 @@ pub(super) fn match_header_template(
                 };
                 selected_tiers.sort_by_key(|tier| (tier.quantity, tier.column));
                 mapping.quantity_tier_columns = selected_tiers;
+                let header = order_sheet.rows.get(order.header_row.saturating_sub(1))?;
+                let Ok(core_range) = resolve_order_core_header_range(header, config) else {
+                    continue;
+                };
+                if core_range.is_some_and(|range| {
+                    core_mapping_columns(&mapping)
+                        .into_iter()
+                        .any(|column| !range.contains(column))
+                }) {
+                    continue;
+                }
                 return Some((template.file_name.clone(), mapping));
             }
         }
