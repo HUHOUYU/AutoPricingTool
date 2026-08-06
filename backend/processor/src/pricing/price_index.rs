@@ -10,6 +10,12 @@ pub(super) fn build_price_index(
     let data_start = mapping
         .pricing_header_row
         .max(mapping.pricing_quantity_header_row.unwrap_or(0));
+    let marker_aliases = pricing_rules
+        .single_shipment_price_marker_aliases
+        .iter()
+        .map(|alias| normalize_header(alias))
+        .filter(|alias| !alias.is_empty())
+        .collect::<Vec<_>>();
     let single_shipment_start =
         sheet
             .rows
@@ -17,17 +23,12 @@ pub(super) fn build_price_index(
             .enumerate()
             .skip(data_start)
             .find_map(|(row_index, row)| {
-                row.iter()
-                    .any(|cell| {
-                        let normalized = normalize_header(&cell.text());
-                        pricing_rules
-                            .single_shipment_price_marker_aliases
-                            .iter()
-                            .any(|alias| normalized == normalize_header(alias))
-                    })
-                    .then_some(row_index)
+                is_single_shipment_marker_row(row, &marker_aliases).then_some(row_index)
             });
     for (row_index, row) in sheet.rows.iter().enumerate().skip(data_start) {
+        if is_single_shipment_marker_row(row, &marker_aliases) {
+            continue;
+        }
         let target = if single_shipment_start.is_some_and(|start| row_index > start) {
             &mut single_shipment_index
         } else {
@@ -39,6 +40,17 @@ pub(super) fn build_price_index(
         index.single_shipment = Some(Box::new(single_shipment_index));
     }
     index
+}
+
+fn is_single_shipment_marker_row(row: &[CellValue], normalized_aliases: &[String]) -> bool {
+    let mut values = row.iter().filter(|cell| !cell.is_empty());
+    let Some(marker) = values.next() else {
+        return false;
+    };
+    values.next().is_none()
+        && normalized_aliases
+            .iter()
+            .any(|alias| normalize_header(&marker.text()) == *alias)
 }
 
 fn insert_price_row(
@@ -103,6 +115,21 @@ impl PriceIndex {
             && single_shipment.has_route_sku(country_routes, sku)
         {
             return single_shipment.lookup_routes(country_routes, sku, quantity);
+        }
+        if !self.has_route_sku(country_routes, sku)
+            && let Some(single_shipment) = &self.single_shipment
+            && single_shipment.has_route_sku(country_routes, sku)
+        {
+            return Lookup {
+                status: "仅存在单独发货分区",
+                price: None,
+                matched_sku: sku.to_string(),
+                source_sheet: single_shipment.source_sheet.clone(),
+                reason: format!(
+                    "SKU {} 仅存在于核价 Sheet {} 的单独发货分区，当前订单未使用该分区",
+                    sku, single_shipment.source_sheet
+                ),
+            };
         }
         self.lookup_routes(country_routes, sku, quantity)
     }

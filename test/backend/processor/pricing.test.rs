@@ -2915,6 +2915,130 @@ TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
     }
 
     #[test]
+    fn inline_single_shipment_note_does_not_start_a_price_section() {
+        let sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                    CellValue::string("备注"),
+                ],
+                vec![
+                    CellValue::string("ABC123"),
+                    CellValue::string("US"),
+                    CellValue::string("8"),
+                    CellValue::string("单独发货"),
+                ],
+                vec![
+                    CellValue::string("DEF456"),
+                    CellValue::string("US"),
+                    CellValue::string("6"),
+                    CellValue::string(""),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            pricing_sheet: "核价".to_string(),
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 3,
+                header: "1".to_string(),
+            }],
+            ..PriceCheckMapping::default()
+        };
+        let pricing_rules = PricingRules {
+            single_shipment_price_marker_aliases: vec!["单独发货".to_string()],
+            ..PricingRules::default()
+        };
+        let index = build_price_index(&sheet, &mapping, &pricing_rules);
+
+        assert!(index.single_shipment.is_none());
+        assert_eq!(index.lookup("US", "ABC123", 1).price, Some(8.0));
+        assert_eq!(index.lookup("US", "DEF456", 1).price, Some(6.0));
+    }
+
+    #[test]
+    fn full_row_markers_start_one_isolated_single_shipment_section() {
+        let sheet = SheetData {
+            name: "核价".to_string(),
+            rows: vec![
+                vec![
+                    CellValue::string("SKU"),
+                    CellValue::string("Country"),
+                    CellValue::string("1"),
+                ],
+                vec![
+                    CellValue::string("ABC123"),
+                    CellValue::string("US"),
+                    CellValue::string("8"),
+                ],
+                vec![
+                    CellValue::string(""),
+                    CellValue::string(" 单独 发货： "),
+                    CellValue::string(""),
+                ],
+                vec![
+                    CellValue::string("DEF456"),
+                    CellValue::string("US"),
+                    CellValue::string("11"),
+                ],
+                vec![
+                    CellValue::string("单独发货"),
+                    CellValue::string(""),
+                    CellValue::string(""),
+                ],
+                vec![
+                    CellValue::string("GHI789"),
+                    CellValue::string("US"),
+                    CellValue::string("13"),
+                ],
+            ],
+        };
+        let mapping = PriceCheckMapping {
+            pricing_sheet: "核价".to_string(),
+            pricing_header_row: 1,
+            pricing_sku_column: 1,
+            pricing_country_column: 2,
+            quantity_tier_columns: vec![PriceTierColumn {
+                quantity: 1,
+                column: 3,
+                header: "1".to_string(),
+            }],
+            ..PriceCheckMapping::default()
+        };
+        let pricing_rules = PricingRules {
+            single_shipment_price_marker_aliases: vec!["单独发货".to_string()],
+            ..PricingRules::default()
+        };
+        let index = build_price_index(&sheet, &mapping, &pricing_rules);
+
+        assert_eq!(index.lookup("US", "ABC123", 1).price, Some(8.0));
+        let isolated = index.lookup_with_single_shipment_preference("US", "DEF456", 1, false);
+        assert_eq!(isolated.status, "仅存在单独发货分区");
+        assert_eq!(
+            isolated.reason,
+            "SKU DEF456 仅存在于核价 Sheet 核价 的单独发货分区，当前订单未使用该分区"
+        );
+        assert_eq!(
+            index
+                .lookup_with_single_shipment_preference("US", "DEF456", 1, true)
+                .price,
+            Some(11.0)
+        );
+        assert_eq!(
+            index
+                .lookup_with_single_shipment_preference("US", "GHI789", 1, true)
+                .price,
+            Some(13.0)
+        );
+    }
+
+    #[test]
     fn single_shipment_price_marker_requires_an_exact_normalized_alias() {
         let sheet = SheetData {
             name: "核价".to_string(),
